@@ -62,9 +62,33 @@ struct toast { bool used; char title[64], msg[160]; uint64_t until; };
 static struct toast toasts[4];
 
 /* apps come from the registry (built-in + installed with clan) */
-static int napps_dock(void) { int n = apps_visible(); return n > HL_MAX_DOCK ? HL_MAX_DOCK : n; }
-#define HL_NAPPS napps_dock()
+#define NVIS apps_visible()
 static const char *app_name(int i) { return apps_get(i)->name; }
+
+/* The dock: the apps you chose (setting "dock.apps", a comma-separated list of app ids), then any
+ * other app that is running. */
+static int dock_app[HL_MAX_DOCK], ndock; static bool dock_pinned[HL_MAX_DOCK];
+static bool dock_dirty = true;
+static bool app_running(int a);
+static int app_by_id(const char *id, int len) {
+    for (int i = 0; i < NVIS; i++) if ((int)strlen(apps_get(i)->id) == len && !memcmp(apps_get(i)->id, id, len)) return i;
+    return -1;
+}
+static bool is_pinned(int a) { for (int i = 0; i < ndock; i++) if (dock_app[i] == a && dock_pinned[i]) return true; return false; }
+static void dock_rebuild(void) {
+    ndock = 0;
+    const char *s = settings_get("dock.apps");
+    while (s && *s && ndock < HL_MAX_DOCK) {
+        const char *e = s; while (*e && *e != ',') e++;
+        int a = app_by_id(s, e - s);
+        bool dup = false; for (int i = 0; i < ndock; i++) if (dock_app[i] == a) dup = true;
+        if (a >= 0 && !dup) { dock_app[ndock] = a; dock_pinned[ndock++] = true; }
+        s = *e ? e + 1 : e;
+    }
+    for (int a = 0; a < NVIS && ndock < HL_MAX_DOCK; a++)
+        if (!is_pinned(a) && app_running(a)) { dock_app[ndock] = a; dock_pinned[ndock++] = false; }
+}
+void desktop_dock_changed(void) { dock_dirty = true; }
 
 /* ---------------- geometry ---------------- */
 struct rect { int x, y, w, h; };
@@ -78,16 +102,56 @@ static struct rect runion(struct rect a, struct rect b) {
 static bool contains(struct rect a, struct rect b) { return b.x >= a.x && b.y >= a.y && b.x + b.w <= a.x + a.w && b.y + b.h <= a.y + a.h; }
 
 static struct rect bar_rect(void) { return (struct rect){ 0, 0, W, HL_BAR_H }; }
-static struct rect dock_rect(void) { int x, y, w, h; hl_dock_rect(W, H, HL_NAPPS, &x, &y, &w, &h); return (struct rect){ x, y, w, h }; }
+static struct rect dock_rect(void) { int x, y, w, h; hl_dock_rect(W, H, ndock ? ndock : 1, &x, &y, &w, &h); return (struct rect){ x, y, w, h }; }
 static struct rect dock_area(void) { struct rect d = dock_rect(); return (struct rect){ d.x - 1, d.y - 1, d.w + 2, d.h + 10 }; }  /* incl. shadow */
 static struct rect dock_item(int i) { struct rect d = dock_rect(); return (struct rect){ d.x + HL_DOCK_PAD + i * (HL_DOCK_ICON + HL_DOCK_GAP), d.y + HL_DOCK_PAD, HL_DOCK_ICON, HL_DOCK_ICON }; }
 static struct rect frame_area(struct window *w) { return (struct rect){ w->x - 16, w->y - 12, fw(w) + 32, fh(w) + 44 }; }   /* incl. the shadow */
 static struct rect crown_btn(void) { return (struct rect){ 6, 3, 132, HL_BAR_H - 6 }; }
-#define MENU_W 300
-#define MENU_ROW 46
-static struct rect menu_rect(void) { return (struct rect){ 8, HL_BAR_H + 8, MENU_W, 92 + HL_NAPPS * MENU_ROW + 64 }; }
-static struct rect menu_item(int i) { struct rect m = menu_rect(); return (struct rect){ m.x + 10, m.y + 84 + i * MENU_ROW, m.w - 20, MENU_ROW - 4 }; }
+/* The AXIOM menu: apps in two columns, in groups (everyday apps, system tools, apps added with clan).
+ * The square at the end of each row puts the app in the dock or takes it out. */
+#define MENU_W 560
+#define MENU_ROW 44
+static int mn, mapp[32], nsec, sec_y[3]; static const char *sec_name[3]; static int menu_h = 200;
+static struct rect mrect[32];
+static int app_cat(int a) {
+    const struct app_entry *e = apps_get(a);
+    if (e->installed) return 2;
+    static const char *sys[] = { "settings", "terminal", "monitor", "network", "bluetooth", "about" };
+    for (unsigned i = 0; i < sizeof sys / sizeof sys[0]; i++) if (!strcmp(e->id, sys[i])) return 1;
+    return 0;
+}
+static int app_order(int a) {                      /* the order within a group */
+    static const char *ord[] = { "files", "web", "notes", "calendar", "music", "viewer", "calc",
+                                 "settings", "terminal", "monitor", "network", "bluetooth", "about" };
+    for (unsigned i = 0; i < sizeof ord / sizeof ord[0]; i++) if (!strcmp(apps_get(a)->id, ord[i])) return i;
+    return 100 + a;
+}
+static void menu_layout(void) {
+    static const char *names[3] = { "Everyday", "System", "Added apps" };
+    int x0 = 8, y0 = HL_BAR_H + 8, y = y0 + 80, colw = (MENU_W - 30) / 2;
+    mn = 0; nsec = 0;
+    for (int c = 0; c < 3; c++) {
+        int list[32], n = 0;
+        for (int a = 0; a < NVIS && n < 32; a++) if (app_cat(a) == c) list[n++] = a;
+        for (int i = 1; i < n; i++) for (int j = i; j > 0 && app_order(list[j]) < app_order(list[j - 1]); j--) { int t = list[j]; list[j] = list[j - 1]; list[j - 1] = t; }
+        if (!n) continue;
+        sec_y[nsec] = y; sec_name[nsec++] = names[c]; y += 24;
+        for (int k = 0; k < n && mn < 32; k++) {
+            mapp[mn] = list[k];
+            mrect[mn++] = (struct rect){ x0 + 10 + (k % 2) * (colw + 10), y + (k / 2) * MENU_ROW, colw, MENU_ROW - 4 };
+        }
+        y += (n + 1) / 2 * MENU_ROW + 6;
+    }
+    menu_h = y - y0 + 62;
+}
+static struct rect menu_rect(void) { return (struct rect){ 8, HL_BAR_H + 8, MENU_W, menu_h }; }
+static struct rect menu_item(int i) { return mrect[i]; }
+static struct rect menu_pin(int i) { struct rect r = mrect[i]; return (struct rect){ r.x + r.w - 34, r.y + 7, 26, 26 }; }
 static struct rect menu_btn(int k) { struct rect m = menu_rect(); return (struct rect){ m.x + 14 + k * 140, m.y + m.h - 50, 132, 34 }; }
+/* right-click on a dock icon: a small "Remove from dock" / "Keep in dock" button above it */
+static int ctx_app = -1, ctx_slot;
+static struct rect dock_item(int i);
+static struct rect ctx_rect(void) { struct rect d = dock_item(ctx_slot); return (struct rect){ d.x + d.w / 2 - 85, d.y - 54, 170, 36 }; }
 static struct rect toast_rect(int i) { return (struct rect){ W - 376, HL_BAR_H + 12 + i * 102, 360, 92 }; }
 static struct rect dot(struct window *w, int k) { return (struct rect){ w->x + 20 + k * 20 - 8, w->y + HL_TITLE_H / 2 - 8, 16, 16 }; }
 
@@ -126,7 +190,7 @@ static int top_window(void) {
     return -1;
 }
 static int app_index(const char *id) {
-    for (int i = 0; id && i < HL_NAPPS; i++) if (!strcmp(apps_get(i)->id, id)) return i;
+    for (int i = 0; id && i < NVIS; i++) if (!strcmp(apps_get(i)->id, id)) return i;
     return -1;
 }
 static bool app_running(int a) {
@@ -271,11 +335,21 @@ static void draw_window(int idx, struct rect r) {
 }
 
 static void draw_dock_overlay(void) {
-    if (hover_ctl >= 100 && hover_ctl < 100 + HL_NAPPS) {
+    if (ctx_app >= 0) {
+        struct rect c = ctx_rect();
+        bool h = hover_ctl == 600;
+        gfx_rrect(&cv, c.x - 2, c.y + 6, c.w + 4, c.h + 2, 10, HL_SHADOW, 120);
+        gfx_rrect(&cv, c.x, c.y, c.w, c.h, 9, h ? 0x2A2A28 : HL_DOCK_BG, 245);
+        gfx_rrect_outline(&cv, c.x, c.y, c.w, c.h, 9, HL_WIN_BORDER, 255);
+        const char *l = is_pinned(ctx_app) ? "Remove from dock" : "Keep in dock";
+        gfx_text(&cv, &font_ui, c.x + (c.w - gfx_text_width(&font_ui, l)) / 2, c.y + 23, HL_TEXT, l);
+        return;
+    }
+    if (hover_ctl >= 100 && hover_ctl < 100 + ndock) {
         int i = hover_ctl - 100;
         struct rect r = dock_item(i);
         gfx_rrect(&cv, r.x, r.y, r.w, r.h, 14, 0xFFFFFF, 26);
-        const char *l = app_name(i);
+        const char *l = app_name(dock_app[i]);
         int lw = gfx_text_width(&font_ui, l) + 22;
         int bx = r.x + r.w / 2 - lw / 2, by = dock_rect().y - 38;
         gfx_rrect(&cv, bx, by, lw, 28, 8, HL_DOCK_BG, 235);
@@ -292,12 +366,13 @@ static void draw_menu(void) {
     ax_logo(&full, m.x + 20, m.y + 14, ax_logo_img(0), HL_CREAM, 255);
     gfx_mono_text(&cv, m.x + 20, m.y + 40, OS_NAME " " OS_VERSION " - Thane kernel", HL_TEXT_FAINT);
     gfx_blend(&cv, m.x + 1, m.y + 66, m.w - 2, 1, 0xFFFFFF, 16);
-    for (int i = 0; i < HL_NAPPS; i++) {
-        struct rect r = menu_item(i);
+    for (int k = 0; k < nsec; k++) gfx_mono_text(&cv, m.x + 22, sec_y[k] + 4, sec_name[k], HL_ACCENT);
+    for (int i = 0; i < mn; i++) {
+        struct rect r = menu_item(i); int ap = mapp[i];
         if (hover_ctl == 200 + i) gfx_rrect(&cv, r.x, r.y, r.w, r.h, 8, HL_ACCENT, 36);
-        const uint32_t *ic = hl_app_icon(apps_get(i)->icon, 1);
+        const uint32_t *ic = hl_app_icon(apps_get(ap)->icon, 1);
         for (int j = 0; j < 34; j++) {                    /* the app's icon, blended */
-            int yy = r.y + 4 + j;
+            int yy = r.y + 3 + j;
             if (yy < cv.cy0 || yy >= cv.cy1) continue;
             for (int k = 0; k < 34; k++) {
                 int xx = r.x + 6 + k; uint32_t s = ic[j * 34 + k], al = s >> 24;
@@ -307,10 +382,15 @@ static void draw_menu(void) {
                      ((s >> 8 & 255) * al + (dv >> 8 & 255) * (255 - al)) / 255 << 8 | ((s & 255) * al + (dv & 255) * (255 - al)) / 255;
             }
         }
-        gfx_mono_text(&cv, r.x + 52, r.y + 13, app_name(i), hover_ctl == 200 + i ? HL_TEXT : HL_TEXT_DIM);
-        if (apps_get(i)->installed) gfx_mono_text(&cv, r.x + 52 + (int)strlen(app_name(i)) * 8 + 8, r.y + 13, "clan", HL_GOLD);
-        if (app_running(i)) gfx_circle(&cv, r.x + r.w - 14, r.y + r.h / 2, 3, HL_GREEN, 255);
+        gfx_mono_text(&cv, r.x + 50, r.y + 12, app_name(ap), hover_ctl == 200 + i ? HL_TEXT : HL_TEXT_DIM);
+        if (app_running(ap)) gfx_circle(&cv, r.x + 50 + (int)strlen(app_name(ap)) * 8 + 10, r.y + r.h / 2, 3, HL_GREEN, 255);
+        /* in the dock? */
+        struct rect p = menu_pin(i); bool pin = is_pinned(ap), hp = hover_ctl == 500 + i;
+        if (pin) { gfx_rrect(&cv, p.x + 4, p.y + 4, p.w - 8, p.h - 8, 5, HL_ACCENT, hp ? 200 : 255); gfx_fill(&cv, p.x + 9, p.y + p.h - 11, p.w - 18, 2, HL_NAVY); }
+        else gfx_rrect_outline(&cv, p.x + 4, p.y + 4, p.w - 8, p.h - 8, 5, hp ? HL_TEXT : HL_TEXT_FAINT, 255);
     }
+    gfx_mono_text(&cv, m.x + m.w - 250, m.y + m.h - 44, "Filled square: in the dock.", HL_TEXT_FAINT);
+    gfx_mono_text(&cv, m.x + m.w - 250, m.y + m.h - 28, "Click it to add or remove.", HL_TEXT_FAINT);
     gfx_blend(&cv, m.x + 1, m.y + m.h - 64, m.w - 2, 1, 0xFFFFFF, 16);
     static const char *bl[] = { "Restart", "Shut down" };
     for (int k = 0; k < 2; k++) {
@@ -463,8 +543,8 @@ static void compose(struct rect r) {
         gfx_blit(&cv, 0, 0, wall, W, H, W); start = 0;
         if (overlap(r, dock_area())) {                     /* the dock sits on the desktop, under the windows */
             int running[HL_MAX_DOCK]; const char *icons[HL_MAX_DOCK];
-            for (int i = 0; i < HL_NAPPS; i++) { running[i] = app_running(i); icons[i] = apps_get(i)->icon; }
-            hl_render_dock(&full, icons, running, HL_NAPPS);
+            for (int i = 0; i < ndock; i++) { running[i] = app_running(dock_app[i]); icons[i] = apps_get(dock_app[i])->icon; }
+            if (ndock) hl_render_dock(&full, icons, running, ndock);
         }
     }
     for (int z = start; z < nz; z++) {
@@ -729,11 +809,13 @@ static int resize_zone(int *wi_out) {
 static void update_hover(void) {
     int zw; set_cursor(resize_win >= 0 || resize_zone(&zw));
     if (menu_open) {
-        for (int i = 0; i < HL_NAPPS; i++) if (in_rect(menu_item(i), mx, my)) { set_hover(200 + i, menu_item(i)); return; }
+        for (int i = 0; i < mn; i++) if (in_rect(menu_pin(i), mx, my)) { set_hover(500 + i, menu_item(i)); return; }
+        for (int i = 0; i < mn; i++) if (in_rect(menu_item(i), mx, my)) { set_hover(200 + i, menu_item(i)); return; }
         for (int k = 0; k < 2; k++) if (in_rect(menu_btn(k), mx, my)) { set_hover(300 + k, menu_btn(k)); return; }
     }
     if (in_rect(crown_btn(), mx, my)) { set_hover(50, bar_rect()); return; }
-    if (window_at(mx, my) < 0) for (int i = 0; i < HL_NAPPS; i++)
+    if (ctx_app >= 0 && in_rect(ctx_rect(), mx, my)) { set_hover(600, ctx_rect()); return; }
+    if (window_at(mx, my) < 0) for (int i = 0; i < ndock; i++)
         if (in_rect(dock_item(i), mx, my)) { struct rect d = dock_item(i); set_hover(100 + i, (struct rect){ d.x - 110, d.y - 48, d.w + 220, d.h + 48 }); return; }
     if (window_at(mx, my) < 0 && in_rect(dock_rect(), mx, my)) { set_hover(0, (struct rect){0, 0, 0, 0}); return; }
     int wi = window_at(mx, my);
@@ -748,11 +830,24 @@ static void update_hover(void) {
 static void toggle_menu(bool open) {
     if (menu_open == open) return;
     menu_open = open;
+    if (open) menu_layout();
     struct rect m = menu_rect();
     damage(m.x - 6, m.y, m.w + 12, m.h + 20);
     damage_r(bar_rect());
     hover_ctl = 0;
     update_hover();
+}
+
+static void toggle_pin(int a) {
+    char list[112]; int k = 0; list[0] = 0;
+    bool pin = !is_pinned(a);
+    for (int i = 0; i < ndock; i++) if (dock_pinned[i] && dock_app[i] != a) k += ksnprintf(list + k, sizeof list - k, "%s%s", k ? "," : "", apps_get(dock_app[i])->id);
+    if (pin) k += ksnprintf(list + k, sizeof list - k, "%s%s", k ? "," : "", apps_get(a)->id);
+    damage_r(dock_area());
+    settings_set("dock.apps", list);
+    dock_rebuild(); dock_dirty = false;
+    damage_r(dock_area()); dock_area_cached = dock_area();
+    if (menu_open) damage_r(menu_rect());
 }
 
 static void launch(int a) {
@@ -787,7 +882,8 @@ static void close_window_clicked(struct window *w) {
 static void click(int button) {
     if (menu_open) {
         if (in_rect(menu_rect(), mx, my)) {
-            for (int i = 0; i < HL_NAPPS; i++) if (in_rect(menu_item(i), mx, my)) { toggle_menu(false); launch(i); return; }
+            for (int i = 0; i < mn; i++) if (in_rect(menu_pin(i), mx, my)) { toggle_pin(mapp[i]); return; }
+            for (int i = 0; i < mn; i++) if (in_rect(menu_item(i), mx, my)) { toggle_menu(false); launch(mapp[i]); return; }
             if (in_rect(menu_btn(0), mx, my)) acpi_reboot();
             if (in_rect(menu_btn(1), mx, my)) { acpi_poweroff(); desktop_notify("Shut down", "This computer doesn't support ACPI power-off."); }
             return;
@@ -795,9 +891,17 @@ static void click(int button) {
         toggle_menu(false);
         if (in_rect(crown_btn(), mx, my)) return;
     }
+    if (ctx_app >= 0) {                                    /* the dock's right-click button */
+        int a = ctx_app; bool hit = in_rect(ctx_rect(), mx, my);
+        damage_r(ctx_rect()); ctx_app = -1;
+        if (hit) { toggle_pin(a); return; }
+    }
     if (in_rect(crown_btn(), mx, my)) { toggle_menu(true); return; }
     bool on_win = window_at(mx, my) >= 0;                  /* windows cover the dock */
-    if (!on_win) for (int i = 0; i < HL_NAPPS; i++) if (in_rect(dock_item(i), mx, my)) { activate_app(i); return; }
+    if (!on_win) for (int i = 0; i < ndock; i++) if (in_rect(dock_item(i), mx, my)) {
+        if (button == 2) { ctx_app = dock_app[i]; ctx_slot = i; hover_ctl = 0; damage_r(ctx_rect()); damage_r(dock_area()); return; }
+        activate_app(dock_app[i]); return;
+    }
     if ((!on_win && in_rect(dock_rect(), mx, my)) || my < HL_BAR_H) return;
     int zw, zone = resize_zone(&zw);
     if (zone && button == 1) {
@@ -1076,6 +1180,7 @@ void desktop_restyle(void) {                              /* the wallpaper or ac
 void desktop_size(int *w, int *h, bool *is_scaled) { *w = W; *h = H; if (is_scaled) *is_scaled = scaled; }
 
 void desktop_thread(void *arg) {
+    dock_rebuild(); dock_area_cached = dock_area();
     damage(0, 0, W, H);
     for (;;) {
         ps2_poll();
@@ -1104,11 +1209,13 @@ void desktop_thread(void *arg) {
             bar_text(app, sizeof app, clk, sizeof clk);
             ksnprintf(sig, sizeof sig, "%s|%s|%d", app, clk, net_present() + 2 * net_ready());
             if (strcmp(sig, bar_sig)) { strncpy0(bar_sig, sig, sizeof bar_sig); damage_r(bar_rect()); }
-            int rs = HL_NAPPS << 20;
-            for (int i = 0; i < HL_NAPPS; i++) if (app_running(i)) rs |= 1 << i;
-            if (rs != run_sig) {
+            int rs = NVIS << 24;
+            for (int i = 0; i < NVIS && i < 24; i++) if (app_running(i)) rs |= 1 << i;
+            if (rs != run_sig || dock_dirty) {
                 struct rect old = dock_area_cached;
-                run_sig = rs;
+                run_sig = rs; dock_dirty = false;
+                dock_rebuild();
+                if (ctx_app >= 0) { damage_r(ctx_rect()); ctx_app = -1; }
                 damage_r(old); damage_r(dock_area()); dock_area_cached = dock_area();
                 if (hover_ctl >= 100 && hover_ctl < 200) { hover_ctl = 0; update_hover(); }
                 if (menu_open) damage(menu_rect().x - 6, menu_rect().y, menu_rect().w + 12, menu_rect().h + 20 + MENU_ROW);

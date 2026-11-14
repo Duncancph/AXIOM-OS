@@ -205,7 +205,7 @@ void vm_unmap(uint64_t *pml4, uint64_t va, uint64_t pages);
 long elf_load(uint64_t *pml4, const uint8_t *img, uint64_t size, uint64_t *entry);
 
 /* ---- sched.c ---- */
-#define MAX_TASKS 48
+#define MAX_TASKS 96
 #define EVQ_SIZE 64
 struct task {
     int pid, state;            /* state: 0 = free slot, else PS_* */
@@ -235,7 +235,7 @@ extern struct task tasks[MAX_TASKS];
 /* ---- cores (smp.c) ----
  * One core runs kernel code at a time (the "big kernel lock", taken on every way into the kernel and
  * dropped on the way back to an app); apps run on every core at once. Kernel threads stay on core 0. */
-#define MAX_CPUS 16
+#define MAX_CPUS 64
 struct tss64 { uint32_t r0; uint64_t rsp0, rsp1, rsp2, r1; uint64_t ist[7]; uint64_t r2; uint16_t r3, iomap; } __attribute__((packed));
 struct cpu {
     struct cpu *self;                  /* %gs:0 */

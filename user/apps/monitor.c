@@ -4,16 +4,16 @@
 static int WW = 680, WH = 520;
 #define HIST 60
 static struct app a;
-static struct procinfo procs[48], raw[48], prev[48];   /* raw: as the kernel lists them (prev: the last sample) */
+static struct procinfo procs[96], raw[96], prev[96];   /* raw: as the kernel lists them (prev: the last sample) */
 static int nprocs, nraw, nprev, sel_pid = -1, hover_btn, hover_row = -1;
 static uint64_t prev_ticks, last_sample;
-static int cpu_hist[HIST], mem_hist[HIST], cpu_now, proc_cpu[48];
+static int cpu_hist[HIST], mem_hist[HIST], cpu_now, proc_cpu[96];
 static struct sysinfo si;
 
 static void sample(void) {
     sys_sysinfo(&si);
     memcpy(prev, raw, sizeof raw); nprev = nraw;
-    nraw = nprocs = sys_procs(raw, 48);
+    nraw = nprocs = sys_procs(raw, 96);
     memcpy(procs, raw, sizeof raw);
     uint64_t dt = si.cpu_clock_us - prev_ticks;
     prev_ticks = si.cpu_clock_us;

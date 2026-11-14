@@ -25,7 +25,7 @@ static const char *defaults[][2] = {
     { "keyboard.layout", "us" }, { "time.zone", "UTC" }, { "time.rtc_local", "0" }, { "time.24h", "0" },
     { "display.mode", "" }, { "mouse.speed", "5" }, { "mouse.natural", "0" }, { "mouse.left", "0" }, { "sound.volume", "70" }, { "lock.password", "" }, { "lock.idle_min", "0" }, { "screen.off_min", "10" },
     { "update.url", UPDATE_URL },
-    { "ui.accent", "" }, { "desktop.wallpaper", "axiom" }, { "user.name", "bryan" }, { "system.cores", "one" }, { "system.cores_trying", "0" },
+    { "ui.accent", "" }, { "desktop.wallpaper", "axiom" }, { "user.name", "bryan" }, { "system.cores", "one" }, { "system.cores_trying", "0" }, { "dock.apps", "files,web,notes,calendar,music,terminal,settings" },
 };
 
 const char *settings_get(const char *key) {
@@ -49,6 +49,7 @@ static void apply(const char *key) {
         hl_accent = n == 6 ? c : 0xF4F1DEu;
         desktop_restyle();
     }
+    if (!strcmp(key, "dock.apps")) { void desktop_dock_changed(void); desktop_dock_changed(); }
     if (!strcmp(key, "keyboard.layout")) kbd_set_layout(settings_get(key));
     if (!strcmp(key, "display.mode")) {
         char m[40] = "";

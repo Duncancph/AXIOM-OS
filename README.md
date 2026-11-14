@@ -16,6 +16,7 @@ with true multitasking and memory protection between apps.
   from the ACPI core list and run apps side by side. One core at a time runs kernel code (a big kernel
   lock); kernel threads stay on the first core. If a start with all cores doesn't finish, the next start
   goes back to one core by itself.
+  Up to 64 cores are used; the count comes from the firmware's ACPI tables, so any number works.
 - **Memory protection**: every app runs in user mode (ring 3) in its own address space.
   The kernel is mapped supervisor-only, and apps can't see each other's memory or touch hardware ports.
   An app that misbehaves is stopped, the rest of the system carries on, and a notification explains what happened
@@ -70,10 +71,14 @@ with true multitasking and memory protection between apps.
 - Mountain-ridge wallpaper with moon, translucent top bar (crown menu, active app, Bluetooth, clock)
 - Floating dock with smooth, modern app icons (gradient tiles with white symbols, drawn by
   `tools/genicons.py`), running dots and tooltips
+- Choose the dock's apps: the square next to each app in the AXIOM menu, or right-click a dock icon
+  (Remove from dock / Keep in dock). Apps that are open show at the end of the dock while they run
+- Windows go over the dock; drag a window to the left/right edge or the top to snap it; Alt+Tab
 - Compositing window manager: rounded windows with shadows and red/gold/green window buttons
   (close, minimise, maximise), drag to move, resize from the right/bottom edge or corner,
   double-click the title bar to maximise
-- Crown menu (click AXIOM in the top bar, or press the Windows/Super key) with apps, Restart and Shut down
+- AXIOM menu (click AXIOM in the top bar, or press the Windows/Super key): apps in groups (Everyday,
+  System, Added apps), Restart and Shut down
 - Notifications, a "not responding" detector with force-close
 - Change the colours and sizes of the whole desktop and the apps in `common/theme_highland.h`
 - GNU Unifont for the desktop chrome and terminal; Inter for app content

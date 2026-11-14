@@ -319,8 +319,8 @@ static void cmd_help(void) {
 }
 
 static void cmd_ps(void) {
-    struct procinfo p[32];
-    int n = sys_procs(p, 32);
+    static struct procinfo p[96];
+    int n = sys_procs(p, 96);
     static const char *st[] = { "", "ready", "running", "sleeping", "waiting", "exiting" };
     puts_c("  PID  NAME                TYPE     STATE     CPU TIME   MEMORY\n", C_GOLD);
     for (int i = 0; i < n; i++)
