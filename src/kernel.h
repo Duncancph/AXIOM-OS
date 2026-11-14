@@ -103,6 +103,7 @@ void sleep_ms(uint64_t ms);
 void udelay(uint64_t us);
 /* keymap.c */
 void kbd_hid_key(uint8_t usage, uint8_t mods);
+void hid_kbd_report(uint8_t *last, const uint8_t *r, int len);   /* boot keyboard report (USB and Bluetooth) */
 void desktop_emergency(const char *const *lines, int n);
 void desktop_size(int *w, int *h, bool *scaled);    /* the desktop's size (smaller than the screen when stretched) */
 void kbd_super(bool down);

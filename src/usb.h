@@ -47,6 +47,7 @@ struct usb_dev {
 #define CC_STALL 6
 #define CC_SHORT 13
 /* after a failed interrupt transfer: reset the endpoint and carry on polling (done by xhci_service) */
+void bt_set_acl(int in_dci, int out_dci);
 void usb_recover_in(struct usb_dev *d, int dci, int cc, usb_xfer_cb cb);
 
 #define USB_MAX_DEVS 32

@@ -139,9 +139,10 @@ private key must stay private, because whoever has it can make updates that AXIO
   but not readable yet. Changes are written immediately, so a drive is safe to unplug once a copy finishes.
 - **Intel Bluetooth** (most laptops since ~2019) and MediaTek need firmware uploaded at start-up. Not
   implemented yet; Realtek, Broadcom and CSR USB dongles generally work without it. Bluetooth can scan
-  and pair with Classic devices, but there are no Bluetooth profiles yet, so a paired keyboard, mouse
-  or headset doesn't work with AXIOM yet. Low Energy pairing isn't supported. Pairing is tested only
-  against a simulated adapter (`make test`), as there's no Bluetooth hardware in the test setup.
+  and pair with Classic devices. Classic keyboards and mice work once paired (boot protocol: standard
+  keys and buttons, wheel); they reconnect by themselves when switched on. Headsets and Low Energy
+  devices (most newer mice) don't work yet. Bluetooth is tested only against a simulated adapter and
+  keyboard (`make test`), as there's no Bluetooth hardware in the test setup.
 - **Touchpads** work only if they appear as a PS/2 device; I2C touchpads (common on newer laptops) don't yet.
 - **HTTPS is TLS 1.3 only.** Most sites support it, but some older servers offer only TLS 1.2 and can't be
   reached (you get a clear message). Not supported yet: P-521 and Ed25519 certificates (rare), checking

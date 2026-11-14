@@ -340,7 +340,14 @@ static void attach_drivers(struct usb_dev *d) {
             const uint8_t *ep = usb_find_endpoint(d, cur_if, 3, true, &ss);
             if (ep) {
                 int dci = usb_configure_ep(d, ep, ss);
-                if (dci > 0) { d->driver = "bluetooth"; bt_attach(d, cur_if, dci); }
+                if (dci > 0) {
+                    d->driver = "bluetooth";
+                    /* the data (ACL) endpoints: Bluetooth keyboards and mice send their input over these */
+                    const uint8_t *bi = usb_find_endpoint(d, cur_if, 2, true, &ss); int in = bi ? usb_configure_ep(d, bi, ss) : -1;
+                    const uint8_t *bo = usb_find_endpoint(d, cur_if, 2, false, &ss); int out = bo ? usb_configure_ep(d, bo, ss) : -1;
+                    bt_set_acl(in, out);
+                    bt_attach(d, cur_if, dci);
+                }
             }
         }
     }

@@ -49,7 +49,13 @@ static void handle_async(uint8_t *e);
 
 /* Send a command and wait for its Command Complete / Command Status.
  * Returns the status byte (0 = success), or -1 on timeout. Return params copied to ret. */
+static bool scanning;
+static volatile int hci_busy;              /* a command is waiting for its answer: the background thread keeps off the events */
+static int hci_cmd_(uint16_t op, const void *params, uint8_t plen, uint8_t *ret, int retmax);
 static int hci_cmd(uint16_t op, const void *params, uint8_t plen, uint8_t *ret, int retmax) {
+    hci_busy++; int r = hci_cmd_(op, params, plen, ret, retmax); hci_busy--; return r;
+}
+static int hci_cmd_(uint16_t op, const void *params, uint8_t plen, uint8_t *ret, int retmax) {
     uint8_t pkt[260];
     pkt[0] = op & 0xFF; pkt[1] = op >> 8; pkt[2] = plen;
     if (plen) memcpy(pkt + 3, params, plen);
@@ -139,7 +145,9 @@ static void set_name(struct found *f, const uint8_t *s, int max) {
     f->name[k] = 0;
 }
 
+static bool hid_event(uint8_t *e);
 static void handle_async(uint8_t *e) {
+    if (hid_event(e)) return;
     uint8_t code = e[0], *p = e + 2;
     if (code == 0x02 || code == 0x22) {          /* Inquiry Result (with RSSI) */
         int n = p[0];
@@ -182,6 +190,7 @@ static void handle_async(uint8_t *e) {
         }
     }
 }
+
 
 /* ---------------- pairing (Classic Secure Simple Pairing, with legacy PIN fallback) ---------------- */
 #define MAXKEYS 16
@@ -227,17 +236,219 @@ static struct bkey *key_find(const uint8_t *a) {
     return 0;
 }
 
+/* ---------------- Bluetooth keyboards and mice (Classic HID over L2CAP) ----------------
+ * Paired keyboards and mice connect to us (or we connect to them right after pairing); they open two
+ * L2CAP channels, control (PSM 0x11) and interrupt (PSM 0x13), and send boot-protocol reports on the
+ * interrupt channel: A1 01 <8-byte keyboard report> or A1 02 <buttons dx dy [wheel]>. */
+static int acl_in_dci = -1, acl_out_dci = -1;
+void bt_set_acl(int in_dci, int out_dci) { acl_in_dci = in_dci; acl_out_dci = out_dci; }
+#define ACLQ 32
+static uint8_t aclq[ACLQ][1100]; static int aclq_n[ACLQ]; static volatile int aclq_h, aclq_t;
+static uint8_t acl_raw[2200]; static int acl_raw_len;
+static volatile bool pairing_now;
+struct hconn {
+    bool used; uint16_t handle; uint8_t addr[6];
+    uint16_t ctrl_l, ctrl_r, intr_l, intr_r;           /* our and their channel ids (0: not open) */
+    uint8_t cfg;                                        /* bits: 1 ctrl we're configured, 2 ctrl they are, 4/8 the same for intr */
+    bool hid_on, outgoing; uint8_t ident; uint8_t kprev[8]; int lastb;
+    uint8_t rx[700]; int rx_len, rx_want;               /* an L2CAP packet being put together */
+};
+static struct hconn hc[4];
+static uint16_t next_cid = 0x40;
+
+#ifndef BT_TEST
+static void on_acl(struct usb_dev *d, int dci, int cc, uint32_t len) {   /* raw data from the adapter: split into ACL packets */
+    if (cc != CC_SUCCESS && cc != CC_SHORT) { usb_recover_in(d, dci, cc, on_acl); return; }
+    uint8_t *b = d->ep_buf[dci];
+    if (acl_raw_len + len > sizeof acl_raw) acl_raw_len = 0;
+    memcpy(acl_raw + acl_raw_len, b, len); acl_raw_len += len;
+    while (acl_raw_len >= 4) {
+        int n = 4 + (acl_raw[2] | acl_raw[3] << 8);
+        if (n > (int)sizeof aclq[0]) { acl_raw_len = 0; break; }
+        if (acl_raw_len < n) break;
+        if ((aclq_h + 1) % ACLQ != aclq_t) { memcpy(aclq[aclq_h], acl_raw, n); aclq_n[aclq_h] = n; aclq_h = (aclq_h + 1) % ACLQ; }
+        memmove(acl_raw, acl_raw + n, acl_raw_len - n); acl_raw_len -= n;
+    }
+    usb_queue_in(d, dci, on_acl);
+}
+static void acl_send(struct hconn *c, uint16_t cid, const uint8_t *data, int len) {
+    if (!bdev || acl_out_dci < 0 || len > 600) return;
+    static uint8_t pkt[620];
+    pkt[0] = c->handle & 0xFF; pkt[1] = ((c->handle >> 8) & 0x0F) | 0x20;      /* first packet, flushable */
+    pkt[2] = (len + 4) & 0xFF; pkt[3] = (len + 4) >> 8;
+    pkt[4] = len & 0xFF; pkt[5] = len >> 8; pkt[6] = cid & 0xFF; pkt[7] = cid >> 8;
+    memcpy(pkt + 8, data, len);
+    usb_bulk(bdev, acl_out_dci, pkt, 8 + len, 1000);
+}
+#else
+static void acl_send(struct hconn *c, uint16_t cid, const uint8_t *data, int len) { bt_test_acl_sent(c->handle, cid, data, len); }
+#endif
+static void sig_send(struct hconn *c, uint8_t code, uint8_t id, const uint8_t *d, int n) {
+    uint8_t b[64]; b[0] = code; b[1] = id; b[2] = n; b[3] = 0; memcpy(b + 4, d, n);
+    acl_send(c, 1, b, 4 + n);
+}
+static void l2_connect(struct hconn *c, uint16_t psm) {                   /* we open a channel (after pairing) */
+    uint16_t l = next_cid++;
+    if (psm == 0x11) c->ctrl_l = l; else c->intr_l = l;
+    uint8_t d[4] = { psm & 0xFF, psm >> 8, l & 0xFF, l >> 8 };
+    sig_send(c, 0x02, ++c->ident, d, 4);
+}
+static void l2_config(struct hconn *c, uint16_t remote) {                  /* our side of the configuration: defaults */
+    uint8_t d[4] = { remote & 0xFF, remote >> 8, 0, 0 };
+    sig_send(c, 0x04, ++c->ident, d, 4);
+}
+static void check_ready(struct hconn *c) {
+    if (!c->hid_on && (c->cfg & 3) == 3 && (c->cfg & 12) == 12) {
+        c->hid_on = true;
+        uint8_t boot = 0x70;                                              /* HIDP SET_PROTOCOL: boot protocol */
+        acl_send(c, c->ctrl_r, &boot, 1);
+        const char *nm = "A Bluetooth device";
+        for (int i = 0; i < nkeys; i++) if (!memcmp(keys[i].addr, c->addr, 6) && keys[i].name[0]) nm = keys[i].name;
+        char m[96]; ksnprintf(m, sizeof m, "%s is connected.", nm);
+#ifndef BT_TEST
+        desktop_notify("Bluetooth", m);
+#endif
+        if (c->outgoing && c->ctrl_l) { /* nothing more */ }
+    }
+}
+static void l2_signal(struct hconn *c, const uint8_t *p, int len) {
+    while (len >= 4) {
+        uint8_t code = p[0], id = p[1]; int n = p[2] | p[3] << 8;
+        const uint8_t *d = p + 4;
+        if (n > len - 4) return;
+        if (code == 0x02 && n >= 4) {                                     /* Connection Request (from the device) */
+            uint16_t psm = d[0] | d[1] << 8, scid = d[2] | d[3] << 8, l = next_cid++;
+            uint16_t result = (psm == 0x11 || psm == 0x13) ? 0 : 2;
+            if (!result) { if (psm == 0x11) { c->ctrl_l = l; c->ctrl_r = scid; } else { c->intr_l = l; c->intr_r = scid; } }
+            uint8_t r[8] = { l & 0xFF, l >> 8, scid & 0xFF, scid >> 8, result & 0xFF, result >> 8, 0, 0 };
+            if (result) { r[0] = r[1] = 0; }
+            sig_send(c, 0x03, id, r, 8);
+            if (!result) l2_config(c, scid);
+        } else if (code == 0x03 && n >= 8) {                              /* Connection Response (to ours) */
+            uint16_t dcid = d[0] | d[1] << 8, scid = d[2] | d[3] << 8, result = d[4] | d[5] << 8;
+            if (result == 0) {
+                if (scid == c->ctrl_l) c->ctrl_r = dcid; else if (scid == c->intr_l) c->intr_r = dcid;
+                l2_config(c, dcid);
+            }
+        } else if (code == 0x04 && n >= 4) {                              /* Configuration Request: we accept theirs */
+            uint16_t dcid = d[0] | d[1] << 8;
+            uint16_t remote = dcid == c->ctrl_l ? c->ctrl_r : dcid == c->intr_l ? c->intr_r : 0;
+            uint8_t r[6] = { remote & 0xFF, remote >> 8, 0, 0, 0, 0 };
+            sig_send(c, 0x05, id, r, 6);
+            if (dcid == c->ctrl_l) c->cfg |= 2; else if (dcid == c->intr_l) c->cfg |= 8;
+            check_ready(c);
+        } else if (code == 0x05 && n >= 6) {                              /* Configuration Response (to ours) */
+            uint16_t scid = d[0] | d[1] << 8, result = d[4] | d[5] << 8;
+            if (result == 0) { if (scid == c->ctrl_l) c->cfg |= 1; else if (scid == c->intr_l) c->cfg |= 4; }
+            check_ready(c);
+            /* after pairing we open the control channel first, then the interrupt one */
+            if (c->outgoing && scid == c->ctrl_l && !c->intr_l) l2_connect(c, 0x13);
+        } else if (code == 0x06 && n >= 4) {                              /* Disconnection Request */
+            uint16_t dcid = d[0] | d[1] << 8, scid = d[2] | d[3] << 8;
+            uint8_t r[4] = { dcid & 0xFF, dcid >> 8, scid & 0xFF, scid >> 8 };
+            sig_send(c, 0x07, id, r, 4);
+            if (dcid == c->ctrl_l) { c->ctrl_l = c->ctrl_r = 0; c->cfg &= ~3; }
+            if (dcid == c->intr_l) { c->intr_l = c->intr_r = 0; c->cfg &= ~12; }
+            c->hid_on = false;
+        } else if (code == 0x08) {                                        /* Echo Request */
+            sig_send(c, 0x09, id, d, n > 40 ? 40 : n);
+        } else if (code == 0x0A && n >= 2) {                              /* Information Request: not supported */
+            uint8_t r[4] = { d[0], d[1], 1, 0 };
+            sig_send(c, 0x0B, id, r, 4);
+        }
+        p += 4 + n; len -= 4 + n;
+    }
+}
+static void hid_input(struct hconn *c, const uint8_t *p, int len) {
+    if (len < 2 || p[0] != 0xA1) return;                                  /* DATA | INPUT */
+    if (p[1] == 0x01 && len >= 4) hid_kbd_report(c->kprev, p + 2, len - 2 > 8 ? 8 : len - 2);
+    else if (p[1] == 0x02 && len >= 5) {
+#ifndef BT_TEST
+        mouse_push((int8_t)p[3], (int8_t)p[4], p[2] & 7, len >= 6 ? -(int8_t)p[5] : 0);
+#else
+        bt_test_mouse((int8_t)p[3], (int8_t)p[4], p[2] & 7);
+#endif
+    }
+}
+static struct hconn *conn_by_handle(uint16_t h) { for (int i = 0; i < 4; i++) if (hc[i].used && hc[i].handle == h) return &hc[i]; return 0; }
+static void acl_packet(const uint8_t *b, int n) {                         /* one ACL packet from the adapter */
+    uint16_t h = (b[0] | b[1] << 8) & 0x0FFF; int pb = (b[1] >> 4) & 3, dl = b[2] | b[3] << 8;
+    struct hconn *c = conn_by_handle(h);
+    if (!c || dl + 4 > n) return;
+    const uint8_t *d = b + 4;
+    if (pb == 2 || pb == 0) {                                             /* the start of an L2CAP packet */
+        if (dl < 4) return;
+        c->rx_want = 4 + (d[0] | d[1] << 8); c->rx_len = 0;
+        if (c->rx_want > (int)sizeof c->rx) { c->rx_want = 0; return; }
+    }
+    if (!c->rx_want || c->rx_len + dl > c->rx_want) { c->rx_want = 0; return; }
+    memcpy(c->rx + c->rx_len, d, dl); c->rx_len += dl;
+    if (c->rx_len < c->rx_want) return;
+    uint16_t cid = c->rx[2] | c->rx[3] << 8; int l = c->rx_want - 4;
+    c->rx_want = 0;
+    if (cid == 1) l2_signal(c, c->rx + 4, l);
+    else if (cid && cid == c->intr_l) hid_input(c, c->rx + 4, l);
+}
+static void hid_new_conn(uint16_t handle, const uint8_t *addr, bool outgoing) {
+    struct hconn *c = 0;
+    for (int i = 0; i < 4; i++) if (!hc[i].used) { c = &hc[i]; break; }
+    if (!c) return;
+    memset(c, 0, sizeof *c);
+    c->used = true; c->handle = handle; memcpy(c->addr, addr, 6); c->outgoing = outgoing;
+}
+/* events about connections to paired devices; returns true if it was one */
+static bool hid_event(uint8_t *e) {
+    uint8_t code = e[0], *p = e + 2;
+    if (code == 0x04) {                                                   /* Connection_Request: a paired device is back */
+        if (!keys_loaded) keys_load();
+        uint8_t r[7]; memcpy(r, p, 6); r[6] = 0x01;                        /* accept, it stays in charge */
+        if (key_find(p)) hci_cmd(0x0409, r, 7, 0, 0);
+        else { uint8_t rj[7]; memcpy(rj, p, 6); rj[6] = 0x0F; hci_cmd(0x040A, rj, 7, 0, 0); }   /* reject unknown devices */
+        return true;
+    }
+    if (code == 0x03 && !pairing_now) {                                   /* Connection_Complete (they connected to us) */
+        if (p[0] == 0) hid_new_conn(p[1] | (p[2] & 0x0F) << 8, p + 3, false);
+        return true;
+    }
+    if (code == 0x17 && !pairing_now) {                                   /* Link_Key_Request */
+        struct bkey *k = key_find(p);
+        if (k) { uint8_t r[22]; memcpy(r, p, 6); memcpy(r + 6, k->key, 16); hci_cmd(0x040B, r, 22, 0, 0); }
+        else hci_cmd(0x040C, p, 6, 0, 0);
+        return true;
+    }
+    if (code == 0x05) {                                                   /* Disconnection_Complete */
+        struct hconn *c = conn_by_handle(p[1] | (p[2] & 0x0F) << 8);
+        if (c) {
+            if (c->hid_on) { uint8_t z[8] = { 0 }; hid_kbd_report(c->kprev, z, 8); }   /* release any held keys */
+            c->used = false;
+        }
+        return !pairing_now;
+    }
+    if (code == 0x13 || code == 0x08) return true;                        /* completed packets, encryption change */
+    return false;
+}
+static void acl_poll(void) {
+    while (aclq_t != aclq_h) { int t = aclq_t; acl_packet(aclq[t], aclq_n[t]); aclq_t = (t + 1) % ACLQ; }
+}
+#ifdef BT_TEST
+static void handle_async(uint8_t *e);
+void bt_test_event(uint8_t *e) { handle_async(e); }
+void bt_test_acl_in(const uint8_t *b, int n) { acl_packet(b, n); }
+#endif
+
+
 static void say(int state, const char *m) { pst.state = state; strncpy0(pst.msg, m, sizeof pst.msg); }
 
 /* Pair with a Classic device found by a scan. Blocks until done (run it in its own task). */
 void bt_pair_run(const uint8_t *addr) {
+    pairing_now = true;
     memset(&pst, 0, sizeof pst);
     memcpy(pst.addr, addr, 6);
     struct found *f = 0;
     for (int i = 0; i < nfound; i++) if (!memcmp(found[i].addr, addr, 6) && !found[i].le) f = &found[i];
     strncpy0(pst.name, f && f->name[0] ? f->name : "the device", sizeof pst.name);
     pair_answer = -1;
-    if (!bdev || !info_ok) { say(BTP_FAILED, "No working Bluetooth adapter."); return; }
+    if (!bdev || !info_ok) { say(BTP_FAILED, "No working Bluetooth adapter."); pairing_now = false; return; }
     say(BTP_CONNECTING, "Connecting...");
     uint8_t all[8] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x3F};
     hci_cmd(0x0C01, all, 8, 0, 0);                              /* Set_Event_Mask: everything */
@@ -246,7 +457,7 @@ void bt_pair_run(const uint8_t *addr) {
     cc[6] = 0x18; cc[7] = 0xCC;                                  /* packet types DM1..DH5 */
     cc[8] = f ? f->pscan : 1; cc[9] = 0;
     uint16_t clk = f ? (f->clk | 0x8000) : 0; cc[10] = clk & 0xFF; cc[11] = clk >> 8; cc[12] = 1;
-    if (hci_cmd(0x0405, cc, 13, 0, 0) != 0) { say(BTP_FAILED, "The adapter refused to connect."); return; }   /* Create_Connection */
+    if (hci_cmd(0x0405, cc, 13, 0, 0) != 0) { say(BTP_FAILED, "The adapter refused to connect."); pairing_now = false; return; }   /* Create_Connection */
     int handle = -1; bool authed = false; uint8_t newkey[16]; bool havekey = false; int remote_io = -1;
     uint64_t end = uptime_ms() + 60000;
     while (uptime_ms() < end && pst.state != BTP_DONE && pst.state != BTP_FAILED) {
@@ -326,7 +537,15 @@ void bt_pair_run(const uint8_t *addr) {
         }
     }
     if (pst.state != BTP_DONE && pst.state != BTP_FAILED) say(BTP_FAILED, "Pairing timed out.");
-    if (handle >= 0) { uint8_t d[3] = { handle & 0xFF, handle >> 8, 0x13 }; hci_cmd(0x0406, d, 3, 0, 0); }   /* Disconnect */
+    bool hid = f && ((f->cod >> 8) & 0x1F) == 5;                 /* a keyboard, mouse or other input device */
+    if (handle >= 0 && pst.state == BTP_DONE && hid) {
+        /* keep the connection: encrypt it and open the HID channels (control, then interrupt) */
+        uint8_t en[3] = { handle & 0xFF, handle >> 8, 1 }; hci_cmd(0x0413, en, 3, 0, 0);
+        hid_new_conn((uint16_t)handle, addr, true);
+        struct hconn *c = conn_by_handle((uint16_t)handle);
+        if (c) l2_connect(c, 0x11);
+    } else if (handle >= 0) { uint8_t d[3] = { handle & 0xFF, handle >> 8, 0x13 }; hci_cmd(0x0406, d, 3, 0, 0); }   /* Disconnect */
+    pairing_now = false;
 }
 
 void bt_pair_confirm(int yes) { pair_answer = yes ? 1 : 0; }
@@ -359,6 +578,26 @@ static void bt_detach(struct usb_dev *d) {
     if (bdev == d) { bdev = 0; info_ok = false; desktop_notify("Bluetooth", "The Bluetooth adapter was removed."); }
 }
 
+#ifndef BT_TEST
+/* follows connections from paired devices while nothing else is talking to the adapter */
+static void bt_thread(void *arg) {
+    for (;;) {
+        if (bdev) {
+            xhci_poll();
+            /* take an event only while no command or pairing is waiting for one (checked with interrupts off,
+             * so another task can't start a command between the check and the take) */
+            uint8_t *e = 0; uint64_t fl;
+            __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+            if (!pairing_now && !hci_busy && !scanning && evq_t != evq_h) { e = evq[evq_t]; evq_t = (evq_t + 1) % EVQ; }
+            __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
+            if (e) { handle_async(e); continue; }
+        }
+        acl_poll();
+        task_sleep(8);
+    }
+}
+#endif
+
 void bt_attach(struct usb_dev *d, int iface, int dci) {
     bdev = d; bt_iface = iface; bt_dci = dci;
     d->detach = bt_detach;
@@ -383,6 +622,17 @@ void bt_attach(struct usb_dev *d, int iface, int dci) {
     char a[18]; fmt_addr(a, bdaddr);
     if (info_ok)
         LOG_OK("Bluetooth %s by %s, address %s\n", ver_name(hci_ver), mfr_name(manufacturer), a);
+#ifndef BT_TEST
+    /* be reachable for paired keyboards and mice: accept connections (page scan) and read their data */
+    uint8_t all[8] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x3F};
+    hci_cmd(0x0C01, all, 8, 0, 0);                                            /* Set_Event_Mask */
+    uint8_t ssp = 1; hci_cmd(0x0C56, &ssp, 1, 0, 0);                          /* Write_Simple_Pairing_Mode */
+    uint8_t cod[3] = { 0x04, 0x01, 0x00 }; hci_cmd(0x0C24, cod, 3, 0, 0);     /* Write_Class_of_Device: a desktop computer */
+    uint8_t scan = 0x02; hci_cmd(0x0C1A, &scan, 1, 0, 0);                     /* Write_Scan_Enable: page scan */
+    if (acl_in_dci > 0) usb_queue_in(d, acl_in_dci, on_acl);
+    static bool thread_started;
+    if (!thread_started) { thread_started = true; task_create_kernel("Bluetooth", bt_thread, 0); }
+#endif
     if (manufacturer == 2 && !bdaddr[0] && !bdaddr[1] && !bdaddr[2])
         LOG_WARN("Intel Bluetooth needs a firmware upload before it works (not supported yet)\n");
 }
@@ -405,7 +655,6 @@ void bt_list(void) {
     for (int i = 0; i < nfound; i++) announce(&found[i]);
 }
 
-static bool scanning;
 
 void bt_scan(int seconds) {
     if (!bdev) { kprintf("No Bluetooth adapter found.\n"); return; }

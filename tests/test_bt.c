@@ -35,6 +35,9 @@ int usb_control(struct usb_dev *d, uint8_t rt, uint8_t req, uint16_t val, uint16
         /* Inquiry Result with RSSI, no name (needs remote name request), Audio class */
         uint8_t r[] = {0x22, 15, 1, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 1, 0, 0x04, 0x04, 0x24, 0x00, 0x10, (uint8_t)-70};
         q(r, sizeof r);
+        /* a keyboard (major class 5, minor 0x40) */
+        uint8_t kb[] = {0x22, 15, 1, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 1, 0, 0x40, 0x25, 0x00, 0x10, (uint8_t)-55};
+        q(kb, sizeof kb);
         /* LE advertising report: name "Fitness Band", RSSI -60 */
         uint8_t le[64] = {0x3E, 0, 0x02, 1, 0x00, 0x01, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6};
         const char *ln = "Fitness Band"; int dl = 3 + 2 + strlen(ln);
@@ -120,6 +123,45 @@ struct task *current;
 void console_set_color(int c) {}
 void kprintf(const char *f, ...) { va_list a; va_start(a, f); vprintf(f, a); va_end(a); }
 
+/* what we sent over ACL (L2CAP), and what reached the keyboard and mouse */
+static struct { uint16_t h, cid; uint8_t d[64]; int n; } sent[256]; static int nsent;
+void bt_test_acl_sent(uint16_t h, uint16_t cid, const uint8_t *d, int n) {
+    if (nsent < 256) { sent[nsent].h = h; sent[nsent].cid = cid; memcpy(sent[nsent].d, d, n > 64 ? 64 : n); sent[nsent].n = n; nsent++; }
+}
+static uint8_t lastkbd[8]; static int nkbd, mdx, mdy, mbtn, nmouse;
+void hid_kbd_report(uint8_t *last, const uint8_t *r, int len) { memcpy(lastkbd, r, len > 8 ? 8 : len); memcpy(last, r, len > 8 ? 8 : len); nkbd++; }
+void bt_test_mouse(int dx, int dy, int b) { mdx = dx; mdy = dy; mbtn = b; nmouse++; }
+void bt_test_event(uint8_t *e); void bt_test_acl_in(const uint8_t *b, int n);
+static void dev_l2(uint16_t h, uint16_t cid, const uint8_t *d, int n) {     /* the device sends an L2CAP packet */
+    uint8_t b[300]; b[0] = h & 0xFF; b[1] = (h >> 8) | 0x20; b[2] = (n + 4) & 0xFF; b[3] = (n + 4) >> 8;
+    b[4] = n & 0xFF; b[5] = n >> 8; b[6] = cid & 0xFF; b[7] = cid >> 8; memcpy(b + 8, d, n);
+    bt_test_acl_in(b, 8 + n);
+}
+static int find_sig(int from, uint8_t code) { for (int i = from; i < nsent; i++) if (sent[i].cid == 1 && sent[i].d[0] == code) return i; return -1; }
+/* the device side of setting up one channel that WE asked for (answer our Connection Request) */
+static int dev_answer_conn(uint16_t h, int at, uint16_t their_cid) {
+    int i = find_sig(at, 0x02); if (i < 0) return -1;
+    uint16_t our = sent[i].d[6] | sent[i].d[7] << 8;
+    uint8_t r[12] = {0x03, sent[i].d[1], 8, 0, their_cid & 0xFF, their_cid >> 8, our & 0xFF, our >> 8, 0, 0, 0, 0};
+    int mark = nsent; dev_l2(h, 1, r, 12);
+    int k = find_sig(mark, 0x04); if (k < 0) return -1;                    /* our Configuration Request */
+    uint8_t cr[10] = {0x05, sent[k].d[1], 6, 0, our & 0xFF, our >> 8, 0, 0, 0, 0}; dev_l2(h, 1, cr, 10);
+    uint8_t rq[8] = {0x04, 0x30, 4, 0, our & 0xFF, our >> 8, 0, 0}; dev_l2(h, 1, rq, 8);
+    return our;
+}
+/* the device opens a channel to us */
+static int dev_open(uint16_t h, uint16_t psm, uint16_t their_cid) {
+    int mark = nsent;
+    uint8_t rq[8] = {0x02, 0x20, 4, 0, psm & 0xFF, psm >> 8, their_cid & 0xFF, their_cid >> 8}; dev_l2(h, 1, rq, 8);
+    int i = find_sig(mark, 0x03); if (i < 0) return -1;
+    uint16_t our = sent[i].d[4] | sent[i].d[5] << 8;
+    int k = find_sig(mark, 0x04); if (k < 0) return -1;
+    uint8_t cr[10] = {0x05, sent[k].d[1], 6, 0, our & 0xFF, our >> 8, 0, 0, 0, 0}; dev_l2(h, 1, cr, 10);
+    uint8_t c2[8] = {0x04, 0x21, 4, 0, our & 0xFF, our >> 8, 0, 0}; dev_l2(h, 1, c2, 8);
+    return our;
+}
+static bool sent_cmd(int op) { for (int i = 0; i < ncmds; i++) if (sent_cmds[i] == op) return true; return false; }
+
 int main(void) {
     dev.ep_buf[3] = epbuf; dev.vid = 0x0BDA; dev.pid = 0xB85B;
     strcpy(dev.manufacturer, "Realtek"); strcpy(dev.product, "Bluetooth Radio");
@@ -155,6 +197,44 @@ int main(void) {
     bt_pair_run(car); bt_pair_status(&st);
     printf("pair 4: %s\n", st.msg);
     CHECK(st.state == BTP_FAILED && declined, "declining should send a negative reply and fail");
+    /* 5: a paired phone... no: a paired KEYBOARD comes back on its own and types */
+    answer = 1;
+    uint8_t ev4[] = {0x04, 10, phone[0], phone[1], phone[2], phone[3], phone[4], phone[5], 0x40, 0x25, 0x00, 1};
+    ncmds = 0; bt_test_event(ev4);
+    CHECK(sent_cmd(0x0409), "a paired device asking to connect should be accepted");
+    uint8_t ev3[] = {0x03, 11, 0, 0x43, 0x00, phone[0], phone[1], phone[2], phone[3], phone[4], phone[5], 1, 0};
+    bt_test_event(ev3);
+    int ctrl = dev_open(0x43, 0x11, 0x70), intr = dev_open(0x43, 0x13, 0x71);
+    CHECK(ctrl > 0 && intr > 0 && ctrl != intr, "the HID channels should open");
+    bool boot = false; for (int i = 0; i < nsent; i++) if (sent[i].cid == 0x70 && sent[i].d[0] == 0x70) boot = true;
+    CHECK(boot, "we should ask for the boot protocol on the control channel");
+    uint8_t key[] = {0xA1, 0x01, 0x02, 0, 0x04, 0, 0, 0, 0, 0};                 /* shift + 'a' */
+    dev_l2(0x43, intr, key, sizeof key);
+    CHECK(nkbd == 1 && lastkbd[0] == 2 && lastkbd[2] == 4, "keyboard report should reach the keyboard handler");
+    uint8_t ms[] = {0xA1, 0x02, 0x01, 5, (uint8_t)-3, 0};
+    dev_l2(0x43, intr, ms, sizeof ms);
+    CHECK(nmouse == 1 && mdx == 5 && mdy == -3 && mbtn == 1, "mouse report should move the mouse");
+    uint8_t ev5[] = {0x05, 4, 0, 0x43, 0x00, 0x13};
+    bt_test_event(ev5);
+    CHECK(nkbd == 2 && lastkbd[2] == 0, "disconnecting should let go of held keys");
+    /* 6: an unknown device is turned away */
+    uint8_t stranger[] = {0x04, 10, 9, 9, 9, 9, 9, 9, 0x40, 0x25, 0x00, 1};
+    ncmds = 0; bt_test_event(stranger);
+    CHECK(sent_cmd(0x040A) && !sent_cmd(0x0409), "an unpaired device should be rejected");
+    /* 7: pairing a new keyboard keeps the connection and opens the HID channels */
+    uint8_t kbd[6] = {0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6};
+    justworks = 1; ncmds = 0; int mark = nsent;
+    bt_pair_run(kbd); bt_pair_status(&st);
+    printf("pair 5: %s\n", st.msg);
+    CHECK(st.state == BTP_DONE, "keyboard should pair");
+    CHECK(sent_cmd(0x0413) && !sent_cmd(0x0406), "keyboard connection should be encrypted and kept, not dropped");
+    int c1 = dev_answer_conn(0x42, mark, 0x80);
+    int c2 = dev_answer_conn(0x42, mark + 1, 0x81);
+    CHECK(c1 > 0 && c2 > 0, "after pairing we should open control then interrupt");
+    nkbd = 0; dev_l2(0x42, c2, key, sizeof key);
+    CHECK(nkbd == 1, "the newly paired keyboard should type");
+    justworks = 0;
+    bt_forget(kbd);
     bt_forget(phone);
     CHECK(bt_paired(pd, 4) == 0, "forget should remove the key");
     printf(fails ? "bluetooth pairing: %d failures\n" : "bluetooth pairing: all checks passed\n", fails);

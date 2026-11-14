@@ -4,21 +4,25 @@
 static uint8_t prev[8];
 static int kbd_dci;
 
+/* a boot-protocol keyboard report (8 bytes: modifiers, reserved, 6 keys): new keys are pressed
+ * (shared with Bluetooth keyboards, which send the same reports) */
+void hid_kbd_report(uint8_t *last, const uint8_t *r, int len) {
+    if (len < 3 || r[2] == 1) return;                       /* 1 = rollover error */
+    if ((r[0] & 0x88) && !(last[0] & 0x88)) kbd_super(true);
+    if (!(r[0] & 0x88) && (last[0] & 0x88)) kbd_super(false);
+    for (int i = 2; i < 8 && i < len; i++) {
+        uint8_t k = r[i];
+        if (!k) continue;
+        bool seen = false;
+        for (int j = 2; j < 8; j++) if (last[j] == k) seen = true;
+        if (!seen) kbd_hid_key(k, r[0]);
+    }
+    memset(last, 0, 8); memcpy(last, r, len < 8 ? len : 8);
+}
+
 static void on_report(struct usb_dev *d, int dci, int cc, uint32_t len) {
     if (cc != CC_SUCCESS && cc != CC_SHORT) { usb_recover_in(d, dci, cc, on_report); return; }
-    uint8_t *r = d->ep_buf[dci];
-    if (len >= 3 && r[2] != 1) {   /* 1 = rollover error */
-        if ((r[0] & 0x88) && !(prev[0] & 0x88)) kbd_super(true);
-        if (!(r[0] & 0x88) && (prev[0] & 0x88)) kbd_super(false);
-        for (int i = 2; i < 8 && i < (int)len; i++) {
-            uint8_t k = r[i];
-            if (!k) continue;
-            bool seen = false;
-            for (int j = 2; j < 8; j++) if (prev[j] == k) seen = true;
-            if (!seen) kbd_hid_key(k, r[0]);
-        }
-        memcpy(prev, r, 8);
-    }
+    hid_kbd_report(prev, d->ep_buf[dci], (int)len);
     usb_queue_in(d, dci, on_report);
 }
 
