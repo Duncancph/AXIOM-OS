@@ -68,7 +68,7 @@ static void save(void) {
 void settings_load(void) {
     char buf[NSET * 150];
     long n = vfs_read(PATH, buf, 0, sizeof buf - 1);
-    if (n <= 0) return;
+    if (n <= 0) { apply("display.mode"); return; }          /* (no settings yet: still bring the boot menu up to date) */
     buf[n] = 0;
     for (char *line = buf; *line;) {
         char *nl = line; while (*nl && *nl != '\n') nl++;
@@ -79,6 +79,7 @@ void settings_load(void) {
         line = nl + 1;
     }
     for (int i = 0; i < nset; i++) apply(set[i].key);
+    apply("display.mode");                                   /* also brings the boot menu up to date after an update */
     LOG_OK("Settings loaded (keyboard %s, time zone %s)\n", settings_get("keyboard.layout"), settings_get("time.zone"));
 }
 

@@ -252,6 +252,8 @@ static int write_grubcfg(const char *dir) {
                        "    multiboot2 /duncos/thane-prev.elf\n    module2 /duncos/initrd-prev.tar initrd\n"
                        "    module2 /duncos/thane-prev.elf kernel\n    module2 /EFI/BOOT/BOOTX64.EFI bootx64\n    boot\n}\n");
     ksnprintf(path, sizeof path, "%s/grub.cfg", dir);
+    static char old[2400]; long on = vfs_read(path, old, 0, sizeof old);
+    if (on == n && !memcmp(old, cfg, n)) return FS_OK;     /* unchanged: don't write */
     long r = vfs_write(path, cfg, n);
     return r < 0 ? (int)r : FS_OK;
 }
