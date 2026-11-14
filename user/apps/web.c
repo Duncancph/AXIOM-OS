@@ -1,4 +1,4 @@
-/* Web 0.3 - a web browser for DuncOS (installed with: clan install web).
+/* Web 0.3 - a web browser for AXIOM (installed with: clan install web).
  * Fetches pages over HTTP and HTTPS (TLS 1.3 with certificate checks), with cookies and gzip, and shows them with
  * style sheets (a useful part of CSS 2 and a little of CSS 3), images (PNG, JPEG, GIF, BMP) and forms. No scripts.
  * The parts: web/html.c (document tree), web/css.c (styles), web/layout.c (layout); this file does the window,
@@ -770,7 +770,7 @@ static void about_page(const char *u) {
     } else {
         ksnprintf(h, sizeof h, "<title>Start page</title>%s"
             "<h1>Web <span class=dim style=\"font-size:22px\">0.3</span></h1>"
-            "<p>A browser for <b>DuncOS</b>, running on the Thane kernel's own TCP/IP stack. Secure <b>https://</b> sites use TLS 1.3, "
+            "<p>A browser for <b>AXIOM</b>, running on the Thane kernel's own TCP/IP stack. Secure <b>https://</b> sites use TLS 1.3, "
             "and every site's certificate is checked against the trusted authorities.</p>"
             "<div class=card><h2>Try</h2><ul>"
             "<li><a href=\"https://text.npr.org/\">text.npr.org</a> - news in plain text</li>"
@@ -859,7 +859,7 @@ static void navigate(const char *target, bool post, const char *body, long blen,
             strncpy0(url, u, sizeof url);
             char m[700];
             if (n <= -40 && n >= -68) {
-                ksnprintf(m, sizeof m, "DuncOS couldn't set up a secure connection to <b>%s</b>: %s.</p><p>This protects you from impostor sites."
+                ksnprintf(m, sizeof m, "AXIOM couldn't set up a secure connection to <b>%s</b>: %s.</p><p>This protects you from impostor sites."
                           " If the computer's clock is wrong, fix it and try again.", u, http_strerror(n) + 26);
                 message_doc("Connection isn't secure", m);
                 strncpy0(status_text, "Not secure: the connection was stopped", sizeof status_text);

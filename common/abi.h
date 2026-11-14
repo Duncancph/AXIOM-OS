@@ -1,4 +1,4 @@
-/* DuncOS kernel <-> application interface (shared by the Thane kernel and user programs). */
+/* AXIOM kernel <-> application interface (shared by the Thane kernel and user programs). */
 #pragma once
 #include <stdint.h>
 
@@ -71,7 +71,7 @@ struct dunc_disk {
     int id, kind, nparts;
     char model[48];
     uint64_t bytes; uint32_t bsize;
-    int duncos;                      /* has a DuncOS partition */
+    int duncos;                      /* has a AXIOM partition */
     int system;                      /* it holds /home right now */
     struct { uint64_t bytes; char fs[12], label[24]; } part[8];
 };

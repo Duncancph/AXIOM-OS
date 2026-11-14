@@ -1,4 +1,4 @@
-/* DuncOS image codecs: PNG/JPEG/GIF/BMP decoding, PNG encoding, zlib/gzip.
+/* AXIOM image codecs: PNG/JPEG/GIF/BMP decoding, PNG encoding, zlib/gzip.
  * Freestanding, integer-only, allocator-driven. */
 #pragma once
 #include <stdint.h>

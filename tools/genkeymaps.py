@@ -1,5 +1,5 @@
 # Generates src/keymaps.h: keyboard layouts as tables indexed by USB HID usage code.
-# Characters are Windows-1252 (the DuncOS text encoding). Dead keys are DEAD_BASE + accent number.
+# Characters are Windows-1252 (the AXIOM text encoding). Dead keys are DEAD_BASE + accent number.
 import unicodedata
 USAGES = list(range(0x04, 0x28)) + list(range(0x2D, 0x39)) + [0x64]     # letters, digits, punctuation, ISO extra key
 ACCENTS = ["\u0300", "\u0301", "\u0302", "\u0308", "\u0303"]          # grave, acute, circumflex, diaeresis, tilde

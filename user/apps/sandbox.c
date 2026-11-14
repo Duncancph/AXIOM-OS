@@ -1,4 +1,4 @@
-/* Protection Test: deliberately misbehaves to show that DuncOS stops a bad
+/* Protection Test: deliberately misbehaves to show that AXIOM stops a bad
  * program without affecting the rest of the system. */
 #include "../lib/dunc.h"
 
@@ -21,7 +21,7 @@ static void draw(void) {
     struct canvas *c = &a.c;
     gfx_fill(c, 0, 0, WW, WH, UI_BG);
     gfx_text(c, &font_title, 24, 42, UI_TEXT, "Protection Test");
-    gfx_text(c, &font_ui, 24, 68, UI_MUTED, "Each DuncOS app runs in its own protected memory space. Pick a");
+    gfx_text(c, &font_ui, 24, 68, UI_MUTED, "Each AXIOM app runs in its own protected memory space. Pick a");
     gfx_text(c, &font_ui, 24, 88, UI_MUTED, "bad action below: the kernel stops just this app and tells you why.");
     char b[96];
     ksnprintf(b, sizeof b, "This app lives at 0x%lx; the kernel is off-limits.", (uint64_t)USER_BASE);

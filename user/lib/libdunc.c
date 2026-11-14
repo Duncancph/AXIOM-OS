@@ -29,10 +29,10 @@ void ui_card(struct canvas *c, int x, int y, int w, int h) {
 
 void ui_button(struct canvas *c, int x, int y, int w, int h, const char *label, int style, bool hover, bool disabled) {
     uint32_t bg, fg = UI_TEXT;
-    if (style == BTN_PRIMARY) { bg = hover ? 0x7ADFF0 : UI_ACCENT; fg = HL_NAVY; }
-    else if (style == BTN_DANGER) { bg = hover ? 0xFF8A8A : UI_RED; fg = HL_NAVY; }
-    else bg = hover ? 0x24365A : UI_PANEL2;
-    if (disabled) { bg = 0x17213A; fg = 0x4A5874; }
+    if (style == BTN_PRIMARY) { bg = hover ? 0xFFFDF0 : UI_ACCENT; fg = HL_ON_ACCENT; }
+    else if (style == BTN_DANGER) { bg = hover ? 0xF48A7A : UI_RED; fg = HL_ON_ACCENT; }
+    else bg = hover ? 0x2E2E2B : UI_PANEL2;
+    if (disabled) { bg = 0x1C1C1B; fg = 0x5A5850; }
     gfx_rrect(c, x, y, w, h, 8, bg, 255);
     if (style == BTN_NORMAL && !disabled) gfx_rrect_outline(c, x, y, w, h, 8, UI_BORDER, 255);
     const struct font *f = &font_ui_bold;
@@ -119,7 +119,7 @@ const char *app_for_file(const char *path) {
 
 const char *open_file(const char *path) {
     const char *app = app_for_file(path);
-    if (!app) return "No app on DuncOS can open this kind of file yet.";
+    if (!app) return "No app on AXIOM can open this kind of file yet.";
     struct dunc_app ap[24]; int n = sys_apps(ap, 24); bool have = false;
     for (int k = 0; k < n; k++) if (!strcmp(ap[k].id, app)) have = true;
     if (!have) {                                         /* a clan package: install it */

@@ -12,7 +12,7 @@ static int WW = 780, WH = 600;
 #define KEYFILE "/system/config/claude.key"
 #define URLFILE "/system/config/claude.url"     /* developers: another endpoint, for testing */
 static const char *SYSTEM =
-    "You are Claude, talking with the user through a chat app on DuncOS, a hobby operating system written from "
+    "You are Claude, talking with the user through a chat app on AXIOM, a hobby operating system written from "
     "scratch. The app shows plain text in a proportional font: it does not render Markdown, tables, images or links. "
     "Write in plain text with short paragraphs. For lists, start lines with \"- \". Put code between lines containing "
     "only ``` and it will be shown in a monospaced font. The app can show Western European characters (including "
@@ -110,7 +110,7 @@ static void draw(void) {
     struct canvas *c = &a.c;
     gfx_fill(c, 0, 0, WW, WH, UI_BG);
     /* header */
-    gfx_fill(c, 0, 0, WW, TOP - 8, 0x0C1426);
+    gfx_fill(c, 0, 0, WW, TOP - 8, 0x0A0A0A);
     gfx_circle(c, 30, 24, 14, 0xD97757, 255);
     gfx_text_center(c, &font_ui_bold, 16, 28, 29, 0xFFFFFF, "*");
     gfx_text(c, &font_ui_bold, 54, 22, UI_TEXT, "Claude");
@@ -122,7 +122,7 @@ static void draw(void) {
     gfx_clip(c, 0, top, WW, bot - top);
     if (!nmsgs) {
         int y = top + 60;
-        gfx_text_center(c, &font_title, 0, WW, y, UI_TEXT, key[0] ? "Ask Claude anything" : "Chat with Claude on DuncOS");
+        gfx_text_center(c, &font_title, 0, WW, y, UI_TEXT, key[0] ? "Ask Claude anything" : "Chat with Claude on AXIOM");
         const char *l1 = key[0] ? "Type below and press Enter. Shift+Enter starts a new line." : "This app talks to Claude through Anthropic's API, which needs an API key:";
         gfx_text_center(c, &font_ui, 0, WW, y + 34, UI_MUTED, l1);
         if (!key[0]) {
@@ -146,10 +146,10 @@ static void draw(void) {
         int bx = m->assistant ? 24 : WW - 24 - inner - 28, bwid = inner + 28;
         if (!m->assistant) { int mw = 0; for (int k = first; k < nlines; k++) { int w = lines[k].kind == 2 ? lines[k].n * 8 : width_of(lines[k].s, lines[k].n, lines[k].kind ? &font_ui_bold : &font_ui); if (w > mw) mw = w; } bwid = mw + 28; bx = WW - 24 - bwid; }
         if (y + h > top && y < bot) {
-            gfx_rrect(c, bx, y, bwid, h, 12, m->assistant ? UI_PANEL : 0x1E4A6E, 255);
+            gfx_rrect(c, bx, y, bwid, h, 12, m->assistant ? UI_PANEL : 0x34332E, 255);
             for (int k = first; k < nlines; k++) {
                 struct line *l = &lines[k];
-                if (l->kind == 2) gfx_fill(c, bx + 8, y + 9 + l->y, bwid - 16, 16, 0x0A1020);
+                if (l->kind == 2) gfx_fill(c, bx + 8, y + 9 + l->y, bwid - 16, 16, 0x050505);
                 draw_text_line(c, l, bx + 14, y + 9 + l->y + 15, UI_TEXT);
             }
             if (m->assistant && !m->dlen) gfx_text(c, &font_ui, bx + 14, y + 24, UI_MUTED, busy && i == nmsgs - 1 ? "Thinking..." : "(no reply)");
@@ -161,7 +161,7 @@ static void draw(void) {
     gfx_clip(c, 0, 0, WW, WH);
     /* input */
     int iy = WH - bottom_h();
-    gfx_fill(c, 0, iy, WW, WH - iy, 0x0C1426);
+    gfx_fill(c, 0, iy, WW, WH - iy, 0x0A0A0A);
     if (status[0]) gfx_text(c, &font_ui, 24, iy + 20, status_col, status);
     int il = inp_lines(), ih = il * 20 + 16;
     gfx_rrect(c, 20, iy + 28, WW - 128, ih, 10, HL_TERM_BG, 255);

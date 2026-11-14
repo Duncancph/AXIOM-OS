@@ -5,7 +5,7 @@ static uint8_t prev[8];
 static int kbd_dci;
 
 static void on_report(struct usb_dev *d, int dci, int cc, uint32_t len) {
-    if (cc != CC_SUCCESS && cc != CC_SHORT) return;   /* device gone / error: stop polling */
+    if (cc != CC_SUCCESS && cc != CC_SHORT) { usb_recover_in(d, dci, cc, on_report); return; }
     uint8_t *r = d->ep_buf[dci];
     if (len >= 3 && r[2] != 1) {   /* 1 = rollover error */
         if ((r[0] & 0x88) && !(prev[0] & 0x88)) kbd_super(true);
@@ -37,7 +37,7 @@ void usbkbd_attach(struct usb_dev *d, int iface) {
 
 /* USB HID mouse (boot protocol): byte 0 buttons, 1 dx, 2 dy, [3 wheel] */
 static void on_mouse(struct usb_dev *d, int dci, int cc, uint32_t len) {
-    if (cc != CC_SUCCESS && cc != CC_SHORT) return;
+    if (cc != CC_SUCCESS && cc != CC_SHORT) { usb_recover_in(d, dci, cc, on_mouse); return; }
     int8_t *r = (int8_t *)d->ep_buf[dci];
     if (len >= 3) mouse_push(r[1], r[2], r[0] & 7, len >= 4 ? -r[3] : 0);
     usb_queue_in(d, dci, on_mouse);

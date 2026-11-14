@@ -1,4 +1,4 @@
-/* System settings: a small key=value store saved in /system/config/settings.ini (on the DuncOS disk
+/* System settings: a small key=value store saved in /system/config/settings.ini (on the AXIOM disk
  * when installed), plus time zones. Settings is the app that changes them; the kernel applies them.
  *   keyboard.layout   us | uk | de | fr | es
  *   time.zone         e.g. Europe/London (see zones[] below)
@@ -50,7 +50,7 @@ static void apply(const char *key) {
 
 static void save(void) {
     static char buf[NSET * 150];
-    int k = ksnprintf(buf, sizeof buf, "# DuncOS settings (change them in Settings)\n");
+    int k = ksnprintf(buf, sizeof buf, "# AXIOM settings (change them in Settings)\n");
     for (int i = 0; i < nset; i++) k += ksnprintf(buf + k, sizeof buf - k, "%s=%s\n", set[i].key, set[i].val);
     vfs_mkdir("/system/config");
     vfs_write(PATH, buf, k);

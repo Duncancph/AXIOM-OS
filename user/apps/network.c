@@ -54,7 +54,7 @@ static void draw(void) {
     struct canvas *c = &a.c;
     gfx_fill(c, 0, 0, WW, WH, UI_BG);
     bool ok = ni.present && ni.link && (ni.configured || ni.v6_configured);
-    gfx_circle(c, 52, 50, 28, ok ? 0x0E7490 : 0x2A3142, 255);
+    gfx_circle(c, 52, 50, 28, ok ? 0x3C3B37 : 0x2A2A28, 255);
     icon(c, 52, 50, 0xFFFFFF);
     gfx_text(c, &font_title, 96, 46, UI_TEXT, "Network");
     const char *st = !ni.present ? "No supported network adapter" : !ni.link ? "No cable connected" : !ok ? "Getting an address..." :

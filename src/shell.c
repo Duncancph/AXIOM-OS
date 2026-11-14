@@ -136,7 +136,7 @@ void shell_execute(char *line) {
 void shell_run(void) {
     kprintf("\nType ");
     console_set_color(C_LCYAN); kprintf("help"); console_set_color(C_LGRAY);
-    kprintf(" to see what DuncOS can do.\n\n");
+    kprintf(" to see what AXIOM can do.\n\n");
     char line[128];
     for (;;) {
         console_set_color(C_LGREEN); kprintf("dunc");

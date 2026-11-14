@@ -1,4 +1,4 @@
-/* String and formatting routines shared by the kernel and DuncOS apps. */
+/* String and formatting routines shared by the kernel and AXIOM apps. */
 #include <stdint.h>
 #include "str.h"
 

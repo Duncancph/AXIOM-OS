@@ -1,4 +1,4 @@
-; Built-in DuncOS programs, embedded into the kernel image.
+; Built-in AXIOM programs, embedded into the kernel image.
 section .rodata
 global app_images, app_count
 
@@ -19,13 +19,13 @@ app_images:
     APP viewer, "Viewer", 0
     APP web, "Web", 0
     APP claude, "Claude", 0
-    APP about, "About DuncOS", 0
+    APP about, "About AXIOM", 0
 app_count: dd 12
 
 id_files: db "files", 0
 title_files: db "Files", 0
 id_about: db "about", 0
-title_about: db "About DuncOS", 0
+title_about: db "About AXIOM", 0
 id_terminal: db "terminal", 0
 title_terminal: db "Terminal", 0
 id_monitor: db "monitor", 0

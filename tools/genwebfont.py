@@ -13,7 +13,7 @@ for st, file, sizes in STYLES:
         f = ImageFont.truetype(D + file, size)
         asc, desc = f.getmetrics()
         bits, glyphs = [], []
-        for c in range(32, 256):                              # Windows-1252, the DuncOS text encoding
+        for c in range(32, 256):                              # Windows-1252, the AXIOM text encoding
             try: ch = bytes([c]).decode("cp1252")
             except UnicodeDecodeError: ch = "?"
             if c in (127, 160): ch = " "

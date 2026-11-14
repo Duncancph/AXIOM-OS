@@ -21,6 +21,7 @@
 #define PxTFD 0x20
 #define PxSIG 0x24
 #define PxSSTS 0x28
+#define PxSCTL 0x2C
 #define PxSERR 0x30
 #define PxCI  0x38
 
@@ -31,6 +32,8 @@ struct ahci_port {
     struct blockdev bd;
     bool lba48;
     int num;
+    volatile int busy;              /* a command is in flight (other tasks wait their turn) */
+    int slow_reports;
 };
 
 static inline uint32_t rd(volatile uint8_t *b, uint32_t o) { return *(volatile uint32_t *)(b + o); }
@@ -57,7 +60,9 @@ static void port_start(volatile uint8_t *r) {
 /* Run one ATA command. dir: 0 none, 1 read into buf, 2 write from buf. Returns 0 ok. */
 static int ata_cmd(struct ahci_port *p, uint8_t cmd, uint64_t lba, uint32_t count, uint32_t bytes, int dir) {
     volatile uint8_t *r = p->r;
-    if (!wait_clear(r, PxTFD, 0x88, 2000)) return -1;    /* BSY | DRQ */
+    while (p->busy) kyield();
+    p->busy = 1;
+    if (!wait_clear(r, PxTFD, 0x88, 2000)) { p->busy = 0; return -1; }    /* BSY | DRQ */
     uint8_t *h = p->clb;                                 /* command header 0 */
     memset(h, 0, 32);
     h[0] = 5 | (dir == 2 ? 0x40 : 0);                    /* FIS length 5 dwords, W bit */
@@ -75,17 +80,24 @@ static int ata_cmd(struct ahci_port *p, uint8_t cmd, uint64_t lba, uint32_t coun
     }
     wr(r, PxIS, 0xFFFFFFFF);
     wr(r, PxCI, 1);
-    for (int i = 0; i < 300000; i++) {                   /* up to ~30 s */
+    /* wait for it, letting the rest of the system run meanwhile (a slow or stuck disk mustn't freeze everything) */
+    uint64_t t0 = uptime_ms();
+    for (;;) {
         if (!(rd(r, PxCI) & 1)) break;
         if (rd(r, PxIS) & (1u << 30)) break;             /* task file error */
-        udelay(100);
+        if (uptime_ms() - t0 > 10000) break;              /* give up after 10 s */
+        if (uptime_ms() - t0 < 2) udelay(20); else kyield();
     }
+    uint64_t took = uptime_ms() - t0;
+    if (took > 1000 && p->slow_reports++ < 10) LOG_WARN("SATA disk %d: command %02x took %lu ms\n", p->num, cmd, took);
     uint32_t tfd = rd(r, PxTFD);
     if ((rd(r, PxCI) & 1) || (rd(r, PxIS) & (1u << 30)) || (tfd & 1)) {
         LOG_WARN("SATA disk %d: command %02x failed (status %02x error %02x)\n", p->num, cmd, tfd & 0xFF, (tfd >> 8) & 0xFF);
         port_stop(r); wr(r, PxSERR, 0xFFFFFFFF); wr(r, PxIS, 0xFFFFFFFF); port_start(r);   /* recover */
+        p->busy = 0;
         return -1;
     }
+    p->busy = 0;
     return 0;
 }
 
@@ -132,6 +144,9 @@ static void port_init(volatile uint8_t *hba, int num) {
     if (!mem || !p->buf) return;
     p->clb = mem; p->fb = mem + 1024; p->ctba = mem + 4096;
     port_stop(r);
+    /* no link power saving: some disks and controllers stop answering after dropping into partial/slumber */
+    wr(r, PxSCTL, (rd(r, PxSCTL) & ~0xF00u) | 0x300u);
+    wr(r, PxCMD, rd(r, PxCMD) & ~((1u << 26) | (1u << 27)));     /* ALPE, ASP */
     *(volatile uint64_t *)(r + PxCLB) = (uint64_t)(uintptr_t)p->clb;
     *(volatile uint64_t *)(r + PxFB) = (uint64_t)(uintptr_t)p->fb;
     wr(r, PxSERR, 0xFFFFFFFF); wr(r, PxIS, 0xFFFFFFFF); wr(r, PxIE, 0);

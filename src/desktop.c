@@ -1,4 +1,4 @@
-/* DuncOS desktop: window manager + compositor (kernel thread), in the Highland theme.
+/* AXIOM desktop: window manager + compositor (kernel thread), in the Highland theme.
  * The look comes from Bryan Duncan's Highland design (desktop_highland.c, theme_highland.h):
  * wallpaper, top bar, window frames and dock are drawn by that code. This file handles
  * window stacking, input, damage tracking and composition. */
@@ -71,7 +71,7 @@ static struct rect dock_rect(void) { int x, y, w, h; hl_dock_rect(W, H, HL_NAPPS
 static struct rect dock_area(void) { struct rect d = dock_rect(); return (struct rect){ d.x - 1, d.y - 1, d.w + 2, d.h + 10 }; }  /* incl. shadow */
 static struct rect dock_item(int i) { struct rect d = dock_rect(); return (struct rect){ d.x + HL_DOCK_PAD + i * (HL_DOCK_ICON + HL_DOCK_GAP), d.y + HL_DOCK_PAD, HL_DOCK_ICON, HL_DOCK_ICON }; }
 static struct rect frame_area(struct window *w) { return (struct rect){ w->x - 8, w->y - 2, fw(w) + 16, fh(w) + 30 }; }
-static struct rect crown_btn(void) { return (struct rect){ 6, 3, 90, HL_BAR_H - 6 }; }
+static struct rect crown_btn(void) { return (struct rect){ 6, 3, 132, HL_BAR_H - 6 }; }
 #define MENU_W 300
 #define MENU_ROW 46
 static struct rect menu_rect(void) { return (struct rect){ 8, HL_BAR_H + 8, MENU_W, 92 + HL_NAPPS * MENU_ROW + 64 }; }
@@ -247,9 +247,8 @@ static void draw_menu(void) {
     gfx_rrect(&cv, m.x - 2, m.y + 10, m.w + 4, m.h + 4, HL_WIN_RADIUS + 2, HL_SHADOW, HL_SHADOW_ALPHA);
     gfx_rrect(&cv, m.x, m.y, m.w, m.h, HL_WIN_RADIUS, HL_WIN_BG, HL_WIN_ALPHA);
     gfx_rrect_outline(&cv, m.x, m.y, m.w, m.h, HL_WIN_RADIUS, HL_ACCENT, 90);
-    pixel_icon(&cv, hl_crown_icon(), 12, m.x + 18, m.y + 18, 2, HL_GOLD);
-    gfx_mono_text(&cv, m.x + 62, m.y + 18, "DuncOS", HL_ACCENT);
-    gfx_mono_text(&cv, m.x + 62, m.y + 36, "Thane kernel v" OS_VERSION, HL_TEXT_FAINT);
+    ax_logo(&full, m.x + 20, m.y + 14, ax_logo_img(0), HL_CREAM, 255);
+    gfx_mono_text(&cv, m.x + 20, m.y + 40, OS_NAME " " OS_VERSION " - Thane kernel", HL_TEXT_FAINT);
     gfx_blend(&cv, m.x + 1, m.y + 66, m.w - 2, 1, 0xFFFFFF, 16);
     for (int i = 0; i < HL_NAPPS; i++) {
         struct rect r = menu_item(i);
@@ -275,7 +274,7 @@ static void draw_menu(void) {
     for (int k = 0; k < 2; k++) {
         struct rect r = menu_btn(k);
         bool h = hover_ctl == 300 + k;
-        gfx_rrect(&cv, r.x, r.y, r.w, r.h, 8, k && h ? HL_RED : h ? 0x24324F : 0x18233B, 255);
+        gfx_rrect(&cv, r.x, r.y, r.w, r.h, 8, k && h ? HL_RED : h ? 0x2A2A28 : 0x1C1C1B, 255);
         gfx_rrect_outline(&cv, r.x, r.y, r.w, r.h, 8, HL_WIN_BORDER, 255);
         int tw = (int)strlen(bl[k]) * 8;
         gfx_mono_text(&cv, r.x + (r.w - tw) / 2, r.y + 9, bl[k], k && h ? 0xFFFFFF : HL_TEXT);
@@ -352,7 +351,7 @@ static void draw_lock_screen(void) {
     if (lock_len) gfx_text_center(&cv, &font_title, fx, fw_, fy + 28, HL_TEXT, dots);
     else gfx_text_center(&cv, &font_ui, fx, fw_, fy + 26, HL_TEXT_FAINT, "Password");
     gfx_text_center(&cv, &font_ui, 0, W, fy + 70, lock_msg[0] ? HL_RED : HL_TEXT_FAINT, lock_msg[0] ? lock_msg : "Type your password and press Enter");
-    gfx_text_center(&cv, &font_ui_bold, 0, W, H - 40, HL_TEXT_FAINT, "DuncOS");
+    { const struct logo_img *l = ax_logo_img(0); ax_logo(&full, (W - l->w) / 2, H - 52, l, HL_CREAM, 150); }
 }
 
 void desktop_lock(void) {
@@ -398,16 +397,16 @@ static void compose(struct rect r) {
     if (overlap(r, bar_rect())) {
         char app[48], clk[32]; bar_text(app, sizeof app, clk, sizeof clk);
         hl_render_topbar(&full, app, clk);
-        if (hover_ctl == 50 || menu_open) { struct rect c = crown_btn(); gfx_rrect(&cv, c.x, c.y, c.w, c.h, 8, 0xFFFFFF, 22); }
+        if (hover_ctl == 50 || menu_open) { struct rect c = crown_btn(); gfx_rrect(&cv, c.x, c.y, c.w, c.h, 8, HL_CREAM, 22); }
         /* Bluetooth status, left of the clock */
         int bx = W - 16 - (int)strlen(clk) * 8 - 22, cy = HL_BAR_H / 2;
-        uint32_t bc = bt_present() ? HL_TEXT_DIM : 0x3A4560;
+        uint32_t bc = bt_present() ? HL_TEXT_DIM : 0x3C3B37;
         gfx_line(&cv, bx, cy - 7, bx, cy + 7, bc, 1);
         gfx_line(&cv, bx, cy - 7, bx + 4, cy - 3, bc, 1); gfx_line(&cv, bx + 4, cy - 3, bx - 4, cy + 4, bc, 1);
         gfx_line(&cv, bx - 4, cy - 4, bx + 4, cy + 3, bc, 1); gfx_line(&cv, bx + 4, cy + 3, bx, cy + 7, bc, 1);
         /* network: two linked boxes, bright when connected */
         int nx = bx - 30;
-        uint32_t nc = net_ready() ? HL_TEXT_DIM : 0x3A4560;
+        uint32_t nc = net_ready() ? HL_TEXT_DIM : 0x3C3B37;
         if (net_present()) {
             gfx_rrect_outline(&cv, nx - 4, cy - 8, 8, 6, 1, nc, 255);
             gfx_rrect_outline(&cv, nx - 10, cy + 2, 8, 6, 1, nc, 255);
@@ -698,7 +697,7 @@ static void activate_app(int a) {
 
 static void close_window_clicked(struct window *w) {
     if (w->close_req && uptime_ms() - w->close_req > 1000) {
-        char m[128]; ksnprintf(m, sizeof m, "%s wasn't responding, so DuncOS closed it.", w->owner->name);
+        char m[128]; ksnprintf(m, sizeof m, "%s wasn't responding, so AXIOM closed it.", w->owner->name);
         task_kill(w->owner->pid);
         desktop_notify("App closed", m);
     } else {
@@ -911,7 +910,7 @@ void desktop_init(void) {
     gfx_init(&cv, bb, W, H, W);
     full = (struct framebuffer){ bb, W, H, W * 4 };
     struct framebuffer wf = { wall, W, H, W * 4 };
-    hl_draw_wallpaper(&wf);
+    ax_draw_wallpaper(&wf);
     mx = W / 2; my = H / 2;
     desktop_ok = true;
 }

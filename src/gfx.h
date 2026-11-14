@@ -1,5 +1,5 @@
 /*
- * gfx.h - DuncOS 2D drawing primitives for a 32-bpp linear framebuffer
+ * gfx.h - AXIOM 2D drawing primitives for a 32-bpp linear framebuffer
  * Created by Bryan Duncan
  *
  * Freestanding (no libc). Colours are 0x00RRGGBB.

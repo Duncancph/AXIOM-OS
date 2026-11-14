@@ -253,9 +253,9 @@ const char *x509_strerror(int e) {
     case X509_EPARSE: return "the certificate couldn't be read";
     case X509_EEXPIRED: return "the certificate has expired or isn't valid yet (check the computer's clock)";
     case X509_EHOST: return "the certificate belongs to a different site";
-    case X509_EUNTRUSTED: return "the certificate was issued by an authority DuncOS doesn't trust";
+    case X509_EUNTRUSTED: return "the certificate was issued by an authority AXIOM doesn't trust";
     case X509_ESIG: return "a certificate signature is invalid";
-    case X509_EALG: return "the certificate uses an algorithm DuncOS doesn't support";
+    case X509_EALG: return "the certificate uses an algorithm AXIOM doesn't support";
     case X509_ENOTCA: return "a certificate in the chain isn't allowed to issue certificates";
     case X509_EUSAGE: return "the certificate isn't meant for web servers";
     }

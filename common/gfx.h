@@ -1,4 +1,4 @@
-/* Software 2D graphics shared by the Thane kernel compositor and DuncOS apps.
+/* Software 2D graphics shared by the Thane kernel compositor and AXIOM apps.
  * Pixels are 0x00RRGGBB. */
 #pragma once
 #include <stdint.h>

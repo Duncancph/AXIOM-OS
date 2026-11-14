@@ -138,7 +138,7 @@ void msc_attach(struct usb_dev *d, int iface) {
     LOG_OK("USB drive: %s %s, %lu MB\n", vendor, product, mb);
 
     m->bd.release = msc_release;
-    if (disk_add(&m->bd, DISK_USB)) return;              /* a DuncOS drive: it holds /home now */
+    if (disk_add(&m->bd, DISK_USB)) return;              /* a AXIOM drive: it holds /home now */
     char label[16] = "", why[96] = "";
     m->vol = fat_mount(&m->bd, label, why, sizeof why);
     if (!m->vol) {

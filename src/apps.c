@@ -110,7 +110,7 @@ void clan_command(int argc, char **argv) {
     const char *sub = argc > 1 ? argv[1] : "help";
     if (!strcmp(sub, "list") || !strcmp(sub, "search")) {
         const char *term = argc > 2 ? argv[2] : "";
-        kprintf("Packages in the DuncOS repository:\n");
+        kprintf("Packages in the AXIOM repository:\n");
         for (int i = 0; i < n; i++) {
             bool match = !*term;
             for (const char *s = pk[i].id; *s && !match; s++) if (!strncmp(s, term, strlen(term))) match = true;
@@ -140,7 +140,7 @@ void clan_command(int argc, char **argv) {
             kprintf("removed %s\n", argv[2]);
         }
     } else {
-        kprintf("clan - the DuncOS package manager\n");
+        kprintf("clan - the AXIOM package manager\n");
         kprintf("  clan list              show available packages\n");
         kprintf("  clan search <word>     find packages\n");
         kprintf("  clan info <package>    describe a package\n");

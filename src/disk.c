@@ -1,7 +1,7 @@
-/* Disks: the list of SATA, NVMe and USB disks, their partitions, the DuncOS system volume, and the installer.
+/* Disks: the list of SATA, NVMe and USB disks, their partitions, the AXIOM system volume, and the installer.
  *
  * Internal disks are only ever touched in two ways: their partitions are read to describe them, and a
- * partition named DuncOS (GPT) or labelled DUNCOS (FAT32) is mounted as the system volume. Other
+ * partition named AXIOM (GPT) or labelled AXIOM (FAT32; AXIOM/DUNCOS from before the rename are recognised too) is mounted as the system volume. Other
  * partitions (Windows, Linux, recovery) are never mounted or written, except when the user asks the
  * installer to erase that disk.
  *
@@ -48,7 +48,7 @@ static void probe_fs(struct blockdev *bd, struct part *pt) {
         char l[12]; memcpy(l, b + 71, 11); l[11] = 0;
         for (int k = 10; k >= 0 && l[k] == ' '; k--) l[k] = 0;
         if (strcmp(l, "NO NAME")) strncpy0(pt->label, l, sizeof pt->label);
-        if (!strcmp(l, "DUNCOS")) pt->duncos = true;
+        if (!strcmp(l, "AXIOM") || !strcmp(l, "DUNCOS")) pt->duncos = true;   /* DUNCOS: installed under the old name */
     }
     else if (!memcmp(b + 3, "NTFS    ", 8)) strncpy0(pt->fs, "NTFS", sizeof pt->fs);
     else if (!memcmp(b + 3, "EXFAT   ", 8)) strncpy0(pt->fs, "exFAT", sizeof pt->fs);
@@ -83,7 +83,7 @@ static void scan(struct disk *d) {
             char name[37]; for (int k = 0; k < 36; k++) name[k] = ent[56 + 2 * k] < 128 ? ent[56 + 2 * k] : '?'; name[36] = 0;
             probe_fs(bd, pt);
             if (!pt->label[0]) strncpy0(pt->label, name, sizeof pt->label);
-            if (!strcmp(name, "DuncOS") && !strcmp(pt->fs, "FAT32")) pt->duncos = true;
+            if ((!strcmp(name, "AXIOM") || !strcmp(name, "AXIOM")) && !strcmp(pt->fs, "FAT32")) pt->duncos = true;
         }
     } else {
         for (int i = 0; i < 4; i++) {
@@ -102,21 +102,21 @@ static const char *kind_name(int k) { return k == DISK_SATA ? "SATA" : k == DISK
 static bool mount_system(struct disk *d, struct part *pt) {
     char label[16], why[96];
     void *vol = fat_open(d->bd, pt->first, label, why, sizeof why);
-    if (!vol) { LOG_WARN("DuncOS volume on %s: %s\n", d->bd->name, why); return false; }
+    if (!vol) { LOG_WARN("AXIOM volume on %s: %s\n", d->bd->name, why); return false; }
     static const char *dirs[] = { "/home", "/apps", "/config", "/duncos" };
     for (int i = 0; i < 4; i++) fat_ops.mkdir(vol, dirs[i]);
     char kind[16]; ksnprintf(kind, sizeof kind, "%s disk", kind_name(d->kind));
-    vfs_mount_at("/home", "/home", "DuncOS", kind, &fat_ops, vol);
-    vfs_mount_at("/apps", "/apps", "DuncOS", kind, &fat_ops, vol);
-    vfs_mount_at("/system/config", "/config", "DuncOS", kind, &fat_ops, vol);
-    vfs_mount_at("/system/boot", "/duncos", "DuncOS", kind, &fat_ops, vol);
+    vfs_mount_at("/home", "/home", "AXIOM", kind, &fat_ops, vol);
+    vfs_mount_at("/apps", "/apps", "AXIOM", kind, &fat_ops, vol);
+    vfs_mount_at("/system/config", "/config", "AXIOM", kind, &fat_ops, vol);
+    vfs_mount_at("/system/boot", "/duncos", "AXIOM", kind, &fat_ops, vol);
     static const char *homedirs[] = { "/home/Documents", "/home/Downloads", "/home/Pictures", "/home/Trash" };
     for (int i = 0; i < 4; i++) vfs_mkdir(homedirs[i]);
     d->sysvol = vol; sysdisk = d;
     apps_refresh();
     settings_load();
     LOG_OK("Your files are saved on %s (%s)\n", d->bd->name, kind_name(d->kind));
-    if (booted) desktop_notify("DuncOS drive connected", "Your files and settings are saved on it again.");
+    if (booted) desktop_notify("AXIOM drive connected", "Your files and settings are saved on it again.");
     return true;
 }
 
@@ -129,7 +129,7 @@ bool disk_add(struct blockdev *bd, int kind) {
     d->used = true; d->id = next_id++; d->kind = kind; d->bd = bd;
     scan(d);
     for (int i = 0; i < d->nparts; i++)
-        LOG_INFO("  %s partition %d: %lu MB %s %s%s\n", bd->name, i + 1, d->p[i].count * bd->bsize >> 20, d->p[i].fs, d->p[i].label, d->p[i].duncos ? " (DuncOS)" : "");
+        LOG_INFO("  %s partition %d: %lu MB %s %s%s\n", bd->name, i + 1, d->p[i].count * bd->bsize >> 20, d->p[i].fs, d->p[i].label, d->p[i].duncos ? " (AXIOM)" : "");
     if (!sysdisk)
         for (int i = 0; i < d->nparts; i++) if (d->p[i].duncos) return mount_system(d, &d->p[i]);
     return false;
@@ -142,7 +142,7 @@ void disk_remove(struct blockdev *bd) {
         if (d->sysvol) {
             vfs_unmount(d->sysvol); fat_unmount(d->sysvol); d->sysvol = 0; sysdisk = 0;
             apps_refresh();
-            desktop_notify("DuncOS drive removed", "Your files are on that drive. Until it's back, new files are kept in memory only.");
+            desktop_notify("AXIOM drive removed", "Your files are on that drive. Until it's back, new files are kept in memory only.");
         }
         d->used = false;
     }
@@ -181,7 +181,7 @@ static void progress(int pct, const char *msg) {
     kprintf("[install] %d%% %s\n", pct, msg);
 }
 
-/* a fresh GPT with one partition (the DuncOS EFI system partition) covering the disk */
+/* a fresh GPT with one partition (the AXIOM EFI system partition) covering the disk */
 static int write_gpt(struct blockdev *bd, uint64_t *first, uint64_t *count) {
     uint32_t bs = bd->bsize;
     uint64_t last = bd->blocks - 1;
@@ -198,7 +198,7 @@ static int write_gpt(struct blockdev *bd, uint64_t *first, uint64_t *count) {
     memcpy(ents, ESP_GUID, 16);
     random_bytes(ents + 16, 16); ents[16 + 7] = (ents[16 + 7] & 0x0F) | 0x40; ents[16 + 8] = (ents[16 + 8] & 0x3F) | 0x80;
     w64(ents + 32, pfirst); w64(ents + 40, plast);
-    const char *nm = "DuncOS"; for (int k = 0; nm[k]; k++) ents[56 + 2 * k] = nm[k];
+    const char *nm = "AXIOM"; for (int k = 0; nm[k]; k++) ents[56 + 2 * k] = nm[k];
     uint32_t ecrc = crc32(ents, 128 * 128, 0);
     uint8_t guid[16]; random_bytes(guid, 16); guid[7] = (guid[7] & 0x0F) | 0x40; guid[8] = (guid[8] & 0x3F) | 0x80;
     int r = FS_OK;
@@ -224,13 +224,13 @@ static int write_gpt(struct blockdev *bd, uint64_t *first, uint64_t *count) {
 }
 
 static const char *GRUBCFG_FMT =
-    "# DuncOS boot menu. Settings > Display changes the screen size here.\n"
+    "# AXIOM boot menu. Settings > Display changes the screen size here.\n"
     "set timeout=2\nset default=0\ninsmod all_video\ninsmod gfxterm\n"
-    "menuentry \"DuncOS\" {\n"
+    "menuentry \"AXIOM\" {\n"
     "    set gfxpayload=%s1920x1080x32,1920x1200x32,1680x1050x32,1600x900x32,1440x900x32,1366x768x32,1280x800x32,1280x720x32,1024x768x32,auto\n"
     "    multiboot2 /duncos/thane.elf\n    module2 /duncos/initrd.tar initrd\n"
     "    module2 /duncos/thane.elf kernel\n    module2 /EFI/BOOT/BOOTX64.EFI bootx64\n    boot\n}\n"
-    "menuentry \"DuncOS (safe graphics 1024x768)\" {\n"
+    "menuentry \"AXIOM (safe graphics 1024x768)\" {\n"
     "    set gfxpayload=1024x768x32,auto\n"
     "    multiboot2 /duncos/thane.elf\n    module2 /duncos/initrd.tar initrd\n"
     "    module2 /duncos/thane.elf kernel\n    module2 /EFI/BOOT/BOOTX64.EFI bootx64\n    boot\n}\n";
@@ -266,14 +266,14 @@ static void installer(void *arg) {
     if (!d) { r = FS_ENOENT; strncpy0(why, "that disk is gone", sizeof why); goto done; }
     struct blockdev *bd = d->bd;
     if (inst_mode == INSTALL_ERASE) {
-        if (d == sysdisk) { r = FS_EINVAL; strncpy0(why, "DuncOS is using that disk right now; use Update instead", sizeof why); goto done; }
+        if (d == sysdisk) { r = FS_EINVAL; strncpy0(why, "AXIOM is using that disk right now; use Update instead", sizeof why); goto done; }
         if (bd->release) bd->release(bd->ctx);              /* e.g. a USB stick that is open in Files */
         progress(2, "Making a new partition table");
         uint64_t first, count;
         r = write_gpt(bd, &first, &count);
         if (r) { ksnprintf(why, sizeof why, "the partition table couldn't be written (%s)", fs_error(r)); goto done; }
-        progress(6, "Formatting the DuncOS partition (FAT32)");
-        r = fat_format(bd, first, count, "DUNCOS");
+        progress(6, "Formatting the AXIOM partition (FAT32)");
+        r = fat_format(bd, first, count, "AXIOM");
         if (r) { strncpy0(why, "formatting failed", sizeof why); goto done; }
         kyield();
         vol = fat_open(bd, first, label, why, sizeof why);
@@ -281,7 +281,7 @@ static void installer(void *arg) {
     } else {
         int pi = -1;
         for (int i = 0; i < d->nparts; i++) if (d->p[i].duncos) pi = i;
-        if (pi < 0) { r = FS_ENOENT; strncpy0(why, "there's no DuncOS on that disk to update", sizeof why); goto done; }
+        if (pi < 0) { r = FS_ENOENT; strncpy0(why, "there's no AXIOM on that disk to update", sizeof why); goto done; }
         vol = d->sysvol ? d->sysvol : fat_open(bd, d->p[pi].first, label, why, sizeof why);
         if (!vol) { r = FS_EIO; goto done; }
     }
@@ -289,7 +289,7 @@ static void installer(void *arg) {
     static const char *dirs[] = { "/install/EFI", "/install/EFI/BOOT", "/install/duncos", "/install/home", "/install/apps", "/install/config" };
     for (int i = 0; i < 6; i++) vfs_mkdir(dirs[i]);
     progress(12, "Copying the boot loader");
-    if ((r = put("/install/EFI/BOOT/BOOTX64.EFI", "bootx64"))) { strncpy0(why, "the boot loader isn't available (start DuncOS from its USB stick or disk)", sizeof why); goto unmount; }
+    if ((r = put("/install/EFI/BOOT/BOOTX64.EFI", "bootx64"))) { strncpy0(why, "the boot loader isn't available (start AXIOM from its USB stick or disk)", sizeof why); goto unmount; }
     kyield();
     progress(25, "Copying the Thane kernel");
     if ((r = put("/install/duncos/thane.elf", "kernel"))) { strncpy0(why, "the kernel image isn't available", sizeof why); goto unmount; }
@@ -327,8 +327,8 @@ done:
         char m[120]; ksnprintf(m, sizeof m, "Install failed: %s.", why[0] ? why : fs_error(r));
         progress(inst.percent, m); inst.state = 3;
     } else {
-        progress(100, inst_mode == INSTALL_ERASE ? "DuncOS is installed. Your files are now saved on this disk." :
-                      src_data[0] ? "The update is installed. Restart to start using it." : "DuncOS is updated.");
+        progress(100, inst_mode == INSTALL_ERASE ? "AXIOM is installed. Your files are now saved on this disk." :
+                      src_data[0] ? "The update is installed. Restart to start using it." : "AXIOM is updated.");
         inst.state = 2;
     }
     task_exit(0);
@@ -357,7 +357,7 @@ int disk_update_from(int id, const uint8_t *const data[3], const uint64_t len[3]
 int disk_set_boot_option(const char *key, const char *value) {
     if (strcmp(key, "gfxmode")) return FS_EINVAL;
     strncpy0(gfx_pref, value, sizeof gfx_pref);
-    if (!sysdisk) return FS_ENOENT;                 /* takes effect when DuncOS is installed */
+    if (!sysdisk) return FS_ENOENT;                 /* takes effect when AXIOM is installed */
     return write_grubcfg("/system/boot");
 }
 

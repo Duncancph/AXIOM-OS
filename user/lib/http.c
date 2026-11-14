@@ -1,4 +1,4 @@
-/* Network helpers and an HTTP/1.1 client for DuncOS apps. */
+/* Network helpers and an HTTP/1.1 client for AXIOM apps. */
 #include "dunc.h"
 #include "crypto/tls.h"
 #include "img/img.h"
@@ -69,7 +69,7 @@ const char *http_strerror(long e) {
         return m;
     }
     if (e == HTTP_EURL) return "That address doesn't look right";
-    if (e == HTTP_EBAD) return "The server sent something DuncOS couldn't understand";
+    if (e == HTTP_EBAD) return "The server sent something AXIOM couldn't understand";
     return net_strerror((int)e);
 }
 
@@ -451,7 +451,7 @@ long http_request(const char *url_in, const struct http_req *rq, http_sink sink,
         }
         char target[1600]; encode_target(u.path, target, sizeof target);
         bool browser = http_options != 0;
-        int rl = ksnprintf(req, sizeof req, "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: DuncOS/0.1 (Thane kernel)%s\r\nAccept: %s\r\n%sConnection: close\r\n",
+        int rl = ksnprintf(req, sizeof req, "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: AXIOM/0.1 (Thane kernel)%s\r\nAccept: %s\r\n%sConnection: close\r\n",
                            method, target, hp, browser ? " Web/0.3" : "",
                            browser ? "text/html,application/xhtml+xml,text/css,image/png,image/jpeg,image/gif,*/*;q=0.5" : "*/*",
                            want_gz ? "Accept-Encoding: gzip\r\n" : "");

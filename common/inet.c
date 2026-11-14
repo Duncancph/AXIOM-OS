@@ -63,7 +63,7 @@ int ip_parse(const char *s, struct ipaddr *o) {
     struct ipaddr a; memset(&a, 0, sizeof a);
     const char *e;
     if (parse4(s, a.b, &e) && !*e) { *o = a; return true; }
-    char buf[IP_STRLEN]; int i = 0;              /* drop a zone ("fe80::1%eth0"), which DuncOS doesn't need */
+    char buf[IP_STRLEN]; int i = 0;              /* drop a zone ("fe80::1%eth0"), which AXIOM doesn't need */
     for (; s[i] && s[i] != '%' && i < IP_STRLEN - 1; i++) buf[i] = s[i];
     if (s[i] && s[i] != '%') return false;
     buf[i] = 0;

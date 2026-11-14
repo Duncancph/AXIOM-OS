@@ -1,5 +1,5 @@
-# Generates the DuncOS app icons: smooth (anti-aliased) rounded tiles with a colour gradient and a
-# white symbol, in the dock size (52 px) and the start menu size (34 px).
+# Generates the AXIOM app icons: smooth (anti-aliased) dark graphite tiles with a cream symbol
+# (the AXIOM palette), in the dock size (52 px) and the start menu size (34 px).
 # Output: src/icons_data.h (ARGB pixels) and, with --preview FILE, a PNG preview sheet.
 import math, sys
 from PIL import Image, ImageDraw, ImageFilter
@@ -28,7 +28,7 @@ def tile(S, top, bottom):
     out.paste(grad, (0, 0), mask)
     # a thin lighter rim along the top edge, like glass
     rim = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    ImageDraw.Draw(rim).rounded_rectangle([1, 1, S - 2, S - 2], radius=int(S * RADIUS) - 1, outline=(255, 255, 255, 40), width=max(1, S // 52))
+    ImageDraw.Draw(rim).rounded_rectangle([1, 1, S - 2, S - 2], radius=int(S * RADIUS) - 1, outline=(244, 241, 222, 34), width=max(1, S // 52))
     rim_mask = Image.new("L", (S, S), 0); ImageDraw.Draw(rim_mask).rectangle([0, 0, S, S // 2], fill=255)
     out.paste(rim, (0, 0), Image.composite(rim, Image.new("RGBA", (S, S)), rim_mask).split()[3])
     return out
@@ -44,6 +44,8 @@ def with_shadow(base, glyph, S):
     return Image.alpha_composite(out, glyph)
 
 W = (255, 255, 255, 255)
+CREAM = (244, 241, 222, 255)
+def layer_alpha_from(im): return im.split()[3]
 
 def g_folder(d, S, u):
     d.rounded_rectangle([u(.18), u(.27), u(.48), u(.40)], radius=u(.04), fill=(255, 255, 255, 190))
@@ -109,6 +111,14 @@ def g_photo(d, S, u):
     d.ellipse([u(.58), u(.32), u(.70), u(.44)], fill=W)
     d.polygon([(u(.24), u(.72)), (u(.42), u(.46)), (u(.56), u(.64)), (u(.64), u(.56)), (u(.76), u(.72))], fill=W)
 
+def g_axiom(d, S, u):
+    import json
+    L = json.load(open("tools/axiom_logo_raw.json"))
+    mk = [sh for sh in L["shapes"] if max(p[0] for p in sh["pts"]) < 130]
+    mw = max(p[0] for sh in mk for p in sh["pts"]); k = 0.56 / max(mw, L["h"])
+    ox, oy = (1 - mw * k) / 2, (1 - L["h"] * k) / 2 + .01
+    for sh in mk: d.polygon([(u(ox + x * k), u(oy + y * k)) for x, y in sh["pts"]], fill=W)
+
 def g_crown(d, S, u):
     gold = (251, 191, 36, 255)
     pts = [(.20, .70), (.20, .34), (.36, .50), (.50, .26), (.64, .50), (.80, .34), (.80, .70)]
@@ -144,25 +154,25 @@ def g_globe(d, S, u):
 def g_chat(d, S, u):
     d.rounded_rectangle([u(.18), u(.22), u(.82), u(.70)], radius=u(.12), fill=W)
     d.polygon([(u(.30), u(.66)), (u(.30), u(.84)), (u(.48), u(.68))], fill=W)
-    c = (217, 119, 87, 255); cx, cy, r = u(.50), u(.46), u(.15)       # a sparkle inside the bubble
+    c = (0, 0, 0, 0); cx, cy, r = u(.50), u(.46), u(.15)             # a sparkle cut out of the bubble
     d.polygon([(cx, cy - r), (cx + r // 4, cy - r // 4), (cx + r, cy), (cx + r // 4, cy + r // 4),
                (cx, cy + r), (cx - r // 4, cy + r // 4), (cx - r, cy), (cx - r // 4, cy - r // 4)], fill=c)
 
 ICONS = [   # name, gradient top, bottom, glyph
-    ("folder",    "#60A5FA", "#2563EB", g_folder),
-    ("terminal",  "#475569", "#0F172A", g_terminal),
-    ("monitor",   "#34D399", "#059669", g_monitor),
-    ("bluetooth", "#3B82F6", "#1E40AF", g_bluetooth),
-    ("network",   "#22D3EE", "#0E7490", g_network),
-    ("calc",      "#52525B", "#18181B", g_calc),
-    ("shield",    "#F87171", "#DC2626", g_shield),
-    ("gear",      "#A1A1AA", "#52525B", g_gear),
-    ("photo",     "#C084FC", "#DB2777", g_photo),
-    ("crown",     "#1E3A5F", "#0B1220", g_crown),
-    ("code",      "#818CF8", "#4338CA", g_code),
-    ("clock",     "#334155", "#020617", g_clock),
-    ("globe",     "#38BDF8", "#0369A1", g_globe),
-    ("chat",      "#F0A07E", "#C2552F", g_chat),
+    ("folder", "#2C2C2C", "#141414", g_folder),
+    ("terminal", "#2C2C2C", "#141414", g_terminal),
+    ("monitor", "#2C2C2C", "#141414", g_monitor),
+    ("bluetooth", "#2C2C2C", "#141414", g_bluetooth),
+    ("network", "#2C2C2C", "#141414", g_network),
+    ("calc", "#2C2C2C", "#141414", g_calc),
+    ("shield", "#2C2C2C", "#141414", g_shield),
+    ("gear", "#2C2C2C", "#141414", g_gear),
+    ("photo", "#2C2C2C", "#141414", g_photo),
+    ("crown", "#2C2C2C", "#141414", g_axiom),
+    ("code", "#2C2C2C", "#141414", g_code),
+    ("clock", "#2C2C2C", "#141414", g_clock),
+    ("globe", "#2C2C2C", "#141414", g_globe),
+    ("chat", "#2C2C2C", "#141414", g_chat),
 ]
 
 def render(name, top, bottom, glyph, size):
@@ -172,11 +182,18 @@ def render(name, top, bottom, glyph, size):
     layer = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     glyph(ImageDraw.Draw(layer), S, u)
     if name == "gear": g_gear_hole(layer, S, u, (0, 0, 0, 0))
+    # AXIOM palette: every symbol in cream; coloured details become fainter cream
+    r_, g_, b_, a_ = layer.split()
+    lum = Image.merge("RGB", (r_, g_, b_)).convert("L")
+    a_ = Image.merge("LA", (lum, a_)).convert("RGBA")
+    alpha = Image.eval(lum, lambda v: 110 + v * 145 // 255)
+    from PIL import ImageChops
+    layer = Image.new("RGBA", (S, S), CREAM); layer.putalpha(ImageChops.multiply(layer.split()[3].point(lambda v: 255), ImageChops.multiply(alpha, layer_alpha_from(a_))))
     out = with_shadow(base, layer, S)
     return out.resize((size, size), Image.LANCZOS)
 
 def main():
-    out = ["/* Generated by tools/genicons.py: DuncOS app icons, ARGB (straight alpha). */", "#pragma once", "#include <stdint.h>",
+    out = ["/* Generated by tools/genicons.py: AXIOM app icons, ARGB (straight alpha). */", "#pragma once", "#include <stdint.h>",
            "struct app_icon { const char *name; const uint32_t *dock, *menu; };"]
     imgs = {}
     for name, top, bot, glyph in ICONS:
@@ -194,7 +211,7 @@ def main():
     open("src/icons_data.h", "w").write("\n".join(out) + "\n")
     if len(sys.argv) > 2 and sys.argv[1] == "--preview":   # a sheet on the dock colour, 2x
         n = len(ICONS); size = SIZES["dock"]
-        sheet = Image.new("RGBA", (n * (size + 12) + 12, size + 24), (12, 20, 38, 255))
+        sheet = Image.new("RGBA", (n * (size + 12) + 12, size + 24), (14, 14, 14, 255))
         for i, (name, *_) in enumerate(ICONS): sheet.alpha_composite(imgs[(name, "dock")], (12 + i * (size + 12), 12))
         sheet.resize((sheet.width * 2, sheet.height * 2), Image.LANCZOS).save(sys.argv[2])
 

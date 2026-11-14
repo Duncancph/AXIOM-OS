@@ -1,4 +1,4 @@
-/* Public key that DuncOS updates must be signed with (ECDSA P-256, uncompressed point). Made by tools/update-keygen.py. */
+/* Public key that AXIOM updates must be signed with (ECDSA P-256, uncompressed point). Made by tools/update-keygen.py. */
 #pragma once
 static const unsigned char update_pubkey[65] = {
     0x04, 0x0d, 0x37, 0xd5, 0x2d, 0x1c, 0x7a, 0x92, 0xb5, 0x8b, 0xcd, 0x1e, 0xe2,

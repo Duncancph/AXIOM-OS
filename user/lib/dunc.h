@@ -1,4 +1,4 @@
-/* libdunc: the DuncOS application runtime. */
+/* libdunc: the AXIOM application runtime. */
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
@@ -126,8 +126,8 @@ void *calloc(size_t a, size_t b);
 /* Highland theme (common/theme_highland.h) */
 #include "../../common/theme_highland.h"
 #define UI_BG      HL_WIN_BG
-#define UI_PANEL   0x152039
-#define UI_PANEL2  0x1B2945
+#define UI_PANEL   0x1A1A19
+#define UI_PANEL2  0x232321
 #define UI_BORDER  HL_WIN_BORDER
 #define UI_TEXT    HL_TEXT
 #define UI_MUTED   HL_TEXT_FAINT

@@ -103,7 +103,7 @@ static void draw(void) {
         int x, y, w, h; btn_rect(i, &x, &y, &w, &h);
         char k = keys[i][0];
         bool opk = (i % 4 == 3);
-        uint32_t bg = opk ? (op == k && !entering ? 0xFFFFFF : UI_GOLD) : (i < 3 ? 0x22345A : UI_PANEL2);
+        uint32_t bg = opk ? (op == k && !entering ? 0xFFFFFF : UI_GOLD) : (i < 3 ? 0x2A2A28 : UI_PANEL2);
         if (i == hover) bg = gfx_mix(bg, 0xFFFFFF, 30);
         if (i == pressed) bg = gfx_mix(bg, 0x000000, 50);
         gfx_rrect(c, x, y, w, h, 12, bg, 255);

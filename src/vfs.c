@@ -11,7 +11,7 @@ struct vnode {
     uint8_t *data; uint64_t size, cap;
     struct vnode *parent, *child, *next;
 };
-/* A mounted volume. USB drives appear as /usbN; the DuncOS disk also provides /home, /apps and
+/* A mounted volume. USB drives appear as /usbN; the AXIOM disk also provides /home, /apps and
  * /system/config ("system" mounts: at = several components, sub = the folder on the volume). */
 #define NMOUNT 8
 struct mount { bool used, system; char name[16], label[32], kind[16]; const struct fs_ops *ops; void *vol;
@@ -487,11 +487,11 @@ int vfs_volumes(struct dunc_volume *out, int max) {
         strncpy0(out[n].path, "/home", 16);
         out[n].writable = 1;
         if (home) {
-            strncpy0(out[n].label, "DuncOS", 32); strncpy0(out[n].kind, home->kind, 16);
+            strncpy0(out[n].label, "AXIOM", 32); strncpy0(out[n].kind, home->kind, 16);
             out[n].total = out[n].free = 0;
             if (home->ops->space) home->ops->space(home->vol, &out[n].total, &out[n].free);
         } else {
-            strncpy0(out[n].label, "DuncOS", 32); strncpy0(out[n].kind, "Memory", 16);
+            strncpy0(out[n].label, "AXIOM", 32); strncpy0(out[n].kind, "Memory", 16);
             out[n].total = mem_total(); out[n].free = mem_total() - mem_used();
         }
         n++;

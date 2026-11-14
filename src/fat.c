@@ -689,8 +689,8 @@ void *fat_mount(struct blockdev *bd, char *label_out, char *why, int why_len) {
     }
     if (!other) other = other_fs(b);
     if (base == (uint64_t)-1) {
-        if (other) ksnprintf(why, why_len, "it's formatted as %s. DuncOS can use FAT32 drives.", other);
-        else strncpy0(why, "no FAT32 file system found. DuncOS can use FAT32 drives.", why_len);
+        if (other) ksnprintf(why, why_len, "it's formatted as %s. AXIOM can use FAT32 drives.", other);
+        else strncpy0(why, "no FAT32 file system found. AXIOM can use FAT32 drives.", why_len);
         goto out;
     }
     kfree(b); kfree(vbr);
@@ -765,7 +765,7 @@ int fat_format(struct blockdev *bd, uint64_t base, uint64_t count, const char *l
     for (uint64_t l = base; l < zend && r == FS_OK; l += chunk) WR(l, (uint32_t)(zend - l < chunk ? zend - l : chunk), buf);
     /* boot sector and FSInfo, plus their backups at sectors 6 and 7 */
     uint8_t *v = buf;
-    v[0] = 0xEB; v[1] = 0x58; v[2] = 0x90; memcpy(v + 3, "DUNCOS  ", 8);
+    v[0] = 0xEB; v[1] = 0x58; v[2] = 0x90; memcpy(v + 3, "AXIOM   ", 8);
     w16(v + 11, bps); v[13] = spc; w16(v + 14, rsvd); v[16] = nfats; v[21] = 0xF8;
     w16(v + 24, 63); w16(v + 26, 255); w32(v + 28, (uint32_t)base); w32(v + 32, n);
     w32(v + 36, fatsz); w32(v + 44, 2); w16(v + 48, 1); w16(v + 50, 6);

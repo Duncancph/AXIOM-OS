@@ -1,4 +1,4 @@
-/* Clock - analog and digital clock for DuncOS (installed with: clan install clock). */
+/* Clock - analog and digital clock for AXIOM (installed with: clan install clock). */
 #include "../lib/dunc.h"
 
 #define WW 340
@@ -17,7 +17,7 @@ static void hand(int cx, int cy, int pos60, int len, uint32_t col, int t) {
 static void draw(void) {
     struct canvas *c = &a.c;
     struct rtc_time t; sys_rtc(&t);
-    gfx_vgrad(c, 0, 0, WW, WH, HL_NAVY, 0x060B16);
+    gfx_vgrad(c, 0, 0, WW, WH, HL_NAVY, 0x050505);
     int cx = WW / 2, cy = 150, r = 112;
     gfx_circle(c, cx, cy, r + 6, HL_WIN_BORDER, 255);
     gfx_circle(c, cx, cy, r, HL_TERM_BG, 255);

@@ -24,7 +24,7 @@ static void rune(struct canvas *c, int cx, int cy, int s, uint32_t col, int t) {
 
 static void bars(struct canvas *c, int x, int y, int rssi) {
     int n = rssi >= -55 ? 4 : rssi >= -67 ? 3 : rssi >= -80 ? 2 : rssi > -127 ? 1 : 0;
-    for (int i = 0; i < 4; i++) gfx_rrect(c, x + i * 6, y + 12 - (i + 1) * 3, 4, (i + 1) * 3, 1, i < n ? UI_GREEN : 0x3A4256, 255);
+    for (int i = 0; i < 4; i++) gfx_rrect(c, x + i * 6, y + 12 - (i + 1) * 3, 4, (i + 1) * 3, 1, i < n ? UI_GREEN : 0x3C3B37, 255);
 }
 
 static void kv(int x, int y, const char *k, const char *v) {
@@ -35,7 +35,7 @@ static void kv(int x, int y, const char *k, const char *v) {
 static void draw(void) {
     struct canvas *c = &a.c;
     gfx_fill(c, 0, 0, WW, WH, UI_BG);
-    gfx_circle(c, 52, 50, 28, ad.present ? 0x2563EB : 0x2A3142, 255);
+    gfx_circle(c, 52, 50, 28, ad.present ? 0x4A4944 : 0x2A2A28, 255);
     rune(c, 52, 50, 30, 0xFFFFFF, 3);
     gfx_text(c, &font_title, 96, 46, UI_TEXT, "Bluetooth");
     const char *status = !ad.present ? "No adapter found" : !ad.ok ? "Adapter not responding" : scanning ? "Scanning..." : "On";
@@ -44,7 +44,7 @@ static void draw(void) {
     if (!ad.present) {
         ui_card(c, 20, 104, WW - 40, 150);
         gfx_text(c, &font_ui_bold, 40, 136, UI_TEXT, "No Bluetooth adapter detected");
-        gfx_text(c, &font_ui, 40, 162, UI_MUTED, "DuncOS supports USB Bluetooth adapters. Plug in a USB");
+        gfx_text(c, &font_ui, 40, 162, UI_MUTED, "AXIOM supports USB Bluetooth adapters. Plug in a USB");
         gfx_text(c, &font_ui, 40, 182, UI_MUTED, "Bluetooth dongle (Realtek, Broadcom or CSR chips work best)");
         gfx_text(c, &font_ui, 40, 202, UI_MUTED, "and restart. Built-in Intel Bluetooth needs firmware loading,");
         gfx_text(c, &font_ui, 40, 222, UI_MUTED, "which is coming in a later version.");
@@ -80,7 +80,7 @@ static void draw(void) {
     if (list_off) { char more[32]; ksnprintf(more, sizeof more, "%d more above", list_off); gfx_text(c, &font_ui, WW - 140, y - 8, UI_MUTED, more); }
     for (int i = list_off; i < ndev && y + 46 < WH; i++, y += 50) {
         ui_card(c, 20, y, WW - 40, 44);
-        gfx_circle(c, 44, y + 22, 13, devs[i].le ? 0x0E7490 : 0x6D28D9, 255);
+        gfx_circle(c, 44, y + 22, 13, devs[i].le ? 0x3C3B37 : 0x55534C, 255);
         gfx_text_center(c, &font_ui_bold, 31, 26, y + 27, 0xFFFFFF, devs[i].le ? "LE" : "BR");
         gfx_text(c, &font_ui_bold, 68, y + 20, UI_TEXT, devs[i].name[0] ? devs[i].name : "Unknown device");
         char d[64];

@@ -63,7 +63,7 @@ static void draw(void) {
     stat_card(c, 20, 18, cw, "CPU", v, "in use", cpu_hist, UI_ACCENT);
     ksnprintf(v, sizeof v, "%lu MiB", si.mem_used >> 20);
     ksnprintf(s, sizeof s, "of %lu MiB", si.mem_total >> 20);
-    stat_card(c, 36 + cw, 18, cw, "Memory", v, s, mem_hist, 0xA78BFA);
+    stat_card(c, 36 + cw, 18, cw, "Memory", v, s, mem_hist, 0xD8D3B8);
 
     gfx_text(c, &font_ui_bold, 20, 198, UI_TEXT, "Processes");
     uint64_t up = si.uptime_ms / 1000;
@@ -83,7 +83,7 @@ static void draw(void) {
     static const char *st[] = { "", "Ready", "Running", "Sleeping", "Waiting", "Exiting" };
     for (int i = 0; i < nprocs && row_y(i) + 26 < WH - 24; i++) {
         int y = row_y(i);
-        if (procs[i].pid == sel_pid) gfx_rrect(c, 28, y, WW - 56, 28, 6, 0x173A55, 255);
+        if (procs[i].pid == sel_pid) gfx_rrect(c, 28, y, WW - 56, 28, 6, 0x2A2A28, 255);
         else if (i == hover_row) gfx_rrect(c, 28, y, WW - 56, 28, 6, UI_PANEL2, 255);
         char b[48];
         ksnprintf(b, sizeof b, "%d", procs[i].pid);

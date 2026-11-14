@@ -1,4 +1,4 @@
-; DuncOS program entry: call main(), then exit with its return value.
+; AXIOM program entry: call main(), then exit with its return value.
 bits 64
 section .text
 global _start

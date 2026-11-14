@@ -1,5 +1,5 @@
 /*
- * fb_boot_logo.c - DuncOS graphical boot splash (Thane kernel)
+ * fb_boot_logo.c - AXIOM graphical boot splash (Thane kernel)
  * Created by Bryan Duncan
  *
  * Draws to a linear 32-bpp framebuffer (e.g. from Multiboot2 / Limine / UEFI GOP).
@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "font8x16.h"
+#include "logo_data.h"
 
 struct framebuffer {
     volatile uint32_t *addr;  /* start of framebuffer               */
@@ -23,29 +24,15 @@ struct framebuffer {
 };
 
 /* Colours as 0x00RRGGBB (standard for 32-bpp BGRX/XRGB framebuffers). */
-#define COL_BG_TOP     0x0A1428u   /* deep navy   */
-#define COL_BG_BOTTOM  0x000000u   /* black       */
-#define COL_GOLD       0xFFC83Du
-#define COL_CYAN       0x4FD1E8u
-#define COL_WHITE      0xF0F0F0u
-#define COL_DIM        0x6B7280u
-#define COL_BAR_EMPTY  0x1F2937u
+#define COL_BG_TOP     0x000000u   /* AXIOM: black ...  */
+#define COL_BG_BOTTOM  0x000000u
+#define COL_GOLD       0xF4F1DEu   /* ... and cream     */
+#define COL_CYAN       0xF4F1DEu
+#define COL_WHITE      0xF4F1DEu
+#define COL_DIM        0x6E6B60u
+#define COL_BAR_EMPTY  0x1C1C1Au
 
-static const char *crown[] = {
-    "            .     '     .",
-    "        .  /\\    /\\    /\\  .",
-    "          /  \\  /  \\  /  \\",
-    "         /    \\/    \\/    \\",
-    "        |__________________|"
-};
 
-static const char *title[] = {
-    "    ____                   ____  _____",
-    "   / __ \\__  ______  _____/ __ \\/ ___/",
-    "  / / / / / / / __ \\/ ___/ / / /\\__ \\",
-    " / /_/ / /_/ / / / / /__/ /_/ /___/ /",
-    "/_____/\\__,_/_/ /_/\\___/\\____//____/"
-};
 
 #define ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
 
@@ -136,42 +123,51 @@ static uint32_t g_bar_y;   /* remembered for boot_logo_progress() */
 void boot_logo_show(const struct framebuffer *fb);
 void boot_logo_progress(const struct framebuffer *fb, unsigned percent);
 
+/* the AXIOM logo, scaled (bilinear) to height h, in one colour, centred at y */
+static void draw_logo(const struct framebuffer *fb, const struct logo_img *l, uint32_t y, uint32_t h, uint32_t col) {
+    uint32_t w = (uint32_t)l->w * h / (uint32_t)l->h, x0 = (fb->width - w) / 2;
+    for (uint32_t j = 0; j < h && y + j < fb->height; j++) {
+        uint32_t fy = j * 256 * (uint32_t)(l->h - 1) / (h ? h - 1 : 1), sy = fy >> 8, ty = fy & 255;
+        volatile uint32_t *row = (volatile uint32_t *)((volatile uint8_t *)fb->addr + (y + j) * fb->pitch);
+        for (uint32_t i = 0; i < w; i++) {
+            uint32_t fx = i * 256 * (uint32_t)(l->w - 1) / (w ? w - 1 : 1), sx = fx >> 8, tx = fx & 255;
+            uint32_t sx1 = sx + 1 < (uint32_t)l->w ? sx + 1 : sx, sy1 = sy + 1 < (uint32_t)l->h ? sy + 1 : sy;
+            uint32_t a00 = l->a[sy * l->w + sx], a01 = l->a[sy * l->w + sx1], a10 = l->a[sy1 * l->w + sx], a11 = l->a[sy1 * l->w + sx1];
+            uint32_t a = ((a00 * (256 - tx) + a01 * tx) * (256 - ty) + (a10 * (256 - tx) + a11 * tx) * ty) >> 16;
+            if (!a) continue;
+            uint32_t d = row[x0 + i];
+            uint32_t r = ((col >> 16 & 255) * a + (d >> 16 & 255) * (255 - a)) / 255;
+            uint32_t g = ((col >> 8 & 255) * a + (d >> 8 & 255) * (255 - a)) / 255;
+            uint32_t b = ((col & 255) * a + (d & 255) * (255 - a)) / 255;
+            row[x0 + i] = r << 16 | g << 8 | b;
+        }
+    }
+}
+
 void boot_logo_show(const struct framebuffer *fb) {
     uint32_t s  = pick_scale(fb);
-    uint32_t lh = FONT_H * s;                 /* one line height */
-
-    /* total height of everything, so we can centre vertically */
-    uint32_t total = (uint32_t)(ARRAY_LEN(crown) + ARRAY_LEN(title)) * lh
-                   + 2 * lh        /* gaps after crown and title */
-                   + 3 * lh        /* two text lines + gap       */
-                   + 6 * s;        /* progress bar               */
+    uint32_t lh = FONT_H * s;
+    uint32_t logo_h = fb->height / 12; if (logo_h < 40) logo_h = 40;      /* the AXIOM lockup, like the artwork */
+    uint32_t total = logo_h + 3 * lh + 4 * s;
     uint32_t y = total < fb->height ? (fb->height - total) / 2 : 0;
-
     draw_background(fb);
-
-    y = draw_block(fb, crown, ARRAY_LEN(crown), y, s, COL_GOLD);
-    y += lh;
-    y = draw_block(fb, title, ARRAY_LEN(title), y, s, COL_CYAN);
-    y += lh;
-
-    draw_text_centered(fb, "~ Thane Kernel v0.1 ~", y, s, COL_WHITE);
-    y += lh;
-    draw_text_centered(fb, "Created by Bryan Duncan", y, s, COL_DIM);
-    y += 2 * lh;
-
+    draw_logo(fb, logo_h > 64 ? &logo_splash : &logo_mid, y, logo_h, COL_WHITE);
+    y += logo_h + 2 * lh;
     g_bar_y = y;
     boot_logo_progress(fb, 0);
+    draw_text_centered(fb, "Thane kernel", y + lh, 1, COL_DIM);
 }
 
 /* Progress bar under the logo. Call with 0-100 as the kernel boots. */
 void boot_logo_progress(const struct framebuffer *fb, unsigned percent) {
     if (percent > 100) percent = 100;
     uint32_t s = pick_scale(fb);
-    uint32_t w = fb->width / 3;
-    uint32_t h = 6 * s;
+    uint32_t w = fb->width / 5;
+    uint32_t h = 2 * s;
     uint32_t x = (fb->width - w) / 2;
     uint32_t filled = w * percent / 100;
 
     fill_rect(fb, x, g_bar_y, w, h, COL_BAR_EMPTY);
     fill_rect(fb, x, g_bar_y, filled, h, COL_CYAN);
+    (void)s;
 }

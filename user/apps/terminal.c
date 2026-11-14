@@ -1,6 +1,7 @@
 /* Terminal: a command line in a window. Built-in commands manage apps and
  * processes; everything else is passed to the Thane kernel's command shell. */
 #include "../lib/dunc.h"
+#include "../lib/logo_draw.h"
 
 static int WW = 780, WH = 470;
 #define PAD 12
@@ -50,15 +51,11 @@ static void print(const char *fmt, ...) {
 }
 
 static int prompt_len;
-static const char *CROWN[12] = {   /* from desktop_highland.c */
-    "................", ".......##.......", ".#.....##.....#.", ".##...####...##.",
-    ".###..#..#..###.", ".#.##.#..#.##.#.", ".#..###..###..#.", ".#...#....#...#.",
-    ".#............#.", ".##############.", ".##############.", "................" };
 
 static void fetch(void) {
     struct sysinfo s; sys_sysinfo(&s);
     char v[6][48];
-    ksnprintf(v[0], 48, "DuncOS %s, build %ld", strncmp(s.kernel, "Thane ", 6) ? s.kernel : s.kernel + 6, sys_call(SYS_UPDATE, UPDATE_BUILD, 0, 0, 0, 0));
+    ksnprintf(v[0], 48, "AXIOM %s, build %ld", strncmp(s.kernel, "Thane ", 6) ? s.kernel : s.kernel + 6, sys_call(SYS_UPDATE, UPDATE_BUILD, 0, 0, 0, 0));
     ksnprintf(v[1], 48, "%s", s.kernel);
     ksnprintf(v[2], 48, "castle");
     ksnprintf(v[3], 48, "%lu min", s.uptime_ms / 60000);
@@ -67,9 +64,9 @@ static void fetch(void) {
     static const char *k[] = { "OS", "Kernel", "Shell", "Uptime", "Memory", "Font" };
     if (cx) putch('\n');
     fetch_line = nlines - 1;
-    puts_c("           ", C_TEXT); puts_c("bryan", C_CYAN); puts_c("@", C_TEXT); puts_c("duncos\n", C_CYAN);
-    puts_c("           -------------\n", C_DIM);
-    for (int i = 0; i < 6; i++) { puts_c("           ", C_TEXT); print("%s", ""); cur_col = C_GOLD; print("%-9s", k[i]); cur_col = C_TEXT; print("%s\n", v[i]); }
+    puts_c("            ", C_TEXT); puts_c("bryan", C_CYAN); puts_c("@", C_TEXT); puts_c("axiom\n", C_CYAN);
+    puts_c("            -------------\n", C_DIM);
+    for (int i = 0; i < 6; i++) { puts_c("            ", C_TEXT); print("%s", ""); cur_col = C_GOLD; print("%-9s", k[i]); cur_col = C_TEXT; print("%s\n", v[i]); }
     putch('\n');
 }
 static char cwd[256] = "/home";
@@ -95,19 +92,17 @@ static void draw(void) {
         int ln = first + r;
         if (sel_l0 >= 0 && ln >= a0l && ln <= a1l) {
             int c0 = ln == a0l ? a0c : 0, c1 = ln == a1l ? a1c : COLS;
-            if (c1 > c0) gfx_fill(c, PAD + c0 * 8, PAD + r * 16, (c1 - c0) * 8, 16, 0x1E4A6E);
+            if (c1 > c0) gfx_fill(c, PAD + c0 * 8, PAD + r * 16, (c1 - c0) * 8, 16, 0x34332E);
         }
         for (int k = 0; k < COLS && text[ln][k]; k++)
             gfx_mono(c, PAD + k * 8, PAD + r * 16, text[ln][k], pal[color[ln][k]]);
     }
-    if (fetch_line >= first && fetch_line < first + ROWS)   /* pixel crown beside the fetch info */
-        for (int r = 0; r < 12; r++)
-            for (int k = 0; k < 16; k++)
-                if (CROWN[r][k] == '#') gfx_fill(c, PAD + 2 + k * 4, PAD + (fetch_line - first) * 16 + 2 + r * 4, 4, 4, HL_GOLD);
+    if (fetch_line >= first - 5 && fetch_line < first + ROWS)   /* the AXIOM mark beside the fetch info */
+        draw_logo(c, PAD + 2, PAD + (fetch_line - first) * 16 + 14, &logo_mark_term, HL_CREAM);
     if (view) {                                         /* "scrolled back" hint */
         const char *h = "Scrolled back - press any key or scroll down";
         int w = (int)strlen(h) * 8 + 16;
-        gfx_rrect(c, WW - w - 10, 8, w, 22, 6, 0x1B2945, 235);
+        gfx_rrect(c, WW - w - 10, 8, w, 22, 6, 0x232321, 235);
         gfx_mono_text(c, WW - w - 2, 11, h, HL_GOLD);
     }
     if (cursor_on && !view) {
@@ -165,7 +160,7 @@ static const char *v6_state_name(int st) {
 
 static void cmd_ip(void) {
     struct dunc_netinfo n; sys_netinfo(&n);
-    if (!n.present) { puts_c("No supported network adapter. DuncOS supports Intel and Realtek wired Ethernet.\n", C_GOLD); return; }
+    if (!n.present) { puts_c("No supported network adapter. AXIOM supports Intel and Realtek wired Ethernet.\n", C_GOLD); return; }
     char a[IP_STRLEN], m[16], g[16];
     bool any = n.configured || n.v6_configured;
     print("  %s (%s)  ", n.adapter, n.driver);
@@ -420,7 +415,7 @@ static void run(char *line) {
         for (int i = 0; i < n; i++) {
             bool gb = d[i].bytes >= (10ull << 30);
             print("  %d  %-5s %-28s %6lu %s%s%s\n", d[i].id, d[i].kind == DISK_SATA ? "SATA" : d[i].kind == DISK_NVME ? "NVMe" : "USB", d[i].model,
-                  gb ? d[i].bytes >> 30 : d[i].bytes >> 20, gb ? "GB" : "MB", d[i].duncos ? "  DuncOS" : "", d[i].system ? " (your files)" : "");
+                  gb ? d[i].bytes >> 30 : d[i].bytes >> 20, gb ? "GB" : "MB", d[i].duncos ? "  AXIOM" : "", d[i].system ? " (your files)" : "");
             for (int k = 0; k < d[i].nparts; k++) print("        partition %d: %lu MB %s %s\n", k + 1, d[i].part[k].bytes >> 20, d[i].part[k].fs, d[i].part[k].label);
         }
     }

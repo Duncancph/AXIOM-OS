@@ -19,6 +19,8 @@ struct usb_dev {
     uint8_t *ep_buf[32];             /* DMA buffers for interrupt/bulk endpoints */
     uint32_t ep_len[32];
     usb_xfer_cb ep_cb[32];
+    usb_xfer_cb recover_cb[32];      /* endpoints waiting to be reset after a transfer error */
+    int recoveries;
     volatile int xfer_done[32];
     volatile uint32_t xfer_cc[32], xfer_res[32];
     volatile uint64_t xfer_ptr[32];
@@ -44,6 +46,8 @@ struct usb_dev {
 #define CC_SUCCESS 1
 #define CC_STALL 6
 #define CC_SHORT 13
+/* after a failed interrupt transfer: reset the endpoint and carry on polling (done by xhci_service) */
+void usb_recover_in(struct usb_dev *d, int dci, int cc, usb_xfer_cb cb);
 
 #define USB_MAX_DEVS 32
 extern struct usb_dev usb_devs[USB_MAX_DEVS];

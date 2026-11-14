@@ -1,4 +1,4 @@
-/* Settings: keyboard, date & time, display, sound, lock screen, power, updates, storage (install DuncOS), about. */
+/* Settings: keyboard, date & time, display, sound, lock screen, power, updates, storage (install AXIOM), about. */
 #include "../lib/dunc.h"
 #include "../lib/img/img.h"
 
@@ -48,7 +48,7 @@ static void label(int x, int y, uint32_t col, const char *t) { gfx_text(&a.c, &f
 
 static void toggle(int x, int y, const char *text, bool on, int id) {
     struct canvas *c = &a.c;
-    gfx_rrect(c, x, y, 40, 22, 11, on ? UI_ACCENT : 0x2A3654, 255);
+    gfx_rrect(c, x, y, 40, 22, 11, on ? UI_ACCENT : 0x2A2A28, 255);
     gfx_circle(c, on ? x + 29 : x + 11, y + 11, 8, on ? HL_NAVY : UI_TEXT, 255);
     label(x + 52, y + 16, UI_TEXT, text);
     add_hit(x, y, 52 + gfx_text_width(&font_ui, text), 22, id);
@@ -56,9 +56,9 @@ static void toggle(int x, int y, const char *text, bool on, int id) {
 
 static void option(int x, int y, int w, const char *text, bool sel, int id) {
     struct canvas *c = &a.c;
-    if (sel) gfx_rrect(c, x, y, w, 30, 8, 0x16304A, 255);
+    if (sel) gfx_rrect(c, x, y, w, 30, 8, 0x26261F, 255);
     else if (hover == id) gfx_rrect(c, x, y, w, 30, 8, UI_PANEL2, 255);
-    gfx_circle(c, x + 16, y + 15, 7, sel ? UI_ACCENT : 0x3A4766, 255);
+    gfx_circle(c, x + 16, y + 15, 7, sel ? UI_ACCENT : 0x3C3B37, 255);
     if (sel) gfx_circle(c, x + 16, y + 15, 3, HL_NAVY, 255);
     label(x + 32, y + 20, sel ? UI_TEXT : HL_TEXT_DIM, text);
     add_hit(x, y, w, 30, id);
@@ -107,7 +107,7 @@ static void draw_mouse(void) {
     int sp = (int)katoi(get("mouse.speed")); if (sp < 1 || sp > 10) sp = 5;
     label(SIDE + 32, 104, UI_TEXT, "Pointer speed");
     int x = SIDE + 32, y = 120, w = 400;
-    gfx_rrect(&a.c, x, y + 8, w, 6, 3, 0x2A3654, 255);
+    gfx_rrect(&a.c, x, y + 8, w, 6, 3, 0x2A2A28, 255);
     gfx_rrect(&a.c, x, y + 8, w * (sp - 1) / 9, 6, 3, UI_ACCENT, 255);
     for (int i = 0; i < 10; i++) gfx_fill(&a.c, x + w * i / 9, y + 18, 1, 5, UI_MUTED);
     gfx_circle(&a.c, x + w * (sp - 1) / 9, y + 11, 9, UI_TEXT, 255);
@@ -140,7 +140,7 @@ static void draw_time(void) {
     }
     if (nlist > rows) {                                  /* scroll bar */
         int th = (rows * 32) * rows / nlist, ty = y + 4 + (rows * 32 - th) * list_scroll / (nlist - rows);
-        gfx_rrect(&a.c, x + w - 8, ty, 4, th, 2, 0x3A4766, 255);
+        gfx_rrect(&a.c, x + w - 8, ty, 4, th, 2, 0x3C3B37, 255);
     }
 }
 
@@ -155,8 +155,8 @@ static void draw_display(void) {
         int col = i / 5, row = i % 5;
         option(SIDE + 32 + col * 260, 116 + row * 36, 240, i ? modes[i] : "Automatic (best available)", !strcmp(get("display.mode"), modes[i]), H_LIST + i);
     }
-    label(SIDE + 32, 316, UI_MUTED, "DuncOS picks this size if your screen and graphics card offer it,");
-    label(SIDE + 32, 336, UI_MUTED, "otherwise the next best. It applies when DuncOS starts from a disk it is");
+    label(SIDE + 32, 316, UI_MUTED, "AXIOM picks this size if your screen and graphics card offer it,");
+    label(SIDE + 32, 336, UI_MUTED, "otherwise the next best. It applies when AXIOM starts from a disk it is");
     label(SIDE + 32, 356, UI_MUTED, "installed on (Settings > Storage). Started from the USB stick, choose");
     label(SIDE + 32, 376, UI_MUTED, "a size under \"Screen size...\" in its start menu instead.");
 }
@@ -167,7 +167,7 @@ static void draw_sound(void) {
     int vol = (int)katoi(get("sound.volume"));
     label(SIDE + 32, 100, UI_TEXT, "Volume");
     int x = SIDE + 32, y = 116, w = 400;
-    gfx_rrect(&a.c, x, y + 8, w, 6, 3, 0x2A3654, 255);
+    gfx_rrect(&a.c, x, y + 8, w, 6, 3, 0x2A2A28, 255);
     gfx_rrect(&a.c, x, y + 8, w * vol / 100, 6, 3, UI_ACCENT, 255);
     gfx_circle(&a.c, x + w * vol / 100, y + 11, 9, UI_TEXT, 255);
     add_hit(x - 10, y - 4, w + 20, 30, H_TOGGLE + 10);
@@ -201,7 +201,7 @@ static void draw_power(void) {
     ui_card(&a.c, SIDE + 32, 296, WW - SIDE - 64, 86);
     label(SIDE + 48, 322, UI_TEXT, "Battery and sleep");
     label(SIDE + 48, 344, UI_MUTED, "Not available yet: laptops report their battery and sleep through");
-    label(SIDE + 48, 364, UI_MUTED, "ACPI programs that DuncOS can't run yet. Plug laptops in.");
+    label(SIDE + 48, 364, UI_MUTED, "ACPI programs that AXIOM can't run yet. Plug laptops in.");
 }
 
 
@@ -229,11 +229,11 @@ static bool buf_sink(const char *d, long n, void *ctx) {
 }
 static const char *upd_error(long r) {
     switch (r) {
-    case UPD_ESIG: return "The update isn't signed with the DuncOS key, so it was refused.";
-    case UPD_EFORMAT: return "The update file is damaged or in a format this DuncOS doesn't know.";
+    case UPD_ESIG: return "The update isn't signed with the AXIOM key, so it was refused.";
+    case UPD_EFORMAT: return "The update file is damaged or in a format this AXIOM doesn't know.";
     case UPD_EOLD: return "That update isn't newer than this system.";
     case UPD_EHASH: return "A downloaded file doesn't match the signed update (damaged download?).";
-    case UPD_ENODISK: return "Updates install to DuncOS on a disk. Install it first (Settings > Storage).";
+    case UPD_ENODISK: return "Updates install to AXIOM on a disk. Install it first (Settings > Storage).";
     case UPD_ENOMEM: return "Not enough memory to install the update.";
     default: return "The installer is busy. Try again in a moment.";
     }
@@ -256,7 +256,7 @@ static void url_of(const char *base, const char *rel, char *out, int max) {
 }
 static void check_updates(void) {
     char url[120]; sys_setting_get("update.url", url, sizeof url);
-    if (!url[0]) { ustate = U_FAILED; strncpy0(umsg, "Updates aren't set up for this copy of DuncOS yet.", sizeof umsg); return; }
+    if (!url[0]) { ustate = U_FAILED; strncpy0(umsg, "Updates aren't set up for this copy of AXIOM yet.", sizeof umsg); return; }
     ustate = U_CHECKING; draw();
     struct buf b = { 0, 0, 0, 16384 };
     int status = 0;
@@ -270,7 +270,7 @@ static void check_updates(void) {
     if (v < 0) { ustate = U_FAILED; strncpy0(umsg, upd_error(v), sizeof umsg); return; }
     ubuild = v;
     manifest_field("version", uver, sizeof uver); manifest_field("notes", unotes, sizeof unotes);
-    if (ubuild <= ubuild_now) { ustate = U_CURRENT; strncpy0(umsg, "DuncOS is up to date.", sizeof umsg); return; }
+    if (ubuild <= ubuild_now) { ustate = U_CURRENT; strncpy0(umsg, "AXIOM is up to date.", sizeof umsg); return; }
     ustate = U_AVAILABLE; umsg[0] = 0;
 }
 static void *ia(void *c, size_t n) { return malloc(n); }
@@ -318,12 +318,12 @@ out:
 static void draw_updates(void) {
     char b[200];
     struct sysinfo si; sys_sysinfo(&si);
-    ksnprintf(b, sizeof b, "This is DuncOS %s, build %ld. Updates are signed; DuncOS checks them before installing.", strncmp(si.kernel, "Thane ", 6) ? si.kernel : si.kernel + 6, ubuild_now);
+    ksnprintf(b, sizeof b, "This is AXIOM %s, build %ld. Updates are signed; AXIOM checks them before installing.", strncmp(si.kernel, "Thane ", 6) ? si.kernel : si.kernel + 6, ubuild_now);
     heading("Updates", b);
     int y = 100, x = SIDE + 32, w = WW - SIDE - 64;
     ui_card(&a.c, x, y, w, 150);
     if (ustate == U_AVAILABLE || ustate == U_DOWNLOADING || ustate == U_INSTALLING) {
-        ksnprintf(b, sizeof b, "DuncOS %s (build %ld) is available", uver, ubuild);
+        ksnprintf(b, sizeof b, "AXIOM %s (build %ld) is available", uver, ubuild);
         gfx_text(&a.c, &font_ui_bold, x + 16, y + 30, UI_TEXT, b);
         if (unotes[0]) { utf8_to_cp1252(unotes, strlen(unotes) + 1); label(x + 16, y + 54, UI_MUTED, unotes); }
         label(x + 16, y + 78, UI_MUTED, "Your files, apps and settings are kept. Restart afterwards to use it.");
@@ -335,15 +335,15 @@ static void draw_updates(void) {
         }
         if (ustate == U_INSTALLING && !installing) label(x + 16, y + 112, UI_TEXT, "Checking the signature and files...");
     } else {
-        gfx_text(&a.c, &font_ui_bold, x + 16, y + 30, UI_TEXT, ustate == U_CHECKING ? "Checking for updates..." : ustate == U_DONE ? "Update installed" : "DuncOS updates");
+        gfx_text(&a.c, &font_ui_bold, x + 16, y + 30, UI_TEXT, ustate == U_CHECKING ? "Checking for updates..." : ustate == U_DONE ? "Update installed" : "AXIOM updates");
         label(x + 16, y + 54, ustate == U_FAILED ? UI_RED : ustate == U_CURRENT || ustate == U_DONE ? UI_GREEN : UI_MUTED,
-              umsg[0] ? umsg : "Check for a newer version of DuncOS over the internet.");
+              umsg[0] ? umsg : "Check for a newer version of AXIOM over the internet.");
         if (ustate == U_DONE) button(x + 16, y + 98, 150, "Restart now", BTN_PRIMARY, H_BTN + 32, false);
         else button(x + 16, y + 98, 180, "Check for updates", BTN_PRIMARY, H_BTN + 31, ustate == U_CHECKING);
     }
     if (installing || ustate == U_INSTALLING) {
         int py = y + 176;
-        gfx_rrect(&a.c, x, py, w, 10, 5, 0x2A3654, 255);
+        gfx_rrect(&a.c, x, py, w, 10, 5, 0x2A2A28, 255);
         gfx_rrect(&a.c, x, py, w * inst.percent / 100, 10, 5, inst.state == 3 ? UI_RED : UI_ACCENT, 255);
         label(x, py + 30, inst.state == 3 ? UI_RED : UI_TEXT, inst.msg);
     }
@@ -359,7 +359,7 @@ static void fmt_size(uint64_t b, char *o, int n) {
 static void draw_storage(void) {
     struct dunc_volume v[8]; int nv = sys_call(SYS_FS_VOLUMES, (long)v, 8, 0, 0, 0);
     bool persistent = nv > 0 && strcmp(v[0].kind, "Memory");
-    heading("Storage", persistent ? "Your files are saved on a disk." : "DuncOS is running from memory: files are lost when you shut down.");
+    heading("Storage", persistent ? "Your files are saved on a disk." : "AXIOM is running from memory: files are lost when you shut down.");
     int y = 92;
     for (int i = 0; i < ndisks && y < 420; i++) {
         struct dunc_disk *d = &disks[i];
@@ -376,15 +376,15 @@ static void draw_storage(void) {
             label(SIDE + 48, y + (d->system ? 62 : 44) + 18 * k - (d->system ? 0 : 0), UI_MUTED, p);
         }
         if (!installing) {
-            if (d->duncos) button(WW - 32 - 150, y + 10, 134, "Update DuncOS", BTN_NORMAL, H_DISK + i * 2 + 1, false);
+            if (d->duncos) button(WW - 32 - 150, y + 10, 134, "Update AXIOM", BTN_NORMAL, H_DISK + i * 2 + 1, false);
             if (!d->system) button(WW - 32 - (d->duncos ? 300 : 150), y + 10, 134, "Install here...", BTN_PRIMARY, H_DISK + i * 2, false);
         }
         y += h + 10;
     }
-    if (!ndisks) label(SIDE + 32, 110, UI_MUTED, "No disks found. DuncOS supports SATA (AHCI), NVMe and USB drives.");
+    if (!ndisks) label(SIDE + 32, 110, UI_MUTED, "No disks found. AXIOM supports SATA (AHCI), NVMe and USB drives.");
     if (installing || inst.state >= 2) {
         int py = WH - 96;
-        gfx_rrect(&a.c, SIDE + 32, py, WW - SIDE - 64, 10, 5, 0x2A3654, 255);
+        gfx_rrect(&a.c, SIDE + 32, py, WW - SIDE - 64, 10, 5, 0x2A2A28, 255);
         gfx_rrect(&a.c, SIDE + 32, py, (WW - SIDE - 64) * inst.percent / 100, 10, 5, inst.state == 3 ? UI_RED : UI_ACCENT, 255);
         label(SIDE + 32, py + 30, inst.state == 3 ? UI_RED : inst.state == 2 ? UI_GREEN : UI_TEXT, inst.msg);
     }
@@ -392,7 +392,7 @@ static void draw_storage(void) {
 
 static void draw_about(void) {
     struct sysinfo s; sys_sysinfo(&s);
-    heading("About DuncOS", "Made by Bryan Duncan. Running on the Thane kernel.");
+    heading("About AXIOM", "Made by Bryan Duncan. Running on the Thane kernel.");
     char b[128];
     int y = 110;
     ksnprintf(b, sizeof b, "Kernel: %s", s.kernel); label(SIDE + 32, y, UI_TEXT, b); y += 26;
@@ -408,10 +408,10 @@ void draw(void) {
     struct canvas *c = &a.c;
     nhits = 0;
     gfx_fill(c, 0, 0, WW, WH, UI_BG);
-    gfx_fill(c, 0, 0, SIDE, WH, 0x0C1426);
+    gfx_fill(c, 0, 0, SIDE, WH, 0x0A0A0A);
     for (int i = 0; i < NSECT; i++) {
         int y = 20 + i * 42;
-        if (i == sect) { gfx_rrect(c, 12, y, SIDE - 24, 36, 10, 0x16304A, 255); gfx_fill(c, 12, y + 9, 3, 18, UI_ACCENT); }
+        if (i == sect) { gfx_rrect(c, 12, y, SIDE - 24, 36, 10, 0x26261F, 255); gfx_fill(c, 12, y + 9, 3, 18, UI_ACCENT); }
         else if (hover == H_SECT + i) gfx_rrect(c, 12, y, SIDE - 24, 36, 10, UI_PANEL, 255);
         gfx_text(c, i == sect ? &font_ui_bold : &font_ui, 30, y + 23, i == sect ? UI_TEXT : HL_TEXT_DIM, sect_names[i]);
         add_hit(12, y, SIDE - 24, 36, H_SECT + i);
@@ -431,13 +431,13 @@ void draw(void) {
         gfx_rrect_outline(c, dx, dy, dw, dh, 14, confirm_mode == INSTALL_ERASE ? UI_RED : UI_ACCENT, 160);
         char b[128], sz[24]; fmt_size(d->bytes, sz, sizeof sz);
         if (confirm_mode == INSTALL_ERASE) {
-            gfx_text(c, &font_title, dx + 24, dy + 44, UI_TEXT, "Erase this disk and install DuncOS?");
+            gfx_text(c, &font_title, dx + 24, dy + 44, UI_TEXT, "Erase this disk and install AXIOM?");
             ksnprintf(b, sizeof b, "%s (%s)", d->model, sz); gfx_text(c, &font_ui_bold, dx + 24, dy + 76, UI_TEXT, b);
             label(dx + 24, dy + 102, UI_RED, "Everything on it will be deleted, including Windows or Linux");
             label(dx + 24, dy + 122, UI_RED, "if they are on this disk. This can't be undone.");
-            label(dx + 24, dy + 148, UI_MUTED, "Your DuncOS files are copied onto it. Starting from it needs UEFI.");
+            label(dx + 24, dy + 148, UI_MUTED, "Your AXIOM files are copied onto it. Starting from it needs UEFI.");
         } else {
-            gfx_text(c, &font_title, dx + 24, dy + 44, UI_TEXT, "Update DuncOS on this disk?");
+            gfx_text(c, &font_title, dx + 24, dy + 44, UI_TEXT, "Update AXIOM on this disk?");
             ksnprintf(b, sizeof b, "%s (%s)", d->model, sz); gfx_text(c, &font_ui_bold, dx + 24, dy + 76, UI_TEXT, b);
             label(dx + 24, dy + 104, UI_MUTED, "The system files are replaced with the version running now.");
             label(dx + 24, dy + 124, UI_MUTED, "Your files, apps and settings on it are kept.");
@@ -469,7 +469,7 @@ static void click(int id, int mx) {
         int i = id - H_LIST;
         if (sect == S_KEYB && i < nlist) set("keyboard.layout", lid[i]);
         if (sect == S_TIME && i < nlist) set("time.zone", lid[i]);
-        if (sect == S_DISPLAY) { set("display.mode", modes[i]); say(UI_MUTED, i ? "Saved. It takes effect the next time DuncOS starts." : "Saved: automatic."); }
+        if (sect == S_DISPLAY) { set("display.mode", modes[i]); say(UI_MUTED, i ? "Saved. It takes effect the next time AXIOM starts." : "Saved: automatic."); }
         if (sect == S_LOCK) { static const char *v[] = { "0", "1", "5", "10", "30" }; set("lock.idle_min", v[i]); }
         if (sect == S_POWER) { static const char *v[] = { "0", "2", "5", "10", "30" }; set("screen.off_min", v[i]); }
         return;
@@ -486,7 +486,7 @@ static void click(int id, int mx) {
         int v = (mx - (SIDE + 32)) * 100 / 400; if (v < 0) v = 0; if (v > 100) v = 100;
         char b[8]; ksnprintf(b, sizeof b, "%d", v); set("sound.volume", b);
     }
-    if (id == H_BTN + 10) { if (sys_call(SYS_SOUND, SOUND_TEST, 0, 0, 0, 0) < 0) say(UI_RED, "No sound card found (DuncOS supports Intel HD Audio)."); }
+    if (id == H_BTN + 10) { if (sys_call(SYS_SOUND, SOUND_TEST, 0, 0, 0, 0) < 0) say(UI_RED, "No sound card found (AXIOM supports Intel HD Audio)."); }
     if (id == H_BTN + 0) {
         if (!fields[0].len) say(UI_RED, "Type a password first.");
         else if (strcmp(fields[0].s, fields[1].s)) say(UI_RED, "The two passwords don't match.");

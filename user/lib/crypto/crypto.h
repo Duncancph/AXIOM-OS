@@ -1,4 +1,4 @@
-/* DuncOS crypto library (freestanding): hashes, MACs, ciphers, key exchange, signatures. */
+/* AXIOM crypto library (freestanding): hashes, MACs, ciphers, key exchange, signatures. */
 #pragma once
 #include <stdint.h>
 #include <stddef.h>

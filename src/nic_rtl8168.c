@@ -171,7 +171,10 @@ struct netif *rtl8168_probe(struct pci_dev *p) {
         wait_ll_ready(t);
     }
     for (int i = 0; i < 6; i++) t->nif.mac[i] = r8(t, i);
-    t->rx = page_alloc(1); t->tx = page_alloc(1);
+    /* Each ring gets a zeroed guard page after it: if the card ever runs past the end of a ring (instead of
+     * wrapping at the descriptor marked end-of-ring), it finds descriptors it doesn't own and stops, rather
+     * than reading whatever memory follows and writing packets to random addresses. */
+    t->rx = page_alloc(2); t->tx = page_alloc(2);
     for (int i = 0; i < NRX; i += 2) { uint8_t *pg = page_alloc(1); t->rxbuf[i] = pg; t->rxbuf[i + 1] = pg + 2048; }
     for (int i = 0; i < NTX; i += 2) { uint8_t *pg = page_alloc(1); t->txbuf[i] = pg; t->txbuf[i + 1] = pg + 2048; }
     t->gen_g = gen_g;

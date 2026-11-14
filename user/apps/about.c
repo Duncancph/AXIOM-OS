@@ -1,29 +1,11 @@
-/* About DuncOS — shown at start-up as a welcome screen. */
+/* About AXIOM — shown at start-up as a welcome screen. */
 #include "../lib/dunc.h"
+#include "../lib/logo_draw.h"
 
-static const char *crown[] = {
-    "            .     '     .",
-    "        .  /\\    /\\    /\\  .",
-    "          /  \\  /  \\  /  \\",
-    "         /    \\/    \\/    \\",
-    "        |__________________|" };
-static const char *title[] = {
-    "    ____                   ____  _____",
-    "   / __ \\__  ______  _____/ __ \\/ ___/",
-    "  / / / / / / / __ \\/ ___/ / / /\\__ \\",
-    " / /_/ / /_/ / / / / /__/ /_/ /___/ /",
-    "/_____/\\__,_/_/ /_/\\___/\\____//____/" };
 
 #define WW 600
 #define WH 520
 static struct app a;
-
-static void block(const char **lines, int n, int y, uint32_t col) {
-    int widest = 0;
-    for (int i = 0; i < n; i++) { int l = strlen(lines[i]); if (l > widest) widest = l; }
-    int x = (WW - widest * 8) / 2;
-    for (int i = 0; i < n; i++) gfx_mono_text(&a.c, x, y + i * 16, lines[i], col);
-}
 
 static void row(int x, int y, const char *k, const char *v) {
     gfx_text(&a.c, &font_ui, x, y, UI_MUTED, k);
@@ -32,11 +14,10 @@ static void row(int x, int y, const char *k, const char *v) {
 
 static void draw(void) {
     struct canvas *c = &a.c;
-    gfx_vgrad(c, 0, 0, WW, WH, 0x0A1428, 0x06080F);
-    block(crown, 5, 22, UI_GOLD);
-    block(title, 5, 118, UI_ACCENT);
-    gfx_text_center(c, &font_ui_bold, 0, WW, 222, 0xF0F0F0, "~ Thane Kernel v0.2 ~");
-    gfx_text_center(c, &font_ui, 0, WW, 242, 0x6B7280, "Created by Bryan Duncan");
+    gfx_vgrad(c, 0, 0, WW, WH, 0x0A0A0A, 0x050505);
+    gfx_vgrad(c, 0, 0, WW, 250, 0x000000, 0x0A0A0A);
+    draw_logo(c, (WW - logo_splash.w) / 2, 96, &logo_splash, HL_CREAM);
+    gfx_text_center(c, &font_ui, 0, WW, 206, UI_MUTED, "Thane kernel 0.2   -   Created by Bryan Duncan");
 
     struct sysinfo s; sys_sysinfo(&s);
     ui_card(c, 24, 266, WW - 48, 150);
@@ -59,16 +40,16 @@ static void draw(void) {
     fx = (WW - total) / 2;
     for (int i = 0; i < 4; i++) {
         int w = gfx_text_width(&font_ui, feat[i]) + 24;
-        gfx_rrect(c, fx, 436, w, 28, 14, 0x16324A, 255);
-        gfx_text(c, &font_ui, fx + 12, 455, 0x9FE8F4, feat[i]);
+        gfx_rrect(c, fx, 436, w, 28, 14, 0x22221F, 255);
+        gfx_text(c, &font_ui, fx + 12, 455, 0xF4F1DE, feat[i]);
         fx += w + 8;
     }
-    gfx_text_center(c, &font_ui, 0, WW, 496, UI_MUTED, "Open apps from the dock below, or press the crown for the Start menu.");
+    gfx_text_center(c, &font_ui, 0, WW, 496, UI_MUTED, "Open apps from the dock below, or click AXIOM in the top left.");
     app_flush(&a);
 }
 
 int main(void) {
-    if (!app_open(&a, WW, WH, "Welcome to DuncOS")) return 1;
+    if (!app_open(&a, WW, WH, "Welcome to AXIOM")) return 1;
     draw();
     bool focused = true;
     for (;;) {

@@ -223,7 +223,7 @@ void event_push(struct task *t, const struct dunc_event *ev) {
  * After 5 s without a task switch, show where it is stuck (on screen and in the log) to help find it. */
 static void report_stall(struct frame *f) {
     char l[6][96]; const char *lines[6]; int n = 0;
-    ksnprintf(l[n++], 96, "DuncOS is stuck: '%s' has been running for %lu s", current ? current->name : "?", (uptime_ms() - last_sched_ms) / 1000);
+    ksnprintf(l[n++], 96, "AXIOM is stuck: '%s' has been running for %lu s", current ? current->name : "?", (uptime_ms() - last_sched_ms) / 1000);
     ksnprintf(l[n++], 96, "at %lx, build %d (please photograph this for Claude)", f->rip, OS_BUILD);
     uint64_t *bp = (uint64_t *)f->rbp; char b[96]; int k = ksnprintf(b, sizeof b, "called from");
     for (int i = 0; i < 6 && current && current->kstack && (uint8_t *)bp >= current->kstack && (uint64_t)bp + 16 <= current->kstack_top; i++) {

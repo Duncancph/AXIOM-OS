@@ -5,7 +5,7 @@
 
 #include "../common/abi.h"
 
-#define OS_NAME "DuncOS"
+#define OS_NAME "AXIOM"
 #define KERNEL_NAME "Thane"
 #define OS_VERSION "0.2"
 #ifndef OS_BUILD

@@ -1,7 +1,7 @@
-Welcome to DuncOS
+Welcome to AXIOM
 =================
 
-DuncOS runs on the Thane kernel and was created by Bryan Duncan.
+AXIOM runs on the Thane kernel and was created by Bryan Duncan.
 
 Things to try
 - Open Files from the dock and look around ~/Projects/thane:

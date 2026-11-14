@@ -1,11 +1,11 @@
 /* Signed system updates. Settings downloads an update; the kernel checks it here before anything is written:
- *   - the manifest must be signed with the DuncOS update key (ECDSA P-256 over SHA-256, src/update_key.h),
+ *   - the manifest must be signed with the AXIOM update key (ECDSA P-256 over SHA-256, src/update_key.h),
  *   - it must be newer than the running system (its build number),
  *   - every file must have exactly the size and SHA-256 the manifest lists.
- * Then the installer writes the new kernel, system files and boot loader to the disk DuncOS runs from.
+ * Then the installer writes the new kernel, system files and boot loader to the disk AXIOM runs from.
  *
  * Manifest (text, one item per line; everything before the "signature" line is signed):
- *   DuncOS update 1
+ *   AXIOM update 1
  *   version 0.2
  *   build 63
  *   notes <one line>
@@ -41,7 +41,7 @@ static long num(const char *s, const char *e) { long v = 0; if (s == e) return -
 static int check_manifest(const char *m, long n, struct manifest *out) {
     memset(out, 0, sizeof *out);
     out->build = -1;
-    if (n < 20 || n > 16384 || memcmp(m, "DuncOS update 1\n", 16)) return UPD_EFORMAT;
+    if (n < 20 || n > 16384 || (memcmp(m, "AXIOM update 1\n", 15) && memcmp(m, "DuncOS update 1\n", 16))) return UPD_EFORMAT;
     const char *e = m + n, *sigline = 0;
     for (const char *p = m; p < e;) {
         const char *le = p; while (le < e && *le != '\n') le++;

@@ -307,7 +307,7 @@ static const char *speed_name(int s) {
 
 static void hub_attach(struct usb_dev *h);
 
-/* how well DuncOS can use a configuration: standard network (ECM/NCM) > RNDIS > other known classes */
+/* how well AXIOM can use a configuration: standard network (ECM/NCM) > RNDIS > other known classes */
 static int config_score(const uint8_t *c, int len) {
     int s = 0;
     for (int i = 0; i + 8 < len && c[i]; i += c[i]) {
@@ -411,7 +411,7 @@ static struct usb_dev *enumerate_device(struct xhci *x, struct usb_dev *parent, 
     get_string(d, dd[15], d->product, sizeof d->product);
 
     /* Several configurations (e.g. a USB Ethernet adapter's vendor mode and its standard CDC mode):
-     * use the one DuncOS has the best driver for. */
+     * use the one AXIOM has the best driver for. */
     int nconf = dd[17] ? (dd[17] > 4 ? 4 : dd[17]) : 1, best = 0, best_score = -1;
     for (int ci = 0; ci < nconf; ci++) {
         uint8_t ch[9];
@@ -558,7 +558,25 @@ static void hub_attach(struct usb_dev *h) {
 }
 
 /* ---------------- hot-plug ---------------- */
+void usb_recover_in(struct usb_dev *d, int dci, int cc, usb_xfer_cb cb) {
+    if (cc == 0 || cc == 5 || cc == 11 || cc == 26 || cc == 27) return;   /* device gone / endpoint stopped or disabled */
+    if (d->recoveries < 8) LOG_WARN("usb: %s transfer error (code %d); resetting the endpoint\n", d->driver ? d->driver : "device", cc);
+    d->recoveries++;
+    d->recover_cb[dci] = cb;
+}
+
 void xhci_service(void) {
+    for (int i = 0; i < USB_MAX_DEVS; i++) {                 /* endpoints that failed: reset them and start polling again */
+        struct usb_dev *d = &usb_devs[i];
+        if (!d->used) continue;
+        for (int dci = 2; dci < 32; dci++) {
+            usb_xfer_cb cb = d->recover_cb[dci];
+            if (!cb) continue;
+            d->recover_cb[dci] = 0;
+            usb_clear_halt(d, dci, (uint8_t)((dci / 2) | (dci & 1 ? 0x80 : 0)));
+            usb_queue_in(d, dci, cb);
+        }
+    }
     for (int c = 0; c < nctrl; c++) {
         struct xhci *x = &ctrls[c];
         for (uint32_t port = 1; port <= x->max_ports && port < 256; port++) {

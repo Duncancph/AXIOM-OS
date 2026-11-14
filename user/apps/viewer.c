@@ -58,7 +58,7 @@ static void rescale(void) {
                 }
             if (!n) n = 1;
             /* blend over a dark checker for transparent pictures */
-            uint32_t alpha = aa / n, bg = ((x / 8 + y / 8) & 1) ? 0x2A3142 : 0x1E2433;
+            uint32_t alpha = aa / n, bg = ((x / 8 + y / 8) & 1) ? 0x2A2A28 : 0x1C1C1B;
             uint32_t r = (ra / n * alpha + (bg >> 16 & 255) * (255 - alpha)) / 255;
             uint32_t g = (ga / n * alpha + (bg >> 8 & 255) * (255 - alpha)) / 255;
             uint32_t b = (ba / n * alpha + (bg & 255) * (255 - alpha)) / 255;
@@ -78,7 +78,7 @@ static void clamp_pan(void) {
 
 static void draw(void) {
     struct canvas *c = &a.c;
-    gfx_fill(c, 0, 0, WW, WH, 0x0B1120);
+    gfx_fill(c, 0, 0, WW, WH, 0x050505);
     if (scaled) {
         clamp_pan();
         int ox = (WW - sw) / 2 + panx, oy = (WH - BAR - sh) / 2 + pany;

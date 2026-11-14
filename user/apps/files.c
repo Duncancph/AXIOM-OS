@@ -181,10 +181,10 @@ static void draw(void) {
     for (int i = 0; i < NTOOLS; i++) {
         int x, y, w, h; tool_rect(i, &x, &y, &w, &h);
         bool disabled = (i == 0 && !nback) || ((i == 2 || i == 3 || i == 5) && sel < 0) || (i == 4 && !clip[0]) || (in_trash() && (i == 1 || i == 4));
-        uint32_t bg = disabled ? UI_BG : hover_btn == i ? 0x24365A : UI_PANEL2;
+        uint32_t bg = disabled ? UI_BG : hover_btn == i ? 0x2E2E2B : UI_PANEL2;
         gfx_rrect(c, x, y, w, h, 8, bg, 255);
         if (!disabled) gfx_rrect_outline(c, x, y, w, h, 8, UI_BORDER, 255);
-        gfx_mono_text(c, x + (w - (int)strlen(tools[i]) * 8) / 2, y + 6, tools[i], disabled ? 0x4A5874 : (i == 5 ? HL_RED : HL_TEXT));
+        gfx_mono_text(c, x + (w - (int)strlen(tools[i]) * 8) / 2, y + 6, tools[i], disabled ? 0x5A5850 : (i == 5 ? HL_RED : HL_TEXT));
     }
     if (in_trash() && nents) {
         int x, y, w, h; tool_rect(1, &x, &y, &w, &h);

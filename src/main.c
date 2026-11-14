@@ -66,7 +66,7 @@ static void usb_thread(void *arg) {
 void kmain(uint32_t magic, uint64_t mbi) {
     serial_init();
     if (magic != 0x36D76289) {
-        kprintf("DuncOS must be started by a Multiboot2 loader (GRUB).\n");
+        kprintf("AXIOM must be started by a Multiboot2 loader (GRUB).\n");
         return;
     }
     parse_multiboot(mbi);

@@ -1,4 +1,4 @@
-/* Editor 0.4 - a text editor for DuncOS (installed with: clan install editor). */
+/* Editor 0.4 - a text editor for AXIOM (installed with: clan install editor). */
 #include "../lib/dunc.h"
 
 static int WW = 720, WH = 500;
@@ -88,7 +88,7 @@ static void draw(void) {
         if (sel >= 0 && sel != cur) {                            /* selection background */
             int s0 = sel < cur ? sel : cur, s1 = sel < cur ? cur : sel;
             int a0 = s0 > p ? s0 : p, a1 = s1 < e + 1 ? s1 : e + 1;
-            if (a0 < a1) gfx_fill(c, GUTTER + 8 + (a0 - p) * 8, y, (a1 - a0) * 8, 16, 0x1E4A6E);
+            if (a0 < a1) gfx_fill(c, GUTTER + 8 + (a0 - p) * 8, y, (a1 - a0) * 8, 16, 0x34332E);
         }
         for (int i = p; i < e && col < cols(); i++, col++) {
             char ch = text[i] == '\t' ? ' ' : text[i];
