@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 62
-notes Bluetooth keyboards and mice; dock under windows; no welcome window at start; web pages can't lock up; System Monitor CPU fix
-file kernel b62/thane.elf.gz 13974304 cde5b32a5a12f1348b877c0b6f486b1d7601e5064f608214e4d2a1bee56a6c8d
-file initrd b62/initrd.tar.gz 1259520 5ac78dc22c0f613e43383fdd4098f88b409edb4c21c60b95dcbda87edb587287
-file bootx64 b62/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b62/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 304402204bf3f5230da4c058d87ace8093262f335e26c367b6a150d93808660004ed717402204ced40287a64a9b6050ccbae21777b6b0e8e5d97df534c6272f4f17ee4f43193
+build 63
+notes Music app (MP3 player)
+file kernel b63/thane.elf.gz 14518432 d75d8b612344b330b59612823f8e2a19b49d66a42996decd9ce653a5968211e8
+file initrd b63/initrd.tar.gz 1259520 1a793f5782538061d908d53fa760809a36e3cb3b134fc1da2e5abcb6e6cf9d75
+file bootx64 b63/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b63/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022100a6a4f54370def170a5b1757a1be58fae045e0d90a51dea6e40f7c7d7f33ad271022059c0ba3b97d30dd5ef50b972fa478b4fa9959ab758a5406c0d058ac0a7c00acc
