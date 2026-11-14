@@ -10,6 +10,9 @@ void disk_remove(struct blockdev *bd);
 int  disk_list(struct dunc_disk *out, int max);
 int  disk_install(int id, int mode);               /* starts the installer; 0 or an FS_ error */
 void disk_install_status(struct dunc_install *out);
+int  disk_system_id(void);                         /* the disk DuncOS runs from (installed), or -1 */
+/* install new system files from memory (an update) instead of the running ones; the buffers are kept */
+int  disk_update_from(int id, const uint8_t *const data[3], const uint64_t len[3]);
 int  disk_set_boot_option(const char *key, const char *value);   /* e.g. ("gfxmode", "1920x1080x32") */
 void disk_flush_all(void);                         /* before power-off */
 void disk_boot_done(void);

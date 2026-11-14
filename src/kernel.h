@@ -7,7 +7,12 @@
 
 #define OS_NAME "DuncOS"
 #define KERNEL_NAME "Thane"
-#define OS_VERSION "0.1"
+#define OS_VERSION "0.2"
+#ifndef OS_BUILD
+#define OS_BUILD 0                       /* set by the Makefile: the number of commits */
+#endif
+/* where Settings looks for updates (a signed manifest; see tools/make-release.py); "" = not set up */
+#define UPDATE_URL ""
 
 typedef int bool;
 #define true 1

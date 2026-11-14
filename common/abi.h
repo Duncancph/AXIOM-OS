@@ -16,6 +16,7 @@ enum {
     SYS_FS_VOLUMES, SYS_GETARG, SYS_WIN_RESIZE, SYS_APPS, SYS_FS_COPY,
     SYS_RANDOM, SYS_FS_APPEND, SYS_NET_INFO, SYS_NET_CONFIG, SYS_NET_PING, SYS_NET_RESOLVE, SYS_TCP_CONNECT, SYS_TCP_SEND, SYS_TCP_RECV, SYS_TCP_CLOSE,
     SYS_DISK_LIST, SYS_DISK_INSTALL, SYS_DISK_STATUS, SYS_MEM_GROW, SYS_SETTING_GET, SYS_SETTING_SET, SYS_SOUND, SYS_LOCK, SYS_CLIP_SET, SYS_CLIP_GET,
+    SYS_UPDATE,
     SYS_COUNT
 };
 
@@ -75,7 +76,12 @@ struct dunc_disk {
     struct { uint64_t bytes; char fs[12], label[24]; } part[8];
 };
 enum { INSTALL_ERASE = 1, INSTALL_UPDATE };   /* update: new system files, keep the user's files */
-struct dunc_install { int state, percent; char msg[120]; };   /* state: 0 idle, 1 working, 2 done, 3 failed */
+struct dunc_install { int state, percent; char msg[120]; };
+/* signed system updates (SYS_UPDATE): op 0 = this system's build number, 1 = check a manifest, 2 = install */
+enum { UPDATE_BUILD, UPDATE_VERIFY, UPDATE_APPLY };
+enum { UPD_FILES = 3 };                         /* kernel, initrd, bootx64 (in that order) */
+struct dunc_update { const char *manifest; long mlen; const unsigned char *data[UPD_FILES]; long len[UPD_FILES]; };
+enum { UPD_EFORMAT = -20, UPD_ESIG = -21, UPD_EOLD = -22, UPD_EHASH = -23, UPD_ENODISK = -24, UPD_ENOMEM = -25, UPD_EBUSY = -26 };   /* state: 0 idle, 1 working, 2 done, 3 failed */
 enum { FS_OK = 0, FS_ENOENT = -1, FS_EEXIST = -2, FS_ENOTDIR = -3, FS_EISDIR = -4, FS_ENOSPC = -5,
        FS_EIO = -6, FS_ENOTEMPTY = -7, FS_EROFS = -8, FS_EINVAL = -9 };
 

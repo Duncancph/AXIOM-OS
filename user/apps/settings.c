@@ -1,12 +1,13 @@
-/* Settings: keyboard, date & time, display, sound, lock screen, power, storage (install DuncOS), about. */
+/* Settings: keyboard, date & time, display, sound, lock screen, power, updates, storage (install DuncOS), about. */
 #include "../lib/dunc.h"
+#include "../lib/img/img.h"
 
 #define WW 820
 #define WH 580
 #define SIDE 190
 static struct app a;
-enum { S_KEYB, S_MOUSE, S_TIME, S_DISPLAY, S_SOUND, S_LOCK, S_POWER, S_STORAGE, S_ABOUT, NSECT };
-static const char *sect_names[NSECT] = { "Keyboard", "Mouse", "Date & time", "Display", "Sound", "Lock screen", "Power", "Storage", "About" };
+enum { S_KEYB, S_MOUSE, S_TIME, S_DISPLAY, S_SOUND, S_LOCK, S_POWER, S_UPDATES, S_STORAGE, S_ABOUT, NSECT };
+static const char *sect_names[NSECT] = { "Keyboard", "Mouse", "Date & time", "Display", "Sound", "Lock screen", "Power", "Updates", "Storage", "About" };
 static int sect, hover = -1;
 
 /* ---- clickable regions, rebuilt on every draw ---- */
@@ -203,8 +204,154 @@ static void draw_power(void) {
     label(SIDE + 48, 364, UI_MUTED, "ACPI programs that DuncOS can't run yet. Plug laptops in.");
 }
 
-static struct dunc_disk disks[8]; static int ndisks, confirm_disk = -1, confirm_mode;
+
+void draw(void);
+/* ---- Updates: fetch a signed update over the web; the kernel checks the signature and every file ---- */
+enum { U_IDLE, U_CHECKING, U_CURRENT, U_AVAILABLE, U_DOWNLOADING, U_INSTALLING, U_DONE, U_FAILED };
+static int ustate; static char umsg[160];
+static char *mtext; static long mlen;                     /* the manifest */
+static char uver[32], unotes[204]; static long ubuild, ubuild_now;
+static long dl_got, dl_total; static int dl_file;
 static struct dunc_install inst; static bool installing;
+
+struct buf { char *p; long n, cap, max; };
+static bool buf_sink(const char *d, long n, void *ctx) {
+    struct buf *b = ctx;
+    if (b->n + n > b->max) return false;
+    if (b->n + n > b->cap) { long c = b->cap ? b->cap * 2 : 65536; while (c < b->n + n) c *= 2; char *q = realloc(b->p, c); if (!q) return false; b->p = q; b->cap = c; }
+    memcpy(b->p + b->n, d, n); b->n += n;
+    if (ustate == U_DOWNLOADING) {
+        dl_got = b->n;
+        static uint64_t last; uint64_t now = sys_time();
+        if (now - last > 150) { last = now; draw(); }
+    }
+    return true;
+}
+static const char *upd_error(long r) {
+    switch (r) {
+    case UPD_ESIG: return "The update isn't signed with the DuncOS key, so it was refused.";
+    case UPD_EFORMAT: return "The update file is damaged or in a format this DuncOS doesn't know.";
+    case UPD_EOLD: return "That update isn't newer than this system.";
+    case UPD_EHASH: return "A downloaded file doesn't match the signed update (damaged download?).";
+    case UPD_ENODISK: return "Updates install to DuncOS on a disk. Install it first (Settings > Storage).";
+    case UPD_ENOMEM: return "Not enough memory to install the update.";
+    default: return "The installer is busy. Try again in a moment.";
+    }
+}
+static void manifest_field(const char *name, char *out, int max) {
+    out[0] = 0;
+    for (const char *p = mtext; p && p < mtext + mlen;) {
+        const char *e = p; while (e < mtext + mlen && *e != '\n') e++;
+        int n = (int)strlen(name);
+        if (e - p > n && !strncmp(p, name, n) && p[n] == ' ') { int k = (int)(e - p - n - 1); if (k >= max) k = max - 1; memcpy(out, p + n + 1, k); out[k] = 0; return; }
+        p = e + 1;
+    }
+}
+/* resolve a path in the manifest against the manifest's URL */
+static void url_of(const char *base, const char *rel, char *out, int max) {
+    strncpy0(out, base, max);
+    char *slash = 0; for (char *p = out; *p; p++) if (*p == '/') slash = p;
+    if (slash) slash[1] = 0;
+    int n = (int)strlen(out); strncpy0(out + n, rel, max - n);
+}
+static void check_updates(void) {
+    char url[120]; sys_setting_get("update.url", url, sizeof url);
+    if (!url[0]) { ustate = U_FAILED; strncpy0(umsg, "Updates aren't set up for this copy of DuncOS yet.", sizeof umsg); return; }
+    ustate = U_CHECKING; draw();
+    struct buf b = { 0, 0, 0, 16384 };
+    int status = 0;
+    struct http_req rq = { "GET", 0, 0, 0, 0, "Cache-Control: no-cache\r\n", 20000 };
+    long r = http_request(url, &rq, buf_sink, &b, &status, 0, 0, 0, 0, 0);
+    free(mtext); mtext = b.p; mlen = b.n;
+    if (r < 0) { ustate = U_FAILED; ksnprintf(umsg, sizeof umsg, "Couldn't check for updates: %s.", http_strerror(r)); return; }
+    if (status == 404) { ustate = U_CURRENT; strncpy0(umsg, "No updates have been published yet.", sizeof umsg); return; }
+    if (status != 200) { ustate = U_FAILED; ksnprintf(umsg, sizeof umsg, "Couldn't check for updates: the server answered %d.", status); return; }
+    long v = sys_call(SYS_UPDATE, UPDATE_VERIFY, (long)mtext, mlen, 0, 0);
+    if (v < 0) { ustate = U_FAILED; strncpy0(umsg, upd_error(v), sizeof umsg); return; }
+    ubuild = v;
+    manifest_field("version", uver, sizeof uver); manifest_field("notes", unotes, sizeof unotes);
+    if (ubuild <= ubuild_now) { ustate = U_CURRENT; strncpy0(umsg, "DuncOS is up to date.", sizeof umsg); return; }
+    ustate = U_AVAILABLE; umsg[0] = 0;
+}
+static void *ia(void *c, size_t n) { return malloc(n); }
+static void if_(void *c, void *p) { free(p); }
+static void install_update(void) {
+    static const char *roles[UPD_FILES] = { "kernel", "initrd", "bootx64" };
+    struct dunc_update u = { mtext, mlen, { 0 }, { 0 } };
+    char url[120]; sys_setting_get("update.url", url, sizeof url);
+    ustate = U_DOWNLOADING;
+    for (int i = 0; i < UPD_FILES; i++) {
+        char name[24], line[200], path[100] = ""; long size = 0;
+        ksnprintf(name, sizeof name, "file %s", roles[i]);
+        manifest_field(name, line, sizeof line);             /* "<path> <size> <sha>" */
+        int k = 0; while (line[k] && line[k] != ' ' && k < 99) { path[k] = line[k]; k++; } path[k] = 0;
+        size = katoi(line + k + 1);
+        char full[240]; url_of(url, path, full, sizeof full);
+        dl_file = i; dl_got = 0; dl_total = size;
+        struct buf b = { 0, 0, 0, 256L << 20 };
+        int status = 0; long total = 0;
+        struct http_req rq = { "GET", 0, 0, 0, 0, 0, 30000 };
+        long r = http_request(full, &rq, buf_sink, &b, &status, &total, 0, 0, 0, 0);
+        if (r < 0 || status != 200) {
+            ustate = U_FAILED;
+            if (r < 0) ksnprintf(umsg, sizeof umsg, "The download failed: %s.", http_strerror(r));
+            else ksnprintf(umsg, sizeof umsg, "The download failed: the server answered %d.", status);
+            free(b.p); goto out;
+        }
+        k = (int)strlen(path);
+        if (k > 3 && !strcmp(path + k - 3, ".gz")) {
+            uint8_t *out = malloc(size + 1);
+            struct img_alloc al = { 0, ia, if_ };
+            long n = out ? gunzip((const uint8_t *)b.p, b.n, out, size + 1, &al) : -1;
+            free(b.p);
+            if (n != size) { free(out); ustate = U_FAILED; strncpy0(umsg, "A downloaded file couldn't be unpacked (damaged download?).", sizeof umsg); goto out; }
+            u.data[i] = out; u.len[i] = n;
+        } else { u.data[i] = (const unsigned char *)b.p; u.len[i] = b.n; }
+    }
+    ustate = U_INSTALLING; draw();
+    long r = sys_call(SYS_UPDATE, UPDATE_APPLY, (long)&u, 0, 0, 0);
+    if (r < 0) { ustate = U_FAILED; strncpy0(umsg, upd_error(r), sizeof umsg); }
+    else { installing = true; memset(&inst, 0, sizeof inst); inst.state = 1; }
+out:
+    for (int i = 0; i < UPD_FILES; i++) free((void *)u.data[i]);
+}
+static void draw_updates(void) {
+    char b[200];
+    struct sysinfo si; sys_sysinfo(&si);
+    ksnprintf(b, sizeof b, "This is DuncOS %s, build %ld. Updates are signed; DuncOS checks them before installing.", strncmp(si.kernel, "Thane ", 6) ? si.kernel : si.kernel + 6, ubuild_now);
+    heading("Updates", b);
+    int y = 100, x = SIDE + 32, w = WW - SIDE - 64;
+    ui_card(&a.c, x, y, w, 150);
+    if (ustate == U_AVAILABLE || ustate == U_DOWNLOADING || ustate == U_INSTALLING) {
+        ksnprintf(b, sizeof b, "DuncOS %s (build %ld) is available", uver, ubuild);
+        gfx_text(&a.c, &font_ui_bold, x + 16, y + 30, UI_TEXT, b);
+        if (unotes[0]) { utf8_to_cp1252(unotes, strlen(unotes) + 1); label(x + 16, y + 54, UI_MUTED, unotes); }
+        label(x + 16, y + 78, UI_MUTED, "Your files, apps and settings are kept. Restart afterwards to use it.");
+        if (ustate == U_AVAILABLE) button(x + 16, y + 98, 200, "Download and install", BTN_PRIMARY, H_BTN + 30, false);
+        if (ustate == U_DOWNLOADING) {
+            static const char *what[] = { "the kernel", "the system files", "the boot loader" };
+            ksnprintf(b, sizeof b, "Downloading %s (%d of 3): %ld KB", what[dl_file], dl_file + 1, dl_got >> 10);
+            label(x + 16, y + 112, UI_TEXT, b);
+        }
+        if (ustate == U_INSTALLING && !installing) label(x + 16, y + 112, UI_TEXT, "Checking the signature and files...");
+    } else {
+        gfx_text(&a.c, &font_ui_bold, x + 16, y + 30, UI_TEXT, ustate == U_CHECKING ? "Checking for updates..." : ustate == U_DONE ? "Update installed" : "DuncOS updates");
+        label(x + 16, y + 54, ustate == U_FAILED ? UI_RED : ustate == U_CURRENT || ustate == U_DONE ? UI_GREEN : UI_MUTED,
+              umsg[0] ? umsg : "Check for a newer version of DuncOS over the internet.");
+        if (ustate == U_DONE) button(x + 16, y + 98, 150, "Restart now", BTN_PRIMARY, H_BTN + 32, false);
+        else button(x + 16, y + 98, 180, "Check for updates", BTN_PRIMARY, H_BTN + 31, ustate == U_CHECKING);
+    }
+    if (installing || ustate == U_INSTALLING) {
+        int py = y + 176;
+        gfx_rrect(&a.c, x, py, w, 10, 5, 0x2A3654, 255);
+        gfx_rrect(&a.c, x, py, w * inst.percent / 100, 10, 5, inst.state == 3 ? UI_RED : UI_ACCENT, 255);
+        label(x, py + 30, inst.state == 3 ? UI_RED : UI_TEXT, inst.msg);
+    }
+    char url[120]; sys_setting_get("update.url", url, sizeof url);
+    if (url[0]) { ksnprintf(b, sizeof b, "Source: %s", url); label(x, WH - 52, HL_TEXT_FAINT, b); }
+}
+
+static struct dunc_disk disks[8]; static int ndisks, confirm_disk = -1, confirm_mode;
 static void fmt_size(uint64_t b, char *o, int n) {
     if (b >= (10ull << 30)) ksnprintf(o, n, "%lu GB", b >> 30);
     else ksnprintf(o, n, "%lu MB", b >> 20);
@@ -257,7 +404,7 @@ static void draw_about(void) {
     label(SIDE + 32, y, UI_MUTED, "Trusted certificate authorities: Mozilla CA list (MPL 2.0).");
 }
 
-static void draw(void) {
+void draw(void) {
     struct canvas *c = &a.c;
     nhits = 0;
     gfx_fill(c, 0, 0, WW, WH, UI_BG);
@@ -272,7 +419,7 @@ static void draw(void) {
     switch (sect) {
     case S_KEYB: draw_keyboard(); break; case S_MOUSE: draw_mouse(); break; case S_TIME: draw_time(); break; case S_DISPLAY: draw_display(); break;
     case S_SOUND: draw_sound(); break; case S_LOCK: draw_lock(); break; case S_POWER: draw_power(); break;
-    case S_STORAGE: draw_storage(); break; case S_ABOUT: draw_about(); break;
+    case S_UPDATES: draw_updates(); break; case S_STORAGE: draw_storage(); break; case S_ABOUT: draw_about(); break;
     }
     if (msg[0]) label(SIDE + 32, WH - 24, msg_col, msg);
     if (confirm_disk >= 0) {                                 /* "erase this disk?" */
@@ -350,6 +497,9 @@ static void click(int id, int mx) {
     if (id == H_BTN + 3) sys_power(1);
     if (id == H_BTN + 4) sys_power(0);
     if (id >= H_DISK && id < H_DISK + 16) { confirm_disk = (id - H_DISK) / 2; confirm_mode = (id - H_DISK) % 2 ? INSTALL_UPDATE : INSTALL_ERASE; }
+    if (id == H_BTN + 31) check_updates();
+    if (id == H_BTN + 30 && ustate == U_AVAILABLE) install_update();
+    if (id == H_BTN + 32) sys_power(1);
     if (id == H_BTN + 21) confirm_disk = -1;
     if (id == H_BTN + 20 && confirm_disk >= 0) {
         int r = sys_install(disks[confirm_disk].id, confirm_mode);
@@ -380,6 +530,7 @@ int main(void) {
     char arg[64] = ""; sys_getarg(arg, sizeof arg);
     if (!app_open(&a, WW, WH, "Settings")) return 1;
     reload();
+    ubuild_now = sys_call(SYS_UPDATE, UPDATE_BUILD, 0, 0, 0, 0);
     int start = 0;
     for (int i = 0; i < NSECT; i++) {                        /* "open settings storage" etc. */
         char lower[24]; int k = 0; for (const char *p = sect_names[i]; *p && k < 23; p++) lower[k++] = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
@@ -394,9 +545,12 @@ int main(void) {
         if (r == 0) {
             if (installing) {
                 sys_install_status(&inst);
-                if (inst.state >= 2) { installing = false; ndisks = sys_disks(disks, 8); }
+                if (inst.state >= 2) {
+                    installing = false; ndisks = sys_disks(disks, 8);
+                    if (ustate == U_INSTALLING) { ustate = inst.state == 2 ? U_DONE : U_FAILED; strncpy0(umsg, inst.msg, sizeof umsg); }
+                }
             }
-            if (sect == S_TIME || installing || sect == S_STORAGE) draw();
+            if (sect == S_TIME || installing || sect == S_STORAGE || sect == S_UPDATES) draw();
             continue;
         }
         if (e.type == EV_CLOSE) break;

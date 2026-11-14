@@ -10,7 +10,7 @@ LIBGCC  := $(shell $(CC) -print-libgcc-file-name)
 
 APPS    := files about terminal monitor bluetooth network calc sandbox settings viewer web claude
 REPO_APPS := editor clock
-K_SRCS  := $(filter-out src/desktop_highland.c,$(wildcard src/*.c)) common/gfx.c common/str.c common/inet.c user/lib/crypto/sha2.c user/lib/crypto/aead.c user/lib/img/pngenc.c user/lib/img/inflate.c
+K_SRCS  := $(filter-out src/desktop_highland.c,$(wildcard src/*.c)) common/gfx.c common/str.c common/inet.c user/lib/crypto/sha2.c user/lib/crypto/aead.c user/lib/crypto/bn.c user/lib/crypto/ecc.c user/lib/img/pngenc.c user/lib/img/inflate.c
 K_OBJS  := $(patsubst %.c,build/k/%.o,$(K_SRCS)) build/k/boot.o build/k/isr.o build/k/apps.o
 U_LIB   := build/u/crt0.o build/u/libdunc.o build/u/malloc.o build/u/gfx.o build/u/str.o build/u/inet.o build/u/json.o
 CRYPTO  := sha2 aead x25519 bn rsa ecc x509 tls
@@ -25,6 +25,13 @@ HDRS    := $(wildcard src/*.h common/*.h user/lib/*.h)
 
 .PHONY: all run run-uefi clean test
 all: duncos.iso
+
+# build number = number of commits; updates must have a higher one than the running system
+BUILD_NUM := $(shell git rev-list --count HEAD 2>/dev/null || echo 0)
+$(shell mkdir -p build; [ "`cat build/build_num 2>/dev/null`" = "$(BUILD_NUM)" ] || echo $(BUILD_NUM) > build/build_num)
+build/k/src/update.o build/k/src/syscall.o build/k/src/shell.o: build/build_num
+build/k/src/update.o build/k/src/syscall.o build/k/src/shell.o: KCFLAGS += -DOS_BUILD=$(BUILD_NUM)
+
 
 build/k/%.o: %.c $(HDRS)
 	@mkdir -p $(dir $@)

@@ -8,6 +8,8 @@
 static char *clip; static uint64_t clip_len;          /* the shared clipboard */
 
 #define UOK(p, n, w) user_ok(current->pml4, (const void *)(p), (n), (w))
+long update_syscall(int op, const void *a, long b, bool (*user_ok_fn)(const void *, size_t));
+static bool upd_user_ok(const void *p, size_t n) { return UOK(p, n, false); }
 
 static bool copy_str(char *dst, uint64_t src, size_t max) {
     size_t i = 0;
@@ -333,6 +335,7 @@ uint64_t syscall_dispatch(struct frame *f) {
     }
     case SYS_SOUND: return (uint64_t)(int64_t)sound_syscall((int)a, b, c);
     case SYS_LOCK: desktop_lock(); return 0;
+    case SYS_UPDATE: return (uint64_t)update_syscall((int)a, (const void *)b, (long)c, upd_user_ok);
     case SYS_DISK_INSTALL: return (uint64_t)(int64_t)disk_install((int)a, (int)b);
     case SYS_DISK_STATUS:
         if (!UOK(a, sizeof(struct dunc_install), true)) return (uint64_t)-1;

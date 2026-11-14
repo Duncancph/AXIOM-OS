@@ -80,7 +80,7 @@ with true multitasking and memory protection between apps.
 |---|---|
 | Files | Your Highland mockup made real: places sidebar, USB drives, folder grid; open (pictures in Viewer, web pages in Web, text in Editor, installing the app if needed), new folder, rename, copy/paste (also to and from USB drives), delete to Trash, empty Trash |
 | Terminal (castle shell) | `ls`, `cd`, `cat`, `mkdir`, `rm`, `mv`, `cp`, `touch`, `echo ... > file`, `edit`, `df`, `disks`, `install`, `settings`, `set`, `ip`, `ping` (`-4`/`-6`, `ping6`), `host`, `wget`, `curl` (http and https), `dns`, `trust`, `fetch`, `apps`, `open <app or file>`, `ps`, `kill`, `date`, `clan`, plus `sysinfo`, `pci`, `usb`, `bt`, `bt scan`, `log`, `reboot`, `poweroff`. Scroll back with the mouse wheel or PgUp/PgDn; select with the mouse to copy (Ctrl+C or Ctrl+Shift+C), paste with Ctrl+V or a right click |
-| Settings | Keyboard layout, mouse (pointer speed, natural scrolling, left-handed), date & time (time zone, 24-hour clock), display size, sound volume, lock screen password, screen-off time, restart / shut down, storage (install or update DuncOS on a disk), about |
+| Settings | Keyboard layout, mouse (pointer speed, natural scrolling, left-handed), date & time (time zone, 24-hour clock), display size, sound volume, lock screen password, screen-off time, restart / shut down, updates over the internet (signed; see below), storage (install or update DuncOS on a disk), about |
 | Web 0.3 | Web browser for `https://`, `http://` and `file://` pages: style sheets (CSS selectors, cascade, `@media`, the box model, colours, borders, lists, tables, simple flex rows), pictures (PNG, JPEG, GIF, BMP, loaded after the text), forms (GET and POST), cookies that survive restarts, gzip, UTF-8 pages, back and forward, a resizable window. A padlock and the status bar show the encryption and who the certificate belongs to; sites that fail the security checks are blocked with an explanation. No JavaScript |
 | Claude | Chat with Claude (Claude Opus 5.5) through Anthropic's API, with your own API key from console.anthropic.com (billed by Anthropic per use; a Claude.ai subscription doesn't cover it). Replies stream in as they are written; code is shown in a monospaced font; Esc stops a reply; New chat starts over. The key is kept in `/system/config/claude.key` (Remove key deletes it). The app keeps each reply exactly as received, including its thinking blocks and their signatures, and sends it back unchanged, as the API requires |
 | Viewer | Pictures (PNG, JPEG, GIF, BMP): fit to window, zoom, drag, previous/next in the folder |
@@ -96,6 +96,24 @@ with true multitasking and memory protection between apps.
 |---|---|
 | editor 0.4 | Text editor: line numbers, selection (Shift+arrows, mouse), copy/cut/paste, select all, save / save as, UTF-8 files, unsaved-changes prompt (`edit <file>` in castle, or double-click a file in Files) |
 | clock 1.0 | Analog and digital clock |
+
+## Updates over the internet
+
+Settings > Updates checks for a newer DuncOS and installs it on the disk DuncOS is installed on
+(your files, apps and settings are kept; restart to use it). Every update is signed:
+
+- `latest.txt` (the manifest) lists the version, a build number and the kernel, system files and
+  boot loader with their sizes and SHA-256 hashes, and is signed with ECDSA P-256.
+- The **kernel** checks the signature against the public key built into it (`src/update_key.h`),
+  that the build is newer than the running one, and every downloaded file's hash, before anything
+  is written. A changed or unsigned update is refused.
+- Build numbers are the number of git commits (`build/build_num`).
+
+To publish an update: commit, `make`, then
+`python3 tools/make-release.py <signing key .pem> "what's new"`, and upload the `release/` folder
+(`latest.txt` and `b<build>/`) to where `UPDATE_URL` in `src/kernel.h` points (or the `update.url`
+setting: `set update.url <url>` in castle). `tools/update-keygen.py` makes a new key pair; the
+private key must stay private, because whoever has it can make updates that DuncOS installs.
 
 ## Put it on a PC
 

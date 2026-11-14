@@ -246,8 +246,12 @@ static int write_grubcfg(const char *dir) {
     return r < 0 ? (int)r : FS_OK;
 }
 
+static const uint8_t *src_data[3]; static uint64_t src_len[3];     /* an update's files, else the running ones */
 static int put(const char *path, const char *mod) {
-    uint64_t len; const uint8_t *data = bootmod(mod, &len);
+    uint64_t len; const uint8_t *data;
+    int which = !strcmp(mod, "kernel") ? 0 : !strcmp(mod, "initrd") ? 1 : 2;
+    if (src_data[which]) { data = src_data[which]; len = src_len[which]; }
+    else data = bootmod(mod, &len);
     if (!data) return FS_ENOENT;
     long r = vfs_write(path, data, len);
     return r < 0 ? (int)r : FS_OK;
@@ -323,7 +327,8 @@ done:
         char m[120]; ksnprintf(m, sizeof m, "Install failed: %s.", why[0] ? why : fs_error(r));
         progress(inst.percent, m); inst.state = 3;
     } else {
-        progress(100, inst_mode == INSTALL_ERASE ? "DuncOS is installed. Your files are now saved on this disk." : "DuncOS is updated.");
+        progress(100, inst_mode == INSTALL_ERASE ? "DuncOS is installed. Your files are now saved on this disk." :
+                      src_data[0] ? "The update is installed. Restart to start using it." : "DuncOS is updated.");
         inst.state = 2;
     }
     task_exit(0);
@@ -340,6 +345,14 @@ int disk_install(int id, int mode) {
 }
 
 void disk_install_status(struct dunc_install *out) { *out = inst; }
+
+int disk_system_id(void) { return sysdisk ? sysdisk->id : -1; }
+
+int disk_update_from(int id, const uint8_t *const data[3], const uint64_t len[3]) {
+    if (inst.state == 1) return FS_EINVAL;
+    for (int i = 0; i < 3; i++) { src_data[i] = data[i]; src_len[i] = len[i]; }
+    return disk_install(id, INSTALL_UPDATE);
+}
 
 int disk_set_boot_option(const char *key, const char *value) {
     if (strcmp(key, "gfxmode")) return FS_EINVAL;

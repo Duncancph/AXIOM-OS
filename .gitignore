@@ -3,3 +3,4 @@ iso/boot/thane.elf
 iso/boot/initrd.tar
 duncos.iso
 iso/boot/bootx64.efi
+release/

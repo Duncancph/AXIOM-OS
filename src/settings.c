@@ -9,7 +9,8 @@
  *   lock.password     (stored as a salted hash; apps only see "set" or "")
  *   lock.idle_min     lock after this many idle minutes (0 = never)
  *   mouse.speed       1..10 (5 = normal); mouse.natural 1 = content follows the fingers; mouse.left 1 = swap buttons
- *   screen.off_min    blank the screen after this many idle minutes (0 = never) */
+ *   screen.off_min    blank the screen after this many idle minutes (0 = never)
+ *   update.url        where Settings > Updates looks for a signed update (latest.txt) */
 #include "kernel.h"
 #include "vfs.h"
 #include "disk.h"
@@ -23,6 +24,7 @@ static const char *PATH = "/system/config/settings.ini";
 static const char *defaults[][2] = {
     { "keyboard.layout", "us" }, { "time.zone", "UTC" }, { "time.rtc_local", "0" }, { "time.24h", "0" },
     { "display.mode", "" }, { "mouse.speed", "5" }, { "mouse.natural", "0" }, { "mouse.left", "0" }, { "sound.volume", "70" }, { "lock.password", "" }, { "lock.idle_min", "0" }, { "screen.off_min", "10" },
+    { "update.url", UPDATE_URL },
 };
 
 const char *settings_get(const char *key) {
