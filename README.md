@@ -26,6 +26,13 @@ with true multitasking and memory protection between apps.
   DHCP (automatic address), DNS, and TCP (retransmission, flow control, orderly close).
   Network cards: Intel e1000 / e1000e / I217-I219 (tested: 82540EM, 82574L) and Realtek RTL8111/8168
   (written from the datasheet, not yet tested on hardware). Cable unplug/replug is detected.
+- **IPv6**, alongside IPv4 or on its own (IPv6-only networks work too): Neighbour Discovery, automatic
+  addresses from the router's advertisements (SLAAC) with duplicate address detection, DNS servers from
+  router advertisements (RDNSS) or stateless DHCPv6, link MTU, ICMPv6 ping, MLDv2 so switches deliver
+  its traffic, and "packet too big" / "unreachable" handling for TCP. The global address uses a random
+  interface ID that is new each start-up, so it doesn't reveal the network card's hardware address.
+  Names that have both kinds of address are tried over IPv6 first; if that doesn't connect within a
+  few seconds, DuncOS falls back to IPv4. `http://[2001:db8::1]:8080/` style addresses work in Web and castle
 - **HTTPS / TLS 1.3**, written from scratch (no OpenSSL): AES-128-GCM and ChaCha20-Poly1305,
   X25519 and P-256 key exchange, RSA (PKCS#1 v1.5 and PSS) and ECDSA (P-256, P-384) signatures,
   SHA-256/384/512. Every site's certificate chain is checked against the Mozilla root list
@@ -53,10 +60,10 @@ with true multitasking and memory protection between apps.
 | App | What it does |
 |---|---|
 | Files | Your Highland mockup made real: places sidebar, USB drives, folder grid; open, new folder, rename, copy/paste (also to and from USB drives), delete to Trash, empty Trash |
-| Terminal (castle shell) | `ls`, `cd`, `cat`, `mkdir`, `rm`, `mv`, `cp`, `touch`, `echo ... > file`, `edit`, `df`, `ip`, `ping`, `host`, `wget`, `curl` (http and https), `dns`, `trust`, `fetch`, `apps`, `open <app> [file]`, `ps`, `kill`, `date`, `clan`, plus `sysinfo`, `pci`, `usb`, `bt`, `bt scan`, `log`, `reboot`, `poweroff` |
+| Terminal (castle shell) | `ls`, `cd`, `cat`, `mkdir`, `rm`, `mv`, `cp`, `touch`, `echo ... > file`, `edit`, `df`, `ip`, `ping` (`-4`/`-6`, `ping6`), `host`, `wget`, `curl` (http and https), `dns`, `trust`, `fetch`, `apps`, `open <app> [file]`, `ps`, `kill`, `date`, `clan`, plus `sysinfo`, `pci`, `usb`, `bt`, `bt scan`, `log`, `reboot`, `poweroff` |
 | System Monitor | Live CPU and memory graphs, every process with CPU % and memory, End task |
 | Bluetooth | Adapter details, scan for nearby Classic + Low Energy devices with names and signal strength |
-| Network | Connection status, address, gateway, DNS, live traffic graph, Test connection, Renew address, choose a DNS server |
+| Network | Connection status (IPv4, IPv6 or both), addresses, gateway and IPv6 router, DNS, MTU, live traffic graph, Test connection, Renew address, choose a DNS server (IPv4 or IPv6) |
 | Calculator | Mouse or keyboard, 6 decimal places |
 | Protection Test | Deliberately crashes or freezes itself to show the kernel containing it |
 | About DuncOS | Welcome screen with system details |
@@ -95,11 +102,17 @@ with true multitasking and memory protection between apps.
 - The clock comes from the PC's real-time clock, which is assumed to be UTC. If it's very wrong,
   certificates can look expired or not yet valid.
 - **No Wi-Fi.** Wired Ethernet only. Wi-Fi chips need vendor firmware plus an 802.11/WPA2 stack.
-- Networking is IPv4 only (no IPv6), without IP fragments; the web browser shows text and links only.
+- IP fragments aren't supported (rarely needed with TCP); the web browser shows text and links only.
+- IPv6 gets its address by SLAAC. Networks that hand out IPv6 addresses only by DHCPv6 (the router's
+  "M" flag with no autoconfiguration prefix, found on some business networks) give DuncOS no global
+  IPv6 address; it then uses IPv4. Stateless DHCPv6 (for DNS) is supported.
+- IPv6 path MTU discovery is implemented for TCP but hasn't been tested yet.
 - No sound yet. One CPU core is used. Kernel threads are cooperative; apps are preemptive.
 - Needs a 32-bit graphics mode (any UEFI PC; most BIOS PCs). Otherwise it falls back to the text shell.
 - Tested in QEMU (UEFI and BIOS, USB 2/3 devices, a USB hub, USB drive hot-plug, Intel e1000/e1000e
-  networking against local web and DNS servers, HTTPS against OpenSSL test servers). The sandbox it was
+  networking against local web and DNS servers, HTTPS against OpenSSL test servers, IPv6 against
+  QEMU's network and against `tests/ipv6/v6net.py`, a scripted IPv6-only router, DNS, DHCPv6 and web
+  relay that can also fake an address conflict). The sandbox it was
   built in has no internet access, so HTTPS has not yet been tried against real public websites.
   Not yet tested on physical hardware.
 
@@ -119,7 +132,10 @@ and `tools/genuifont.py` (Inter, SIL Open Font License).
 driver against a disk image made by `mkfs.fat`, which is then checked with `fsck.fat` and read back
 with `mtools` (needs dosfstools and mtools). It also checks the crypto against Python's `cryptography`
 (OpenSSL) on random inputs, parses every Mozilla root certificate, and runs the TLS client against
-`openssl s_server` with 21 good and deliberately broken setups (needs python3-cryptography and openssl).
+`openssl s_server` with 21 good and deliberately broken setups (needs python3-cryptography and openssl),
+and checks IPv4/IPv6 address parsing and formatting against Python's `ipaddress` on 6,000 addresses.
+`tests/ipv6/v6net.py` (needs scapy) is an IPv6 test network to run DuncOS against in QEMU; see the
+top of the file for how to start it.
 
 The Mozilla root certificates are copied from the build machine's `/etc/ssl/certs/ca-certificates.crt`
 (Mozilla Public License 2.0).
@@ -137,7 +153,7 @@ src/             Thane kernel
   apps.c           app registry and the clan package manager
   msc.c fat.c      USB flash drives (Bulk-Only/SCSI) and the FAT32 file system
   random.c         random number generator (RDSEED/RDRAND, jitter, events -> ChaCha20)
-  net.c            TCP/IP stack: Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP
+  net.c            TCP/IP stack: Ethernet, ARP, IPv4, ICMP, DHCP, IPv6, ICMPv6, NDP, SLAAC, DHCPv6, UDP, DNS, TCP
   nic_e1000.c nic_rtl8168.c   network card drivers
   syscall.c        system calls
   desktop.c        window manager + compositor, crown menu, notifications, input
@@ -147,7 +163,7 @@ src/             Thane kernel
   xhci.c usbkbd.c  USB 3 host controller, hubs, hot-plug; USB keyboard/mouse
   bt.c             Bluetooth HCI
   kbd.c pci.c acpi.c rtc.c mem.c timer.c console.c shell.c ...
-common/          shared by kernel and apps: system call ABI, Highland theme tokens, 2D graphics, fonts, strings
+common/          shared by kernel and apps: system call ABI, Highland theme tokens, 2D graphics, fonts, strings, IP addresses
 user/lib         libdunc: app runtime (system calls, windows, UI widgets, HTTP/HTTPS client)
   crypto/          SHA-2, HMAC/HKDF, AES-GCM, ChaCha20-Poly1305, X25519, big numbers, RSA, ECDSA/ECDH,
                    X.509 certificates, TLS 1.3 client
@@ -162,4 +178,4 @@ rootfs/          files copied onto the system disk at start-up
 2. Intel/MediaTek Bluetooth firmware loading; Bluetooth pairing and connections
 3. Wi-Fi; I2C-HID touchpads (needs an ACPI interpreter)
 4. TLS 1.2 fallback, revocation checks; images and CSS in Web
-5. Multi-core scheduling, sound, IPv6
+5. Multi-core scheduling, sound

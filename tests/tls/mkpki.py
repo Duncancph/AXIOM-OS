@@ -19,7 +19,7 @@ def cert(subject_cn, key, issuer_cn, ikey, h, ca=False, pathlen=None, sans=None,
         b = b.add_extension(x509.ExtendedKeyUsage([eku]), critical=False)
     if sans: b = b.add_extension(x509.SubjectAlternativeName(sans), critical=False)
     return b.sign(ikey, h)
-SANS = [x509.DNSName("duncos.test"), x509.DNSName("*.duncos.test"), x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]
+SANS = [x509.DNSName("duncos.test"), x509.DNSName("*.duncos.test"), x509.IPAddress(ipaddress.ip_address("127.0.0.1")), x509.IPAddress(ipaddress.ip_address("2001:db8:2::80"))]
 # RSA chain
 rroot = rsa.generate_private_key(65537, 4096); rint = rsa.generate_private_key(65537, 2048); rleaf = rsa.generate_private_key(65537, 2048)
 save("rsa_root.pem", cert("Test RSA Root", rroot, "Test RSA Root", rroot, hashes.SHA256(), ca=True))

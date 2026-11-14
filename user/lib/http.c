@@ -56,6 +56,7 @@ const char *net_strerror(int e) {
     case NET_EINVAL: return "Invalid request";
     case NET_ENOMEM: return "Too many connections";
     case NET_EAGAIN: return "Busy, try again";
+    case NET_EUNREACH: return "Can't reach that address from this network";
     }
     return "Network error";
 }
@@ -73,31 +74,28 @@ const char *http_strerror(long e) {
 
 void ip_str(uint32_t ip, char *out) { ksnprintf(out, 16, "%u.%u.%u.%u", ip & 255, ip >> 8 & 255, ip >> 16 & 255, ip >> 24); }
 
-bool ip_parse(const char *s, uint32_t *out) {
-    uint32_t v[4];
-    for (int k = 0; k < 4; k++) {
-        if (*s < '0' || *s > '9') return false;
-        v[k] = 0;
-        while (*s >= '0' && *s <= '9') { v[k] = v[k] * 10 + (*s++ - '0'); if (v[k] > 255) return false; }
-        if (k < 3) { if (*s != '.') return false; s++; }
-    }
-    if (*s) return false;
-    *out = IP4(v[0], v[1], v[2], v[3]);
-    return true;
-}
-
 static int lower(int c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 static bool starts_ci(const char *s, const char *p) { for (; *p; s++, p++) if (lower(*s) != lower(*p)) return false; return true; }
 
-struct url { char host[128], path[512]; int port; bool https; };
+struct url { char host[128], path[512]; int port; bool https, v6lit; };
 static long parse_url(const char *u, struct url *o) {
     while (*u == ' ') u++;
     o->https = false;
     if (starts_ci(u, "https://")) { u += 8; o->https = true; }
     else if (starts_ci(u, "http://")) u += 7;
     int k = 0;
-    while (*u && *u != '/' && *u != ':' && *u != '?' && *u != '#' && k < 127) o->host[k++] = *u++;
-    o->host[k] = 0;
+    o->v6lit = *u == '[';
+    if (o->v6lit) {                                            /* http://[2001:db8::1]:8080/ */
+        u++;
+        while (*u && *u != ']' && k < 127) o->host[k++] = *u++;
+        if (*u++ != ']') return HTTP_EURL;
+        o->host[k] = 0;
+        struct ipaddr a;
+        if (!ip_parse(o->host, &a) || !a.v6) return HTTP_EURL;
+    } else {
+        while (*u && *u != '/' && *u != ':' && *u != '?' && *u != '#' && k < 127) o->host[k++] = *u++;
+        o->host[k] = 0;
+    }
     if (!k) return HTTP_EURL;
     o->port = o->https ? 443 : 80;
     if (*u == ':') { u++; o->port = 0; while (*u >= '0' && *u <= '9') o->port = o->port * 10 + (*u++ - '0'); if (!o->port || o->port > 65535) return HTTP_EURL; }
@@ -129,6 +127,31 @@ static long dechunk_feed(struct dechunk *d, const char *in, long n, http_sink si
     return out;
 }
 
+/* host[:port] as it appears in a URL or Host header */
+static void hostport(const struct url *u, char *out, int n, bool port) {
+    const char *l = u->v6lit ? "[" : "", *r = u->v6lit ? "]" : "";
+    if (port) ksnprintf(out, n, "%s%s%s:%d", l, u->host, r, u->port); else ksnprintf(out, n, "%s%s%s", l, u->host, r);
+}
+
+/* connect to the first address that answers. With several addresses (IPv6 and IPv4), each gets a short
+ * time before moving on, so a broken IPv6 path falls back to IPv4 quickly. */
+static int connect_any(const char *host, int port) {
+    struct ipaddr a[8];
+    int n = sys_resolve(host, a, 8);
+    if (n < 0) return n;
+    if (n == 0) return NET_ENOTFOUND;
+    int err = NET_ETIMEDOUT;
+    for (int i = 0; i < n; i++) {
+        bool other_family_left = false;
+        for (int j = i + 1; j < n; j++) if (a[j].v6 != a[i].v6) other_family_left = true;
+        int h = tcp_open(&a[i], port, other_family_left ? 3000 : i + 1 < n ? 6000 : 15000);
+        if (h >= 0) { ip_format(&a[i], http_sec.addr); return h; }
+        err = h;
+        if (h != NET_ETIMEDOUT && h != NET_EUNREACH && h != NET_EREFUSED && h != NET_ENOTCONN) break;
+    }
+    return err;
+}
+
 long http_fetch(const char *url_in, http_sink sink, void *ctx, int *status, long *total, char *ctype, int ctlen, char *final_url, int fulen) {
     static char hdr[16384];
     char url[600];
@@ -140,16 +163,12 @@ long http_fetch(const char *url_in, http_sink sink, void *ctx, int *status, long
         if (e) return e;
         const char *scheme = u.https ? "https" : "http";
         bool default_port = u.port == (u.https ? 443 : 80);
-        if (final_url) {
-            if (!default_port) ksnprintf(final_url, fulen, "%s://%s:%d%s", scheme, u.host, u.port, u.path);
-            else ksnprintf(final_url, fulen, "%s://%s%s", scheme, u.host, u.path);
-        }
-        uint32_t ip;
-        int r = sys_resolve(u.host, &ip);
-        if (r) return r;
-        struct conn c = { tcp_open(ip, u.port), u.https };
-        if (c.h < 0) return c.h;
+        char hp[160], hpp[160];
+        hostport(&u, hp, sizeof hp, !default_port); hostport(&u, hpp, sizeof hpp, true);
+        if (final_url) ksnprintf(final_url, fulen, "%s://%s%s", scheme, hp, u.path);
         memset(&http_sec, 0, sizeof http_sec);
+        struct conn c = { connect_any(u.host, u.port), u.https };
+        if (c.h < 0) return c.h;
         if (u.https) {
             load_roots();
             struct tls_io io = { &c.h, t_send, t_recv, t_rand, unix_now() };
@@ -160,9 +179,8 @@ long http_fetch(const char *url_in, http_sink sink, void *ctx, int *status, long
             strncpy0(http_sec.subject, tls_conn.peer, sizeof http_sec.subject);
             strncpy0(http_sec.issuer, tls_conn.issuer, sizeof http_sec.issuer);
         }
-        char req[900], hosth[160];
-        if (default_port) strncpy0(hosth, u.host, sizeof hosth); else ksnprintf(hosth, sizeof hosth, "%s:%d", u.host, u.port);
-        int rl = ksnprintf(req, sizeof req, "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: DuncOS/0.1 (Thane kernel)\r\nAccept: */*\r\nConnection: close\r\n\r\n", u.path, hosth);
+        char req[900];
+        int rl = ksnprintf(req, sizeof req, "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: DuncOS/0.1 (Thane kernel)\r\nAccept: */*\r\nConnection: close\r\n\r\n", u.path, hp);
         if (c_write(&c, req, rl) < 0) { c_close(&c); return NET_ERESET; }
         long hl = 0, hend = -1;
         while (hend < 0 && hl < (long)sizeof hdr - 1) {
@@ -190,11 +208,11 @@ long http_fetch(const char *url_in, http_sink sink, void *ctx, int *status, long
             c_close(&c);
             if (starts_ci(loc, "http://") || starts_ci(loc, "https://")) strncpy0(url, loc, sizeof url);
             else if (loc[0] == '/' && loc[1] == '/') ksnprintf(url, sizeof url, "%s:%s", scheme, loc);
-            else if (loc[0] == '/') ksnprintf(url, sizeof url, "%s://%s:%d%s", scheme, u.host, u.port, loc);
+            else if (loc[0] == '/') ksnprintf(url, sizeof url, "%s://%s%s", scheme, hpp, loc);
             else {
                 char base[512]; strncpy0(base, u.path, sizeof base);
                 char *sl = base + strlen(base); while (sl > base && sl[-1] != '/') sl--; *sl = 0;
-                ksnprintf(url, sizeof url, "%s://%s:%d%s%s", scheme, u.host, u.port, base, loc);
+                ksnprintf(url, sizeof url, "%s://%s%s%s", scheme, hpp, base, loc);
             }
             continue;
         }

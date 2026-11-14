@@ -158,7 +158,7 @@ struct netif *e1000_probe(struct pci_dev *p) {
     wr(e, RDBAL, (uint32_t)(uint64_t)e->rx); wr(e, RDBAH, (uint64_t)e->rx >> 32);
     wr(e, RDLEN, NRX * 16); wr(e, RDH, 0); wr(e, RDT, NRX - 1);
     e->rx_cur = 0;
-    wr(e, RCTL, (1u << 1) | (1u << 15) | (1u << 26));       /* enable, broadcast, strip CRC, 2 KiB buffers */
+    wr(e, RCTL, (1u << 1) | (1u << 4) | (1u << 15) | (1u << 26));   /* enable, all multicast (IPv6), broadcast, strip CRC, 2 KiB buffers */
     wr(e, TDBAL, (uint32_t)(uint64_t)e->tx); wr(e, TDBAH, (uint64_t)e->tx >> 32);
     wr(e, TDLEN, NTX * 16); wr(e, TDH, 0); wr(e, TDT, 0);
     e->tx_cur = 0;

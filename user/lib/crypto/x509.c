@@ -1,6 +1,7 @@
 #include "x509.h"
 #include "crypto.h"
 #include "../../../common/str.h"
+#include "../../../common/inet.h"
 
 void *malloc(size_t n);
 
@@ -203,24 +204,13 @@ static int name_match(const uint8_t *pat, size_t pl, const char *host) {
     return 1;
 }
 
-static int parse_ip4(const char *s, uint8_t ip[4]) {
-    for (int k = 0; k < 4; k++) {
-        int v = 0, n = 0;
-        while (*s >= '0' && *s <= '9') { v = v * 10 + (*s++ - '0'); n++; }
-        if (!n || v > 255) return 0;
-        ip[k] = v;
-        if (k < 3) { if (*s != '.') return 0; s++; }
-    }
-    return *s == 0;
-}
-
 int x509_match_host(const struct x509 *c, const char *host) {
-    uint8_t ip[4]; int is_ip = parse_ip4(host, ip);
+    struct ipaddr ip; int is_ip = ip_parse(host, &ip), iplen = ip.v6 ? 16 : 4;
     if (c->san) {
         const uint8_t *p = c->san, *end = c->san + c->san_len, *v; size_t vl; uint8_t t;
         while (p < end && !der(&p, end, &t, &v, &vl)) {
             if (t == 0x82 && !is_ip && name_match(v, vl, host)) return 1;
-            if (t == 0x87 && is_ip && vl == 4 && !memcmp(v, ip, 4)) return 1;
+            if (t == 0x87 && is_ip && vl == (size_t)iplen && !memcmp(v, ip.b, iplen)) return 1;
         }
         return 0;
     }

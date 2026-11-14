@@ -57,15 +57,28 @@ struct dunc_app { char id[24], name[32]; int installed; };
 #define WIN_RESIZABLE 1
 
 /* ---- networking ---- */
+#include "inet.h"
 /* IPv4 addresses are kept in network byte order: a.b.c.d == a | b<<8 | c<<16 | d<<24 */
 #define IP4(a, b, c, d) ((uint32_t)(a) | (uint32_t)(b) << 8 | (uint32_t)(c) << 16 | (uint32_t)(d) << 24)
 struct dunc_netinfo {
-    int present, link, configured, dns_manual;
+    int present, link, configured, dns_manual;   /* configured: has an IPv4 address from DHCP */
     char adapter[48], driver[24];
     uint8_t mac[6];
     uint32_t ip, mask, gw, dns, lease_s;
     uint64_t rx_packets, tx_packets, rx_bytes, tx_bytes;
+    /* IPv6 */
+    int v6_configured;               /* has a global IPv6 address and a router */
+    int v6_count;
+    struct ipaddr v6[4];             /* v6[0] is the link-local address; .prefix is the prefix length */
+    uint8_t v6_state[4];             /* V6_* */
+    uint32_t v6_valid_s[4];          /* seconds left; 0xFFFFFFFF = forever */
+    struct ipaddr router6;           /* IPv6 default router (all zero: none) */
+    struct ipaddr dns6;              /* IPv6 DNS server from the network (all zero: none) */
+    struct ipaddr dns_user;          /* DNS server set by the user (when dns_manual) */
+    struct ipaddr dns_now;           /* the DNS server lookups use now */
+    uint32_t mtu6;
 };
+enum { V6_TENTATIVE = 1, V6_PREFERRED, V6_DEPRECATED, V6_DUPLICATE };
 enum { NET_OK = 0, NET_ENODEV = -1, NET_ENOTCONN = -2, NET_ETIMEDOUT = -3, NET_EREFUSED = -4, NET_ERESET = -5,
-       NET_ENOTFOUND = -6, NET_EINVAL = -7, NET_ENOMEM = -8, NET_EAGAIN = -9 };
+       NET_ENOTFOUND = -6, NET_EINVAL = -7, NET_ENOMEM = -8, NET_EAGAIN = -9, NET_EUNREACH = -10 };
 enum { NETCFG_DNS, NETCFG_RENEW };

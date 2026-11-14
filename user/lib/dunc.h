@@ -35,17 +35,17 @@ const char *fs_strerror(int e);
 
 /* networking */
 static inline void sys_netinfo(struct dunc_netinfo *n) { sys_call(SYS_NET_INFO, (long)n, 0, 0, 0, 0); }
-static inline void sys_set_dns(uint32_t ip) { sys_call(SYS_NET_CONFIG, NETCFG_DNS, ip, 0, 0, 0); }
+static inline void sys_set_dns(const struct ipaddr *ip) { sys_call(SYS_NET_CONFIG, NETCFG_DNS, (long)ip, 0, 0, 0); }   /* 0: automatic */
 static inline void sys_net_renew(void) { sys_call(SYS_NET_CONFIG, NETCFG_RENEW, 0, 0, 0, 0); }
-static inline long sys_ping(uint32_t ip, uint32_t ms) { return sys_call(SYS_NET_PING, ip, ms, 0, 0, 0); }
-static inline int sys_resolve(const char *name, uint32_t *ip) { return sys_call(SYS_NET_RESOLVE, (long)name, (long)ip, 0, 0, 0); }
-static inline int tcp_open(uint32_t ip, int port) { return sys_call(SYS_TCP_CONNECT, ip, port, 0, 0, 0); }
+static inline long sys_ping(const struct ipaddr *ip, uint32_t ms) { return sys_call(SYS_NET_PING, (long)ip, ms, 0, 0, 0); }
+/* up to max addresses for a name or address literal, best first; returns how many, or an error */
+static inline int sys_resolve(const char *name, struct ipaddr *out, int max) { return sys_call(SYS_NET_RESOLVE, (long)name, (long)out, max, 0, 0); }
+static inline int tcp_open(const struct ipaddr *ip, int port, uint32_t timeout_ms) { return sys_call(SYS_TCP_CONNECT, (long)ip, port, timeout_ms, 0, 0); }
 static inline long tcp_write(int h, const void *b, uint32_t n) { return sys_call(SYS_TCP_SEND, h, (long)b, n, 0, 0); }
 static inline long tcp_read(int h, void *b, uint32_t n, long timeout_ms) { return sys_call(SYS_TCP_RECV, h, (long)b, n, timeout_ms, 0); }
 static inline int tcp_shut(int h) { return sys_call(SYS_TCP_CLOSE, h, 0, 0, 0, 0); }
 const char *net_strerror(int e);
 void ip_str(uint32_t ip, char *out);          /* out: at least 16 bytes */
-bool ip_parse(const char *s, uint32_t *out);
 
 /* HTTP (http:// only for now). Returns the body length (truncated to max), or a negative error.
  * Follows redirects. status/ctype/final_url may be NULL. */
@@ -59,7 +59,7 @@ typedef bool (*http_sink)(const char *data, long len, void *ctx);
 long http_fetch(const char *url, http_sink sink, void *ctx, int *status, long *total, char *ctype, int ctlen, char *final_url, int fulen);
 const char *http_strerror(long e);
 /* security of the last http_fetch/http_get: secure = 1 for a verified https:// connection */
-struct http_security { int secure; char cipher[48], subject[96], issuer[96]; };
+struct http_security { int secure; char cipher[48], subject[96], issuer[96]; char addr[IP_STRLEN]; };   /* addr: the server address used */
 extern struct http_security http_sec;
 int http_trusted_roots(void);
 int http_trust_pem(const char *pem, long n);   /* trust these CA certificates in this program too */

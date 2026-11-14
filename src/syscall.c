@@ -157,27 +157,37 @@ uint64_t syscall_dispatch(struct frame *f) {
         net_get_info((struct dunc_netinfo *)a);
         return 0;
     case SYS_NET_CONFIG:
-        if (a == NETCFG_DNS) net_set_dns((uint32_t)b); else if (a == NETCFG_RENEW) net_renew();
+        if (a == NETCFG_DNS) {
+            if (!b) { net_set_dns(0); return 0; }
+            if (!UOK(b, sizeof(struct ipaddr), false)) return (uint64_t)-1;
+            struct ipaddr ip = *(struct ipaddr *)b;
+            net_set_dns(&ip);
+        } else if (a == NETCFG_RENEW) net_renew();
         return 0;
     case SYS_NET_PING: {
+        if (!UOK(a, sizeof(struct ipaddr), false)) return (uint64_t)(int64_t)NET_EINVAL;
+        struct ipaddr ip = *(struct ipaddr *)a;
         current->busy++;
-        long r = net_ping((uint32_t)a, b > 10000 ? 10000 : (uint32_t)b);
+        long r = net_ping(&ip, b > 10000 ? 10000 : (uint32_t)b);
         current->busy--;
         return (uint64_t)r;
     }
     case SYS_NET_RESOLVE: {
         char name[128];
-        if (!copy_str(name, a, sizeof name) || !UOK(b, 4, true)) return (uint64_t)(int64_t)NET_EINVAL;
-        uint32_t ip = 0;
+        int max = c > 8 ? 8 : (int)c;
+        if (!copy_str(name, a, sizeof name) || max < 1 || !UOK(b, max * sizeof(struct ipaddr), true)) return (uint64_t)(int64_t)NET_EINVAL;
+        struct ipaddr out[8];
         current->busy++;
-        int r = net_resolve(name, &ip);
+        int r = net_resolve(name, out, max);
         current->busy--;
-        if (r == 0) *(uint32_t *)b = ip;
+        if (r > 0) memcpy((void *)b, out, r * sizeof out[0]);
         return (uint64_t)(int64_t)r;
     }
     case SYS_TCP_CONNECT: {
+        if (!UOK(a, sizeof(struct ipaddr), false)) return (uint64_t)(int64_t)NET_EINVAL;
+        struct ipaddr ip = *(struct ipaddr *)a;
         current->busy++;
-        int r = tcp_connect((uint32_t)a, (uint16_t)b);
+        int r = tcp_connect(&ip, (uint16_t)b, (uint32_t)c);
         current->busy--;
         return (uint64_t)(int64_t)r;
     }

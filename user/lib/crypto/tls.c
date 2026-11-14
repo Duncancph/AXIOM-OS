@@ -139,7 +139,8 @@ static size_t build_hello(struct tls *t, uint8_t *m, const uint8_t *random, cons
     m[n++] = 1; m[n++] = 0;
     size_t ext_at = n; n += 2;
     /* server_name (not for IP addresses) */
-    int is_ip = 1; for (const char *s = t->host; *s; s++) if (!((*s >= '0' && *s <= '9') || *s == '.')) is_ip = 0;
+    int is_ip = 1, colon = 0; for (const char *s = t->host; *s; s++) { if (*s == ':') colon = 1; if (!((*s >= '0' && *s <= '9') || *s == '.')) is_ip = 0; }
+    if (colon) is_ip = 1;                                 /* IPv6 address */
     size_t hl = strlen(t->host);
     if (!is_ip) {
         put16(m + n, 0); put16(m + n + 2, hl + 5); put16(m + n + 4, hl + 3); m[n + 6] = 0; put16(m + n + 7, hl);

@@ -10,9 +10,9 @@ LIBGCC  := $(shell $(CC) -print-libgcc-file-name)
 
 APPS    := files about terminal monitor bluetooth network calc sandbox
 REPO_APPS := editor clock web
-K_SRCS  := $(filter-out src/desktop_highland.c,$(wildcard src/*.c)) common/gfx.c common/str.c user/lib/crypto/sha2.c user/lib/crypto/aead.c
+K_SRCS  := $(filter-out src/desktop_highland.c,$(wildcard src/*.c)) common/gfx.c common/str.c common/inet.c user/lib/crypto/sha2.c user/lib/crypto/aead.c
 K_OBJS  := $(patsubst %.c,build/k/%.o,$(K_SRCS)) build/k/boot.o build/k/isr.o build/k/apps.o
-U_LIB   := build/u/crt0.o build/u/libdunc.o build/u/gfx.o build/u/str.o
+U_LIB   := build/u/crt0.o build/u/libdunc.o build/u/gfx.o build/u/str.o build/u/inet.o
 CRYPTO  := sha2 aead x25519 bn rsa ecc x509 tls
 NETLIB  := build/u/libnet.a
 U_ELFS  := $(patsubst %,build/user/%.elf,$(APPS))
@@ -99,9 +99,11 @@ test:
 	printf 'written by mtools on Linux\n' > build/test/hello.txt && MTOOLS_SKIP_CHECK=1 mcopy -i build/test/fat.img build/test/hello.txt "::/Hello From Linux.txt"
 	build/test/test_fat build/test/fat.img
 	fsck.fat -n build/test/fat.img && echo "fsck.fat: clean"
+	gcc -std=gnu17 -O1 -w -fno-builtin -o build/test/test_inet tests/test_inet.c common/inet.c common/str.c
+	python3 tests/test_inet.py build/test/test_inet
 	gcc -std=gnu17 -O2 -w -fno-builtin -o build/test/test_crypto tests/test_crypto.c $(addprefix user/lib/crypto/,sha2.c aead.c x25519.c bn.c rsa.c ecc.c) common/str.c
 	python3 tests/test_crypto.py build/test/test_crypto
-	gcc -std=gnu17 -O2 -w -DX509_TESTING -fno-builtin -o build/test/test_roots tests/test_roots.c $(addprefix user/lib/crypto/,x509.c sha2.c bn.c rsa.c ecc.c) common/str.c
+	gcc -std=gnu17 -O2 -w -DX509_TESTING -fno-builtin -o build/test/test_roots tests/test_roots.c $(addprefix user/lib/crypto/,x509.c sha2.c bn.c rsa.c ecc.c) common/str.c common/inet.c
 	build/test/test_roots $(CA_BUNDLE) | tail -3
-	gcc -std=gnu17 -O2 -w -D_GNU_SOURCE -fno-builtin -o build/test/test_tls tests/test_tls.c $(addprefix user/lib/crypto/,tls.c x509.c sha2.c aead.c x25519.c bn.c rsa.c ecc.c) common/str.c
+	gcc -std=gnu17 -O2 -w -D_GNU_SOURCE -fno-builtin -o build/test/test_tls tests/test_tls.c $(addprefix user/lib/crypto/,tls.c x509.c sha2.c aead.c x25519.c bn.c rsa.c ecc.c) common/str.c common/inet.c
 	tests/tls/matrix.sh build/test/test_tls build/test/tls

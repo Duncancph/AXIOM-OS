@@ -140,36 +140,67 @@ static void cmd_cat(const char *arg) {
 
 static const char *strchr_(const char *s, char c) { for (; *s; s++) if (*s == c) return s; return 0; }
 
+static const char *v6_state_name(int st) {
+    return st == V6_TENTATIVE ? "  (checking...)" : st == V6_DEPRECATED ? "  (being replaced)" : st == V6_DUPLICATE ? "  (in use by another device)" : "";
+}
+
 static void cmd_ip(void) {
     struct dunc_netinfo n; sys_netinfo(&n);
     if (!n.present) { puts_c("No supported network adapter. DuncOS supports Intel and Realtek wired Ethernet.\n", C_GOLD); return; }
-    char a[16], m[16], g[16], d[16];
-    ip_str(n.ip, a); ip_str(n.mask, m); ip_str(n.gw, g); ip_str(n.dns, d);
+    char a[IP_STRLEN], m[16], g[16];
+    bool any = n.configured || n.v6_configured;
     print("  %s (%s)  ", n.adapter, n.driver);
-    puts_c(n.link ? (n.configured ? "connected\n" : "cable connected, getting an address...\n") : "no cable\n", n.configured ? C_GREEN : C_GOLD);
+    puts_c(n.link ? (any ? "connected\n" : "cable connected, getting an address...\n") : "no cable\n", any ? C_GREEN : C_GOLD);
     print("  MAC      %02x:%02x:%02x:%02x:%02x:%02x\n", n.mac[0], n.mac[1], n.mac[2], n.mac[3], n.mac[4], n.mac[5]);
     if (n.configured) {
-        print("  Address  %s / %s\n  Gateway  %s\n  DNS      %s%s\n", a, m, g, d, n.dns_manual ? " (set by you)" : "");
-        print("  Lease    %u min\n", n.lease_s / 60);
+        ip_str(n.ip, a); ip_str(n.mask, m); ip_str(n.gw, g);
+        print("  IPv4     %s / %s, gateway %s, lease %u min\n", a, m, g, n.lease_s / 60);
+    } else if (n.link) puts_c("  IPv4     no address (no DHCP server answered yet)\n", C_DIM);
+    for (int i = 0; i < n.v6_count; i++) {
+        ip_format(&n.v6[i], a);
+        print("  IPv6     %s/%u%s%s\n", a, n.v6[i].prefix, i == 0 ? "  (link-local)" : "", v6_state_name(n.v6_state[i]));
     }
+    if (n.router6.v6) { ip_format(&n.router6, a); print("  Router   %s, MTU %u\n", a, n.mtu6); }
+    else if (n.link && n.v6_count) puts_c("  IPv6     no router on this network: local IPv6 only\n", C_DIM);
+    if (n.dns_now.v6 || n.dns_now.b[0]) { ip_format(&n.dns_now, a); print("  DNS      %s%s\n", a, n.dns_manual ? " (set by you)" : ""); }
     print("  Traffic  %lu packets in (%lu KB), %lu out (%lu KB)\n", n.rx_packets, n.rx_bytes / 1024, n.tx_packets, n.tx_bytes / 1024);
 }
 
+/* "-4" / "-6" choose the IP version; returns the rest of the arguments */
+static const char *family_opt(const char *arg, int *fam) {
+    *fam = 0;
+    while (arg[0] == '-' && (arg[1] == '4' || arg[1] == '6') && (arg[2] == ' ' || !arg[2])) {
+        *fam = arg[1] - '0'; arg += 2; while (*arg == ' ') arg++;
+    }
+    return arg;
+}
+
+/* resolve and pick an address of the wanted family (0: the first, which prefers IPv6 when it works) */
+static int resolve_one(const char *name, int fam, struct ipaddr *out) {
+    struct ipaddr a[8];
+    int r = sys_resolve(name, a, 8);
+    if (r < 0) return r;
+    for (int i = 0; i < r; i++) if (!fam || (fam == 6) == (a[i].v6 != 0)) { *out = a[i]; return 0; }
+    return NET_ENOTFOUND;
+}
+
 static void cmd_ping(const char *arg) {
-    if (!*arg) { puts_c("usage: ping <host>\n", C_RED); return; }
-    uint32_t ip; int r = sys_resolve(arg, &ip);
-    if (r) { puts_c(net_strerror(r), C_RED); putch('\n'); return; }
-    char a[16]; ip_str(ip, a);
+    int fam; arg = family_opt(arg, &fam);
+    if (!*arg) { puts_c("usage: ping [-4|-6] <host>\n", C_RED); return; }
+    struct ipaddr ip; int r = resolve_one(arg, fam, &ip);
+    if (r) { puts_c(r == NET_ENOTFOUND && fam ? (fam == 6 ? "That name has no IPv6 address" : "That name has no IPv4 address") : net_strerror(r), C_RED); putch('\n'); return; }
+    char a[IP_STRLEN]; ip_format(&ip, a);
     print("Pinging %s (%s):\n", arg, a);
     draw();
     int ok = 0; long best = -1, worst = 0, sum = 0;
     for (int i = 0; i < 4; i++) {
         uint64_t t0 = sys_time();
-        long us = sys_ping(ip, 2000);
+        long us = sys_ping(&ip, 2000);
         if (us >= 0) {
             ok++; sum += us; if (best < 0 || us < best) best = us; if (us > worst) worst = us;
             print("  Reply from %s: time=%ld.%ld ms\n", a, us / 1000, (us / 100) % 10);
-        } else puts_c("  No reply (timed out)\n", C_GOLD);
+        } else if (us == NET_ETIMEDOUT) puts_c("  No reply (timed out)\n", C_GOLD);
+        else { print("  "); puts_c(net_strerror((int)us), C_RED); putch('\n'); break; }
         draw();
         uint64_t el = sys_time() - t0;
         if (i < 3 && el < 1000) sys_sleep(1000 - el);
@@ -180,10 +211,11 @@ static void cmd_ping(const char *arg) {
 }
 
 static void cmd_host(const char *arg) {
-    uint32_t ip; int r = sys_resolve(arg, &ip);
-    if (r) { print("%s: ", arg); puts_c(net_strerror(r), C_RED); putch('\n'); return; }
-    char a[16]; ip_str(ip, a);
-    print("%s has address %s\n", arg, a);
+    if (!*arg) { puts_c("usage: host <name>\n", C_RED); return; }
+    struct ipaddr a[8];
+    int r = sys_resolve(arg, a, 8);
+    if (r <= 0) { print("%s: ", arg); puts_c(net_strerror(r ? r : NET_ENOTFOUND), C_RED); putch('\n'); return; }
+    for (int i = 0; i < r; i++) { char b[IP_STRLEN]; ip_format(&a[i], b); print("%s has %s address %s\n", arg, a[i].v6 ? "IPv6" : "IPv4", b); }
 }
 
 struct dl { char path[256]; long got, total, next_report; int err; bool first; };
@@ -216,6 +248,7 @@ static void cmd_get(const char *arg, bool save) {
         for (long i = 0; i < n; i++) { char c = body[i]; if (c == '\n' || c == '\t' || (c >= 32 && c < 127)) putch(c); }
         if (cx) putch('\n');
         print("-- HTTP %d, %ld bytes%s\n", status, n, n == (long)sizeof body ? " (cut short; use wget to save it)" : "");
+        if (http_sec.addr[0]) print("-- server address %s\n", http_sec.addr);
         if (http_sec.secure) { puts_c("-- secure: ", C_GREEN); print("%s; certificate for %s, from %s\n", http_sec.cipher, http_sec.subject, http_sec.issuer); }
         return;
     }
@@ -254,7 +287,7 @@ static void cmd_help(void) {
         {"mkdir <name>", "make a folder"}, {"rm <path>", "delete a file or folder"}, {"mv <a> <b>", "move or rename"},
         {"cp <a> <b>", "copy"}, {"touch <file>", "create an empty file"}, {"echo hi > f", "write text to a file"},
         {"edit <file>", "open a file in Editor"}, {"df", "drives and free space"},
-        {"ip", "network status"}, {"ping <host>", "test a connection"}, {"host <name>", "look up an address"},
+        {"ip", "network status (IPv4 and IPv6)"}, {"ping [-4|-6] <host>", "test a connection"}, {"host <name>", "look up an address"},
         {"wget <url> [f]", "download (http:// or https://)"}, {"trust [file]", "list or add trusted authorities"}, {"curl <url>", "show a web page"}, {"dns <ip|auto>", "choose a DNS server"},
         {"apps", "list installed apps"}, {"open <app>", "start an app, e.g. 'open calc'"},
         {"ps", "list running processes"}, {"kill <pid>", "stop a process"},
@@ -309,6 +342,7 @@ static void run(char *line) {
     else if (!strcmp(line, "pwd")) print("%s\n", cwd);
     else if (!strcmp(line, "ip") || !strcmp(line, "ifconfig")) cmd_ip();
     else if (!strcmp(line, "ping")) cmd_ping(arg);
+    else if (!strcmp(line, "ping6")) { char a6[200]; ksnprintf(a6, sizeof a6, "-6 %s", arg); cmd_ping(a6); }
     else if (!strcmp(line, "host") || !strcmp(line, "nslookup")) cmd_host(arg);
     else if (!strcmp(line, "wget")) cmd_get(arg, true);
     else if (!strcmp(line, "curl")) cmd_get(arg, false);
@@ -340,10 +374,10 @@ static void run(char *line) {
         }
     }
     else if (!strcmp(line, "dns")) {
-        uint32_t ip;
-        if (!strcmp(arg, "auto")) { sys_set_dns(0); puts_c("DNS server: from the network (DHCP)\n", C_TEXT); }
-        else if (ip_parse(arg, &ip)) { sys_set_dns(ip); print("DNS server set to %s\n", arg); }
-        else puts_c("usage: dns <a.b.c.d> | dns auto\n", C_RED);
+        struct ipaddr ip;
+        if (!strcmp(arg, "auto")) { sys_set_dns(0); puts_c("DNS server: from the network\n", C_TEXT); }
+        else if (ip_parse(arg, &ip)) { sys_set_dns(&ip); print("DNS server set to %s\n", arg); }
+        else puts_c("usage: dns <IPv4 or IPv6 address> | dns auto\n", C_RED);
     }
     else if (!strcmp(line, "cd")) {
         char path[256]; path_resolve(cwd, *arg ? arg : "~", path, sizeof path);
