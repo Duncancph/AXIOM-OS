@@ -69,6 +69,7 @@ struct bootinfo {
     uint8_t rsdp_copy[64];
     char bootloader[64];
     uint64_t mod_start, mod_end;      /* initial files (tar), loaded by GRUB */
+    struct { uint64_t start, end; char name[24]; } mods[8]; int mod_count;   /* every GRUB module, by name */
     char cmdline[128];
     bool uefi;
 };
@@ -94,6 +95,8 @@ void timer_init(void);
 uint64_t uptime_ms(void);
 uint64_t uptime_us(void);
 void sleep_ms(uint64_t ms);
+void udelay(uint64_t us);                  /* busy-wait */
+const uint8_t *bootmod(const char *name, uint64_t *len);   /* a GRUB module by its name, or 0 */
 uint64_t tsc_hz(void);
 
 /* ---- input (kbd.c) ---- */

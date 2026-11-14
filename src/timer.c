@@ -37,6 +37,11 @@ void timer_init(void) {
 uint64_t tsc_hz(void) { return hz; }
 uint64_t uptime_us(void) { return (rdtsc() - boot_tsc) / (hz / 1000000); }
 uint64_t uptime_ms(void) { return (rdtsc() - boot_tsc) / (hz / 1000); }
+void udelay(uint64_t us) {
+    uint64_t end = rdtsc() + us * (hz / 1000000);
+    while (rdtsc() < end) cpu_relax();
+}
+
 void sleep_ms(uint64_t ms) {
     uint64_t end = rdtsc() + ms * (hz / 1000);
     while (rdtsc() < end) cpu_relax();

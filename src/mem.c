@@ -9,7 +9,9 @@ static void *free_list;
 
 void mem_init(void) {
     uint64_t kend = ((uint64_t)kernel_end + 0xFFFFF) & ~0xFFFFFULL;
-    if (bootinfo.mod_end > kend) kend = (bootinfo.mod_end + 0xFFFFF) & ~0xFFFFFULL;   /* keep GRUB's module safe */
+    for (int i = 0; i < bootinfo.mod_count; i++)                                       /* keep GRUB's modules safe */
+        if (bootinfo.mods[i].end > kend) kend = (bootinfo.mods[i].end + 0xFFFFF) & ~0xFFFFFULL;
+    if (bootinfo.mod_end > kend) kend = (bootinfo.mod_end + 0xFFFFF) & ~0xFFFFFULL;
     for (int i = 0; i < bootinfo.mmap_count; i++) {
         struct mmap_ent *e = &bootinfo.mmap[i];
         if (e->type != 1) continue;

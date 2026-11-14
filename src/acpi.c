@@ -65,7 +65,10 @@ void acpi_init(void) {
     }
 }
 
+void disk_flush_all(void);
+
 void acpi_poweroff(void) {
+    disk_flush_all();
     if (!have_s5 || !pm1a_cnt) { kprintf("ACPI power-off is not available on this machine.\n"); return; }
     if (smi_cmd && acpi_enable_val && !(inw(pm1a_cnt) & 1)) {
         outb(smi_cmd, acpi_enable_val);
@@ -78,6 +81,7 @@ void acpi_poweroff(void) {
 }
 
 void acpi_reboot(void) {
+    disk_flush_all();
     if (reset_reg_addr && reset_reg_space == 1) outb((uint16_t)reset_reg_addr, reset_val);
     sleep_ms(50);
     outb(0xCF9, 0x02); io_wait(); outb(0xCF9, 0x06);      /* chipset reset */

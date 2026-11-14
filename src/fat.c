@@ -693,7 +693,18 @@ void *fat_mount(struct blockdev *bd, char *label_out, char *why, int why_len) {
         else strncpy0(why, "no FAT32 file system found. DuncOS can use FAT32 drives.", why_len);
         goto out;
     }
-    if (bd->read(bd->ctx, base, 1, vbr)) { strncpy0(why, "the drive couldn't be read", why_len); goto out; }
+    kfree(b); kfree(vbr);
+    return fat_open(bd, base, label_out, why, why_len);
+out:
+    kfree(b); kfree(vbr);
+    return v;
+}
+
+/* open the FAT32 file system that starts at block base */
+void *fat_open(struct blockdev *bd, uint64_t base, char *label_out, char *why, int why_len) {
+    struct fatvol *v = 0;
+    uint8_t *vbr = kmalloc(bd->bsize);
+    if (!vbr || bd->read(bd->ctx, base, 1, vbr) || !is_fat32_vbr(vbr)) { strncpy0(why, "no FAT32 file system there", why_len); goto out; }
     v = kmalloc(sizeof *v);
     if (!v) goto out;
     memset(v, 0, sizeof *v);
@@ -724,8 +735,61 @@ void *fat_mount(struct blockdev *bd, char *label_out, char *why, int why_len) {
     strncpy0(v->label, lab, sizeof v->label);
     strncpy0(label_out, lab, 16);
 out:
-    kfree(b); kfree(vbr);
+    kfree(vbr);
     return v;
+}
+
+/* Create an empty FAT32 file system on blocks [base, base + count). Returns 0 or an FS_ error. */
+int fat_format(struct blockdev *bd, uint64_t base, uint64_t count, const char *label) {
+    uint32_t bps = bd->bsize;
+    if (count > 0xFFFFFFFFull) count = 0xFFFFFFFFull;
+    uint32_t n = (uint32_t)count, rsvd = 32, nfats = 2;
+    uint64_t bytes = (uint64_t)n * bps;
+    uint32_t cbytes = bytes <= (8ull << 30) ? 4096 : bytes <= (16ull << 30) ? 8192 : bytes <= (32ull << 30) ? 16384 : 32768;
+    uint32_t spc = cbytes / bps ? cbytes / bps : 1, fatsz = 0, nclus = 0;
+    for (;;) {
+        fatsz = (uint32_t)((((uint64_t)(n - rsvd) / spc + 2) * 4 + bps - 1) / bps);
+        nclus = (n - rsvd - nfats * fatsz) / spc;
+        if (nclus >= 65525 || spc == 1) break;
+        spc /= 2;                                            /* small disk: smaller clusters so it is still FAT32 */
+    }
+    if (nclus < 65525) return FS_ENOSPC;
+    uint32_t chunk = 65536 / bps;
+    uint8_t *buf = kmalloc(65536);
+    if (!buf) return FS_ENOSPC;
+    int r = FS_OK;
+    #define WR(lba, cnt, b) do { if (r == FS_OK && bd->write(bd->ctx, (lba), (cnt), (b))) r = FS_EIO; } while (0)
+    /* zero the reserved area, both FATs and the root folder's cluster */
+    memset(buf, 0, 65536);
+    uint64_t zend = base + rsvd + (uint64_t)nfats * fatsz + spc;
+    for (uint64_t l = base; l < zend && r == FS_OK; l += chunk) WR(l, (uint32_t)(zend - l < chunk ? zend - l : chunk), buf);
+    /* boot sector and FSInfo, plus their backups at sectors 6 and 7 */
+    uint8_t *v = buf;
+    v[0] = 0xEB; v[1] = 0x58; v[2] = 0x90; memcpy(v + 3, "DUNCOS  ", 8);
+    w16(v + 11, bps); v[13] = spc; w16(v + 14, rsvd); v[16] = nfats; v[21] = 0xF8;
+    w16(v + 24, 63); w16(v + 26, 255); w32(v + 28, (uint32_t)base); w32(v + 32, n);
+    w32(v + 36, fatsz); w32(v + 44, 2); w16(v + 48, 1); w16(v + 50, 6);
+    v[64] = 0x80; v[66] = 0x29;
+    uint32_t id; random_bytes(&id, 4); w32(v + 67, id);
+    char lab[11]; memset(lab, ' ', 11);
+    for (int i = 0; i < 11 && label[i]; i++) lab[i] = label[i] >= 'a' && label[i] <= 'z' ? label[i] - 32 : label[i];
+    memcpy(v + 71, lab, 11); memcpy(v + 82, "FAT32   ", 8);
+    v[510] = 0x55; v[511] = 0xAA;
+    uint8_t *fi = buf + bps;
+    w32(fi, 0x41615252); w32(fi + 484, 0x61417272); w32(fi + 488, nclus - 1); w32(fi + 492, 3); w32(fi + 508, 0xAA550000);
+    WR(base, 2, buf);
+    WR(base + 6, 2, buf);
+    memset(buf, 0, 2 * bps);
+    /* first FAT sector of each copy: media, end-of-chain, root folder */
+    w32(buf, 0x0FFFFFF8); w32(buf + 4, 0x0FFFFFFF); w32(buf + 8, 0x0FFFFFFF);
+    for (uint32_t f = 0; f < nfats; f++) WR(base + rsvd + (uint64_t)f * fatsz, 1, buf);
+    /* the root folder holds the volume label */
+    memset(buf, 0, bps);
+    memcpy(buf, lab, 11); buf[11] = 0x08;
+    WR(base + rsvd + (uint64_t)nfats * fatsz, 1, buf);
+    #undef WR
+    kfree(buf);
+    return r;
 }
 
 void fat_unmount(void *vol) {

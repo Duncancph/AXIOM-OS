@@ -11,10 +11,14 @@ struct vnode {
     uint8_t *data; uint64_t size, cap;
     struct vnode *parent, *child, *next;
 };
-struct mount { bool used; char name[16], label[32], kind[16]; const struct fs_ops *ops; void *vol; };
+/* A mounted volume. USB drives appear as /usbN; the DuncOS disk also provides /home, /apps and
+ * /system/config ("system" mounts: at = several components, sub = the folder on the volume). */
+#define NMOUNT 8
+struct mount { bool used, system; char name[16], label[32], kind[16]; const struct fs_ops *ops; void *vol;
+               int depth; char at[3][64]; char sub[64]; };
 
 static struct vnode *root;
-static struct mount mounts[4];
+static struct mount mounts[NMOUNT];
 static volatile int lock_owner;
 static int lock_depth;
 
@@ -87,10 +91,22 @@ static bool valid_name(const char *s) {
 /* Returns the mount for a path inside a volume (and the path relative to it), else 0. */
 static struct mount *route(const struct path *p, char *rel, size_t n) {
     if (p->n == 0) return 0;
-    for (int i = 0; i < 4; i++)
-        if (mounts[i].used && !strcmp(mounts[i].name, p->c[0])) { join(p, 1, rel, n); return &mounts[i]; }
-    return 0;
+    struct mount *best = 0;
+    for (int i = 0; i < NMOUNT; i++) {
+        struct mount *m = &mounts[i];
+        if (!m->used || m->depth > p->n || (best && best->depth >= m->depth)) continue;
+        bool match = true;
+        for (int k = 0; k < m->depth; k++) if (strcmp(m->at[k], p->c[k])) match = false;
+        if (match) best = m;
+    }
+    if (!best) return 0;
+    char rest[PATH_MAX_]; join(p, best->depth, rest, sizeof rest);
+    if (!best->sub[0]) strncpy0(rel, rest, n);
+    else if (!strcmp(rest, "/")) strncpy0(rel, best->sub, n);
+    else ksnprintf(rel, n, "%s%s", best->sub, rest);
+    return best;
 }
+static bool is_mount_root(const struct mount *m, const struct path *p) { return m && p->n == m->depth; }
 
 /* ---------------- RAM file system ---------------- */
 static struct vnode *child(struct vnode *d, const char *name) {
@@ -162,9 +178,13 @@ int vfs_list(const char *path, struct dunc_dirent *out, int max) {
                 strncpy0(out[n].name, c->name, sizeof out[n].name);
                 out[n].is_dir = c->dir; out[n].size = c->size;
             }
-            if (p.n == 0)
-                for (int i = 0; i < 4 && n < max; i++)
-                    if (mounts[i].used) { strncpy0(out[n].name, mounts[i].name, 64); out[n].is_dir = 1; out[n].size = 0; n++; }
+            for (int i = 0; i < NMOUNT && n < max; i++)    /* mount points directly inside this folder */
+                if (mounts[i].used && mounts[i].depth == p.n + 1) {
+                    bool match = true, dup = false;
+                    for (int k = 0; k < p.n; k++) if (strcmp(mounts[i].at[k], p.c[k])) match = false;
+                    for (int k = 0; match && k < n; k++) if (!strcmp(out[k].name, mounts[i].at[p.n])) dup = true;
+                    if (match && !dup) { strncpy0(out[n].name, mounts[i].at[p.n], 64); out[n].is_dir = 1; out[n].size = 0; n++; }
+                }
         }
     }
     unlock();
@@ -213,7 +233,7 @@ long vfs_write(const char *path, const void *buf, uint64_t len) {
     lock();
     long r;
     struct mount *m = route(&p, rel, sizeof rel);
-    if (m) r = p.n == 1 ? FS_EISDIR : m->ops->write(m->vol, rel, buf, len);
+    if (m) r = is_mount_root(m, &p) ? FS_EISDIR : m->ops->write(m->vol, rel, buf, len);
     else {
         struct vnode *d = walk(&p, p.n - 1);
         if (!d) r = FS_ENOENT;
@@ -259,7 +279,7 @@ int vfs_mkdir(const char *path) {
     lock();
     int r = FS_OK;
     struct mount *m = route(&p, rel, sizeof rel);
-    if (m) r = p.n == 1 ? FS_EEXIST : m->ops->mkdir(m->vol, rel);
+    if (m) r = is_mount_root(m, &p) ? FS_EEXIST : m->ops->mkdir(m->vol, rel);
     else {
         struct vnode *d = walk(&p, p.n - 1);
         if (!d) r = FS_ENOENT;
@@ -279,7 +299,7 @@ int vfs_delete(const char *path) {
     int r = FS_OK;
     struct mount *m = route(&p, rel, sizeof rel);
     if (m) {
-        if (p.n == 1) r = FS_EINVAL;
+        if (is_mount_root(m, &p)) r = FS_EINVAL;
         else {
             struct dunc_stat st;
             r = m->ops->stat(m->vol, rel, &st);
@@ -358,6 +378,7 @@ int vfs_rename(const char *from, const char *to) {
     struct mount *ma = route(&a, ra, sizeof ra), *mb = route(&b, rb, sizeof rb);
     struct dunc_stat st;
     if (vfs_stat(to, &st) == FS_OK) r = FS_EEXIST;
+    else if (is_mount_root(ma, &a) || is_mount_root(mb, &b)) r = FS_EROFS;
     else if (ma && ma == mb) r = ma->ops->rename(ma->vol, ra, rb);
     else if (!ma && !mb) {
         struct vnode *v = walk(&a, a.n), *d = walk(&b, b.n - 1);
@@ -397,12 +418,17 @@ void *vfs_read_all(const char *path, uint64_t *len) {
 int vfs_mount(const char *label, const char *kind, const struct fs_ops *ops, void *vol, char *path_out) {
     lock();
     int slot = -1;
-    for (int i = 0; i < 4; i++) if (!mounts[i].used) { slot = i; break; }
+    for (int i = 0; i < NMOUNT; i++) if (!mounts[i].used) { slot = i; break; }
     if (slot < 0) { unlock(); return -1; }
     struct mount *m = &mounts[slot];
-    ksnprintf(m->name, sizeof m->name, slot == 0 ? "usb" : "usb%d", slot + 1);
-    for (int i = 0; i < 4; i++)   /* keep the name unique */
-        if (i != slot && mounts[i].used && !strcmp(mounts[i].name, m->name)) ksnprintf(m->name, sizeof m->name, "usb%d", slot + 1);
+    memset(m, 0, sizeof *m);
+    for (int k = 1; k <= NMOUNT; k++) {          /* first free name: usb, usb2, usb3 ... */
+        ksnprintf(m->name, sizeof m->name, k == 1 ? "usb" : "usb%d", k);
+        bool taken = false;
+        for (int i = 0; i < NMOUNT; i++) if (i != slot && mounts[i].used && mounts[i].depth == 1 && !strcmp(mounts[i].at[0], m->name)) taken = true;
+        if (!taken) break;
+    }
+    m->depth = 1; strncpy0(m->at[0], m->name, 64);
     strncpy0(m->label, label, sizeof m->label);
     strncpy0(m->kind, kind, sizeof m->kind);
     m->ops = ops; m->vol = vol; m->used = true;
@@ -412,22 +438,66 @@ int vfs_mount(const char *label, const char *kind, const struct fs_ops *ops, voi
     return slot;
 }
 
+int vfs_mount_at(const char *at, const char *sub, const char *label, const char *kind, const struct fs_ops *ops, void *vol) {
+    struct path p;
+    if (!parse(at, &p) || p.n < 1 || p.n > 3) return -1;
+    lock();
+    int slot = -1;
+    for (int i = 0; i < NMOUNT; i++) if (!mounts[i].used) { slot = i; break; }
+    if (slot < 0) { unlock(); return -1; }
+    struct mount *m = &mounts[slot];
+    memset(m, 0, sizeof *m);
+    m->depth = p.n; for (int k = 0; k < p.n; k++) strncpy0(m->at[k], p.c[k], 64);
+    strncpy0(m->name, p.c[0], sizeof m->name);
+    strncpy0(m->sub, sub && strcmp(sub, "/") ? sub : "", sizeof m->sub);
+    strncpy0(m->label, label, sizeof m->label); strncpy0(m->kind, kind, sizeof m->kind);
+    m->ops = ops; m->vol = vol; m->used = true; m->system = true;
+    notify_changed();
+    unlock();
+    return slot;
+}
+
+void vfs_unmount_at(const char *at) {
+    struct path p;
+    if (!parse(at, &p)) return;
+    lock();
+    for (int i = 0; i < NMOUNT; i++) {
+        struct mount *m = &mounts[i];
+        if (!m->used || m->depth != p.n) continue;
+        bool match = true;
+        for (int k = 0; k < p.n; k++) if (strcmp(m->at[k], p.c[k])) match = false;
+        if (match) m->used = false;
+    }
+    notify_changed();
+    unlock();
+}
+
 void vfs_unmount(void *vol) {
     lock();
-    for (int i = 0; i < 4; i++) if (mounts[i].used && mounts[i].vol == vol) mounts[i].used = false;
+    for (int i = 0; i < NMOUNT; i++) if (mounts[i].used && mounts[i].vol == vol) mounts[i].used = false;
     notify_changed();
     unlock();
 }
 
 int vfs_volumes(struct dunc_volume *out, int max) {
     int n = 0;
+    struct mount *home = 0;
+    for (int i = 0; i < NMOUNT; i++) if (mounts[i].used && mounts[i].system && mounts[i].depth == 1 && !strcmp(mounts[i].at[0], "home")) home = &mounts[i];
     if (n < max) {
-        strncpy0(out[n].path, "/home", 16); strncpy0(out[n].label, "DuncOS", 32); strncpy0(out[n].kind, "Memory", 16);
-        out[n].total = mem_total(); out[n].free = mem_total() - mem_used(); out[n].writable = 1;
+        strncpy0(out[n].path, "/home", 16);
+        out[n].writable = 1;
+        if (home) {
+            strncpy0(out[n].label, "DuncOS", 32); strncpy0(out[n].kind, home->kind, 16);
+            out[n].total = out[n].free = 0;
+            if (home->ops->space) home->ops->space(home->vol, &out[n].total, &out[n].free);
+        } else {
+            strncpy0(out[n].label, "DuncOS", 32); strncpy0(out[n].kind, "Memory", 16);
+            out[n].total = mem_total(); out[n].free = mem_total() - mem_used();
+        }
         n++;
     }
-    for (int i = 0; i < 4 && n < max; i++) {
-        if (!mounts[i].used) continue;
+    for (int i = 0; i < NMOUNT && n < max; i++) {
+        if (!mounts[i].used || mounts[i].system) continue;
         ksnprintf(out[n].path, 16, "/%s", mounts[i].name);
         strncpy0(out[n].label, mounts[i].label, 32);
         strncpy0(out[n].kind, mounts[i].kind, 16);
@@ -437,6 +507,11 @@ int vfs_volumes(struct dunc_volume *out, int max) {
         n++;
     }
     return n;
+}
+
+bool vfs_home_persistent(void) {
+    for (int i = 0; i < NMOUNT; i++) if (mounts[i].used && mounts[i].system && mounts[i].depth == 1 && !strcmp(mounts[i].at[0], "home")) return true;
+    return false;
 }
 
 /* ---------------- initial files (tar archive loaded by GRUB as a module) ---------------- */

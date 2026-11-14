@@ -2,6 +2,7 @@
 #include "usb.h"
 #include "vfs.h"
 #include "blockdev.h"
+#include "disk.h"
 
 #define BUF_BYTES 65536
 
@@ -76,9 +77,15 @@ static int msc_rw(struct msc *m, uint64_t lba, uint32_t n, void *buf, bool write
 static int bd_read(void *ctx, uint64_t lba, uint32_t n, void *buf) { return msc_rw(ctx, lba, n, buf, false); }
 static int bd_write(void *ctx, uint64_t lba, uint32_t n, const void *buf) { return msc_rw(ctx, lba, n, (void *)buf, true); }
 
+static void msc_release(void *ctx) {
+    struct msc *m = ctx;
+    if (m->vol) { vfs_unmount(m->vol); fat_unmount(m->vol); m->vol = 0; }
+}
+
 static void msc_detach(struct usb_dev *d) {
     struct msc *m = d->drv;
     if (!m) return;
+    disk_remove(&m->bd);
     if (m->vol) {
         vfs_unmount(m->vol);
         fat_unmount(m->vol);
@@ -96,6 +103,7 @@ void msc_attach(struct usb_dev *d, int iface) {
     if (!epi || !epo) return;
     struct msc *m = kmalloc(sizeof *m);
     if (!m) return;
+    memset(m, 0, sizeof *m);
     m->d = d; m->iface = iface;
     m->in_ep = epi[2]; m->out_ep = epo[2];
     m->in_dci = usb_configure_ep(d, epi, ssi);
@@ -129,6 +137,8 @@ void msc_attach(struct usb_dev *d, int iface) {
     uint64_t mb = m->bd.blocks * m->bd.bsize >> 20;
     LOG_OK("USB drive: %s %s, %lu MB\n", vendor, product, mb);
 
+    m->bd.release = msc_release;
+    if (disk_add(&m->bd, DISK_USB)) return;              /* a DuncOS drive: it holds /home now */
     char label[16] = "", why[96] = "";
     m->vol = fat_mount(&m->bd, label, why, sizeof why);
     if (!m->vol) {

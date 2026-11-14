@@ -14,6 +14,7 @@ enum {
     SYS_FS_LIST, SYS_FS_READ, SYS_FS_WRITE, SYS_FS_MKDIR, SYS_FS_DELETE, SYS_FS_RENAME, SYS_FS_STAT,
     SYS_FS_VOLUMES, SYS_GETARG, SYS_WIN_RESIZE, SYS_APPS, SYS_FS_COPY,
     SYS_RANDOM, SYS_FS_APPEND, SYS_NET_INFO, SYS_NET_CONFIG, SYS_NET_PING, SYS_NET_RESOLVE, SYS_TCP_CONNECT, SYS_TCP_SEND, SYS_TCP_RECV, SYS_TCP_CLOSE,
+    SYS_DISK_LIST, SYS_DISK_INSTALL, SYS_DISK_STATUS,
     SYS_COUNT
 };
 
@@ -47,6 +48,18 @@ struct rtc_time { int year, mon, day, hour, min, sec; };
 struct dunc_dirent { char name[64]; int is_dir; uint64_t size; };
 struct dunc_stat { int is_dir, volume; uint64_t size; };
 struct dunc_volume { char path[16], label[32], kind[16]; uint64_t total, free; int writable; };
+/* ---- disks (SATA, NVMe, USB) and the installer ---- */
+enum { DISK_SATA = 1, DISK_NVME, DISK_USB };
+struct dunc_disk {
+    int id, kind, nparts;
+    char model[48];
+    uint64_t bytes; uint32_t bsize;
+    int duncos;                      /* has a DuncOS partition */
+    int system;                      /* it holds /home right now */
+    struct { uint64_t bytes; char fs[12], label[24]; } part[8];
+};
+enum { INSTALL_ERASE = 1, INSTALL_UPDATE };   /* update: new system files, keep the user's files */
+struct dunc_install { int state, percent; char msg[120]; };   /* state: 0 idle, 1 working, 2 done, 3 failed */
 enum { FS_OK = 0, FS_ENOENT = -1, FS_EEXIST = -2, FS_ENOTDIR = -3, FS_EISDIR = -4, FS_ENOSPC = -5,
        FS_EIO = -6, FS_ENOTEMPTY = -7, FS_EROFS = -8, FS_EINVAL = -9 };
 

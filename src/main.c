@@ -1,6 +1,7 @@
 #include "kernel.h"
 #include "vfs.h"
 #include "net.h"
+#include "disk.h"
 
 struct bootinfo bootinfo;
 
@@ -30,9 +31,16 @@ static void parse_multiboot(uint64_t addr) {
             bootinfo.g_pos = p[34]; bootinfo.g_size = p[35];
             bootinfo.b_pos = p[36]; bootinfo.b_size = p[37];
             break;
-        case 3:
-            if (!bootinfo.mod_start) { bootinfo.mod_start = *(uint32_t *)(p + 8); bootinfo.mod_end = *(uint32_t *)(p + 12); }
+        case 3: {
+            uint64_t ms = *(uint32_t *)(p + 8), me = *(uint32_t *)(p + 12);
+            const char *nm = (const char *)p + 16;
+            if (bootinfo.mod_count < 8) {
+                bootinfo.mods[bootinfo.mod_count].start = ms; bootinfo.mods[bootinfo.mod_count].end = me;
+                strncpy0(bootinfo.mods[bootinfo.mod_count].name, nm, 24); bootinfo.mod_count++;
+            }
+            if (!bootinfo.mod_start || !strcmp(nm, "initrd")) { bootinfo.mod_start = ms; bootinfo.mod_end = me; }
             break;
+        }
         case 11: case 12: bootinfo.uefi = true; break;
         case 14: case 15: {
             uint32_t n = size - 8 < sizeof bootinfo.rsdp_copy ? size - 8 : sizeof bootinfo.rsdp_copy;
@@ -42,6 +50,12 @@ static void parse_multiboot(uint64_t addr) {
         }
         p += (size + 7) & ~7u;
     }
+}
+
+const uint8_t *bootmod(const char *name, uint64_t *len) {
+    for (int i = 0; i < bootinfo.mod_count; i++)
+        if (!strcmp(bootinfo.mods[i].name, name)) { *len = bootinfo.mods[i].end - bootinfo.mods[i].start; return (const uint8_t *)bootinfo.mods[i].start; }
+    return 0;
 }
 
 /* Watches for USB devices being plugged in or removed. */
@@ -87,6 +101,8 @@ void kmain(uint32_t magic, uint64_t mbi) {
     apps_refresh();
     pci_scan();
     LOG_OK("PCI: %d devices\n", pci_count);
+    ahci_init_all();
+    nvme_init_all();
     boot_progress(35);
     xhci_init_all();
     boot_progress(70);
@@ -108,5 +124,6 @@ void kmain(uint32_t magic, uint64_t mbi) {
     boot_progress(100);
     sleep_ms(400);
     LOG_OK("Starting desktop\n");
+    disk_boot_done();
     sched_start();
 }

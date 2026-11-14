@@ -64,6 +64,9 @@ extern struct http_security http_sec;
 int http_trusted_roots(void);
 int http_trust_pem(const char *pem, long n);   /* trust these CA certificates in this program too */
 static inline void sys_random(void *b, long n) { sys_call(SYS_RANDOM, (long)b, n, 0, 0, 0); }
+static inline int sys_disks(struct dunc_disk *out, int max) { return sys_call(SYS_DISK_LIST, (long)out, max, 0, 0, 0); }
+static inline int sys_install(int disk_id, int mode) { return sys_call(SYS_DISK_INSTALL, disk_id, mode, 0, 0, 0); }
+static inline void sys_install_status(struct dunc_install *st) { sys_call(SYS_DISK_STATUS, (long)st, 0, 0, 0, 0); }
 /* join a directory and a name / resolve a user path (supports ~, ., ..) into out */
 void path_resolve(const char *cwd, const char *in, char *out, int n);
 static inline int sys_procs(struct procinfo *p, int max) { return sys_call(SYS_PROCS, (long)p, max, 0, 0, 0); }

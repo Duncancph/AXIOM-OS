@@ -373,6 +373,33 @@ static void run(char *line) {
             }
         }
     }
+    else if (!strcmp(line, "disks")) {
+        struct dunc_disk d[8]; int n = sys_disks(d, 8);
+        if (n <= 0) puts_c("No disks found.\n", C_DIM);
+        for (int i = 0; i < n; i++) {
+            bool gb = d[i].bytes >= (10ull << 30);
+            print("  %d  %-5s %-28s %6lu %s%s%s\n", d[i].id, d[i].kind == DISK_SATA ? "SATA" : d[i].kind == DISK_NVME ? "NVMe" : "USB", d[i].model,
+                  gb ? d[i].bytes >> 30 : d[i].bytes >> 20, gb ? "GB" : "MB", d[i].duncos ? "  DuncOS" : "", d[i].system ? " (your files)" : "");
+            for (int k = 0; k < d[i].nparts; k++) print("        partition %d: %lu MB %s %s\n", k + 1, d[i].part[k].bytes >> 20, d[i].part[k].fs, d[i].part[k].label);
+        }
+    }
+    else if (!strcmp(line, "install")) {
+        int id = (int)katoi(arg); const char *m = arg; while (*m && *m != ' ') m++; while (*m == ' ') m++;
+        int mode = !strcmp(m, "update") ? INSTALL_UPDATE : !strcmp(m, "erase") ? INSTALL_ERASE : 0;
+        if (!id || !mode) { puts_c("usage: install <disk number> erase|update   (see 'disks'; erase wipes the whole disk)\n", C_RED); }
+        else {
+            int r = sys_install(id, mode);
+            if (r) { puts_c(fs_strerror(r), C_RED); putch('\n'); }
+            else {
+                struct dunc_install st; int last = -1;
+                do {
+                    sys_sleep(250); sys_install_status(&st);
+                    if (st.percent != last) { print("  %3d%%  %s\n", st.percent, st.msg); last = st.percent; draw(); }
+                } while (st.state == 1);
+                puts_c(st.msg, st.state == 2 ? C_GREEN : C_RED); putch('\n');
+            }
+        }
+    }
     else if (!strcmp(line, "dns")) {
         struct ipaddr ip;
         if (!strcmp(arg, "auto")) { sys_set_dns(0); puts_c("DNS server: from the network\n", C_TEXT); }

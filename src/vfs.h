@@ -16,7 +16,11 @@ struct fs_ops {
 };
 
 int  vfs_mount(const char *label, const char *kind, const struct fs_ops *ops, void *vol, char *path_out);
-void vfs_unmount(void *vol);
+/* mount a folder of a volume at a path, e.g. ("/home", "/home") or ("/system/config", "/config") */
+int  vfs_mount_at(const char *at, const char *sub, const char *label, const char *kind, const struct fs_ops *ops, void *vol);
+void vfs_unmount(void *vol);                             /* removes every mount of that volume */
+void vfs_unmount_at(const char *at);
+bool vfs_home_persistent(void);                          /* /home is on a disk (else in memory) */
 int  vfs_list(const char *path, struct dunc_dirent *out, int max);
 long vfs_read(const char *path, void *buf, uint64_t off, uint64_t len);
 long vfs_write(const char *path, const void *buf, uint64_t len);

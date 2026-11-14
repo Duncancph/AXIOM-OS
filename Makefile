@@ -77,9 +77,17 @@ build/initrd.tar: $(shell find rootfs -type f) $(REPO_PKGS) repo/index.txt $(K_S
 	mkdir -p build/rootfs/system/certs/user && cp $(CA_BUNDLE) build/rootfs/system/certs/ca-bundle.crt
 	tar --format=ustar --owner=0 --group=0 -cf $@ -C build/rootfs .
 
-duncos.iso: build/thane.elf build/initrd.tar iso/boot/grub/grub.cfg
+# The boot loader the installer puts on disks: GRUB with its modules built in, finds /duncos on any disk
+GRUB_MODS := part_gpt part_msdos fat multiboot2 normal search search_fs_file configfile all_video gfxterm echo sleep test
+build/bootx64.efi: tools/grub-embed.cfg
+	@mkdir -p build
+	grub-mkstandalone -O x86_64-efi -o $@ --modules="$(GRUB_MODS)" --install-modules="$(GRUB_MODS)" \
+	    --locales= --fonts= --themes= "boot/grub/grub.cfg=tools/grub-embed.cfg"
+
+duncos.iso: build/thane.elf build/initrd.tar build/bootx64.efi iso/boot/grub/grub.cfg
 	cp build/thane.elf iso/boot/thane.elf
 	cp build/initrd.tar iso/boot/initrd.tar
+	cp build/bootx64.efi iso/boot/bootx64.efi
 	grub-mkrescue -o $@ iso 2>/dev/null
 
 QEMU := qemu-system-x86_64 -m 1G -device qemu-xhci -device usb-kbd -device usb-mouse -serial stdio
@@ -89,7 +97,7 @@ run-uefi: duncos.iso
 	$(QEMU) -bios /usr/share/ovmf/OVMF.fd -cdrom $<
 
 clean:
-	rm -rf build iso/boot/thane.elf iso/boot/initrd.tar duncos.iso
+	rm -rf build iso/boot/thane.elf iso/boot/initrd.tar iso/boot/bootx64.efi duncos.iso
 
 test:
 	@mkdir -p build/test

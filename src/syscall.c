@@ -3,6 +3,7 @@
 #include "kernel.h"
 #include "vfs.h"
 #include "net.h"
+#include "disk.h"
 
 #define UOK(p, n, w) user_ok(current->pml4, (const void *)(p), (n), (w))
 
@@ -265,6 +266,19 @@ uint64_t syscall_dispatch(struct frame *f) {
         ksnprintf(s->kernel, sizeof s->kernel, "%s %s", KERNEL_NAME, OS_VERSION);
         return 0;
     }
+    case SYS_DISK_LIST: {
+        int max = b > 8 ? 8 : (int)b;
+        if (max < 1 || !UOK(a, max * sizeof(struct dunc_disk), true)) return (uint64_t)-1;
+        struct dunc_disk tmp[8];
+        int n = disk_list(tmp, max);
+        memcpy((void *)a, tmp, n * sizeof tmp[0]);
+        return n;
+    }
+    case SYS_DISK_INSTALL: return (uint64_t)(int64_t)disk_install((int)a, (int)b);
+    case SYS_DISK_STATUS:
+        if (!UOK(a, sizeof(struct dunc_install), true)) return (uint64_t)-1;
+        disk_install_status((struct dunc_install *)a);
+        return 0;
     case SYS_POWER:
         if (a == 0) acpi_poweroff(); else acpi_reboot();
         return (uint64_t)-1;
