@@ -38,16 +38,18 @@ static inline void app_title(struct app *a, const char *t) { sys_call(SYS_WIN_TI
 void *malloc(size_t n);
 
 /* theme */
-#define UI_BG      0x141821
-#define UI_PANEL   0x1C2230
-#define UI_PANEL2  0x232A3A
-#define UI_BORDER  0x2E3648
-#define UI_TEXT    0xE8EBF2
-#define UI_MUTED   0x8E97AA
-#define UI_ACCENT  0x4FD1E8
-#define UI_GOLD    0xFFC83D
-#define UI_GREEN   0x34D399
-#define UI_RED     0xE5484D
+/* Highland theme (common/theme_highland.h) */
+#include "../../common/theme_highland.h"
+#define UI_BG      HL_WIN_BG
+#define UI_PANEL   0x152039
+#define UI_PANEL2  0x1B2945
+#define UI_BORDER  HL_WIN_BORDER
+#define UI_TEXT    HL_TEXT
+#define UI_MUTED   HL_TEXT_FAINT
+#define UI_ACCENT  HL_ACCENT
+#define UI_GOLD    HL_GOLD
+#define UI_GREEN   HL_GREEN
+#define UI_RED     HL_RED
 
 enum { BTN_NORMAL, BTN_PRIMARY, BTN_DANGER };
 void ui_button(struct canvas *c, int x, int y, int w, int h, const char *label, int style, bool hover, bool disabled);

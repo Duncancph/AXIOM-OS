@@ -32,10 +32,10 @@ void ui_card(struct canvas *c, int x, int y, int w, int h) {
 
 void ui_button(struct canvas *c, int x, int y, int w, int h, const char *label, int style, bool hover, bool disabled) {
     uint32_t bg, fg = UI_TEXT;
-    if (style == BTN_PRIMARY) { bg = hover ? 0x7ADFF0 : UI_ACCENT; fg = 0x0A1428; }
-    else if (style == BTN_DANGER) { bg = hover ? 0xF06A6E : UI_RED; fg = 0xFFFFFF; }
-    else bg = hover ? 0x343C50 : UI_PANEL2;
-    if (disabled) { bg = 0x20263A; fg = 0x5B6378; }
+    if (style == BTN_PRIMARY) { bg = hover ? 0x7ADFF0 : UI_ACCENT; fg = HL_NAVY; }
+    else if (style == BTN_DANGER) { bg = hover ? 0xFF8A8A : UI_RED; fg = HL_NAVY; }
+    else bg = hover ? 0x24365A : UI_PANEL2;
+    if (disabled) { bg = 0x17213A; fg = 0x4A5874; }
     gfx_rrect(c, x, y, w, h, 8, bg, 255);
     if (style == BTN_NORMAL && !disabled) gfx_rrect_outline(c, x, y, w, h, 8, UI_BORDER, 255);
     const struct font *f = &font_ui_bold;

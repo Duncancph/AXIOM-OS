@@ -33,8 +33,8 @@ static void sample(void) {
 }
 
 static void graph(struct canvas *c, int x, int y, int w, int h, int *hist, uint32_t col) {
-    gfx_fill(c, x, y, w, h, 0x111520);
-    for (int g = 1; g < 4; g++) gfx_fill(c, x, y + h * g / 4, w, 1, 0x1C2230);
+    gfx_fill(c, x, y, w, h, HL_TERM_BG);
+    for (int g = 1; g < 4; g++) gfx_fill(c, x, y + h * g / 4, w, 1, UI_PANEL);
     int px = -1, py = 0;
     for (int i = 0; i < HIST; i++) {
         int gx = x + i * (w - 1) / (HIST - 1), gy = y + h - 1 - hist[i] * (h - 2) / 100;
@@ -82,7 +82,7 @@ static void draw(void) {
     static const char *st[] = { "", "Ready", "Running", "Sleeping", "Waiting", "Exiting" };
     for (int i = 0; i < nprocs && row_y(i) + 26 < WH - 24; i++) {
         int y = row_y(i);
-        if (procs[i].pid == sel_pid) gfx_rrect(c, 28, y, WW - 56, 28, 6, 0x1E3A4C, 255);
+        if (procs[i].pid == sel_pid) gfx_rrect(c, 28, y, WW - 56, 28, 6, 0x173A55, 255);
         else if (i == hover_row) gfx_rrect(c, 28, y, WW - 56, 28, 6, UI_PANEL2, 255);
         char b[48];
         ksnprintf(b, sizeof b, "%d", procs[i].pid);

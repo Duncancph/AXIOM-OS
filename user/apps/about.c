@@ -70,11 +70,14 @@ static void draw(void) {
 int main(void) {
     if (!app_open(&a, WW, WH, "Welcome to DuncOS")) return 1;
     draw();
+    bool focused = true;
     for (;;) {
         struct dunc_event e;
-        int r = sys_event(&e, 1000);
+        int r = sys_event(&e, focused ? 1000 : -1);   /* only tick the uptime while in front */
         if (r > 0 && e.type == EV_CLOSE) break;
-        if (r == 0 || e.type == EV_FOCUS) draw();   /* refresh uptime */
+        if (r > 0 && e.type == EV_BLUR) focused = false;
+        if (r > 0 && e.type == EV_FOCUS) focused = true;
+        if (r == 0 || (r > 0 && e.type == EV_FOCUS)) draw();
     }
     return 0;
 }

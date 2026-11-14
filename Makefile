@@ -3,13 +3,13 @@ LD      := ld
 NASM    := nasm
 COMMON  := -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -ffreestanding -fno-builtin \
            -fno-stack-protector -fno-pic -fno-pie -mgeneral-regs-only -m64 -nostdlib -fno-tree-loop-distribute-patterns
-KCFLAGS := $(COMMON) -mno-red-zone -mcmodel=small
+KCFLAGS := $(COMMON) -mno-red-zone -mcmodel=small -Icommon
 UCFLAGS := $(COMMON) -mcmodel=large
 LDFLAGS := -n -T src/linker.ld -nostdlib -z max-page-size=0x1000 --no-warn-rwx-segments -z noexecstack
 LIBGCC  := $(shell $(CC) -print-libgcc-file-name)
 
 APPS    := about terminal monitor bluetooth calc sandbox
-K_SRCS  := $(wildcard src/*.c) common/gfx.c common/str.c
+K_SRCS  := $(filter-out src/desktop_highland.c,$(wildcard src/*.c)) common/gfx.c common/str.c
 K_OBJS  := $(patsubst %.c,build/k/%.o,$(K_SRCS)) build/k/boot.o build/k/isr.o build/k/apps.o
 U_LIB   := build/u/crt0.o build/u/libdunc.o build/u/gfx.o build/u/str.o
 U_ELFS  := $(patsubst %,build/user/%.elf,$(APPS))

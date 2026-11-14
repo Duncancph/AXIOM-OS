@@ -20,18 +20,22 @@ with true multitasking and memory protection between apps.
 - Drivers: framebuffer, PS/2 keyboard + mouse/touchpad, USB 3 (xHCI) with USB keyboards and mice,
   USB Bluetooth (HCI), PCI, ACPI power-off/reboot, real-time clock
 
-**Desktop**
-- Compositing window manager: rounded windows with soft shadows, drag to move, minimise, close
-- Taskbar with centred dock, running-app indicators, tooltips, clock/date and Bluetooth status
-- Start menu (crown button or the Windows/Super key) with apps, Restart and Shut down
+**Desktop: the "Highland" theme** (design by Bryan Duncan: `src/desktop_highland.c`, `src/gfx.h`,
+`common/theme_highland.h`, used unchanged, wired in by `src/highland.c`)
+- Mountain-ridge wallpaper with moon, translucent top bar (crown menu, active app, Bluetooth, clock)
+- Floating dock with pixel-art app icons, running dots and tooltips
+- Compositing window manager: rounded windows with shadows and red/gold/green window buttons
+  (close, minimise; maximise is reserved for resizable windows), drag to move, focus highlight
+- Crown menu (click DuncOS in the top bar, or press the Windows/Super key) with apps, Restart and Shut down
 - Notifications, a "not responding" detector with force-close
-- Smooth (anti-aliased) Inter font for the UI, GNU Unifont for the terminal and boot screen
+- Change the colours and sizes of the whole desktop and the apps in `common/theme_highland.h`
+- GNU Unifont for the desktop chrome and terminal; Inter for app content
 - Graphical boot splash with progress bar (`src/fb_boot_logo.c`)
 
 **Apps** (each a separate, protected program)
 | App | What it does |
 |---|---|
-| Terminal | Command line: `apps`, `open <app>`, `ps`, `kill <pid>`, `date`, plus kernel commands `sysinfo`, `pci`, `usb`, `bt`, `bt scan`, `log`, `reboot`, `poweroff` |
+| Terminal (castle shell) | `fetch`, `apps`, `open <app>`, `ps`, `kill <pid>`, `date`, plus kernel commands `sysinfo`, `pci`, `usb`, `bt`, `bt scan`, `log`, `reboot`, `poweroff` |
 | System Monitor | Live CPU and memory graphs, every process with CPU % and memory, End task |
 | Bluetooth | Adapter details, scan for nearby Classic + Low Energy devices with names and signal strength |
 | Calculator | Mouse or keyboard, 6 decimal places |
@@ -82,12 +86,14 @@ src/             Thane kernel
   sched.c          tasks, preemptive scheduler, process spawn/exit/kill
   vm.c             per-process page tables, ELF loader
   syscall.c        system calls
-  desktop.c        window manager + compositor, taskbar, Start menu, notifications
+  desktop.c        window manager + compositor, crown menu, notifications, input
+  desktop_highland.c gfx.h   Highland design: wallpaper, top bar, window frames, dock
+  highland.c       connects the Highland design to the window manager; DuncOS app icons
   fb_boot_logo.c   boot splash
   xhci.c usbkbd.c  USB 3 host controller, USB keyboard/mouse
   bt.c             Bluetooth HCI
   kbd.c pci.c acpi.c rtc.c mem.c timer.c console.c shell.c ...
-common/          shared by kernel and apps: system call ABI, 2D graphics, fonts, strings
+common/          shared by kernel and apps: system call ABI, Highland theme tokens, 2D graphics, fonts, strings
 user/lib         libdunc: app runtime (system calls, windows, UI widgets)
 user/apps        the apps
 ```
