@@ -12,10 +12,11 @@ app_images:
     APP terminal, "Terminal", 0
     APP monitor, "System Monitor", 0
     APP bluetooth, "Bluetooth", 0
+    APP network, "Network", 0
     APP calc, "Calculator", 0
     APP sandbox, "Protection Test", 0
     APP about, "About DuncOS", 0
-app_count: dd 7
+app_count: dd 8
 
 id_files: db "files", 0
 title_files: db "Files", 0
@@ -27,6 +28,8 @@ id_monitor: db "monitor", 0
 title_monitor: db "System Monitor", 0
 id_bluetooth: db "bluetooth", 0
 title_bluetooth: db "Bluetooth", 0
+id_network: db "network", 0
+title_network: db "Network", 0
 id_calc: db "calc", 0
 title_calc: db "Calculator", 0
 id_sandbox: db "sandbox", 0
@@ -47,6 +50,9 @@ bin_monitor_end:
 align 16
 bin_bluetooth: incbin "build/user/bluetooth.elf"
 bin_bluetooth_end:
+align 16
+bin_network: incbin "build/user/network.elf"
+bin_network_end:
 align 16
 bin_calc: incbin "build/user/calc.elf"
 bin_calc_end:

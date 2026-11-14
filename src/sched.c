@@ -2,6 +2,7 @@
  * (250 Hz); kernel threads (the desktop) run until they sleep or yield. */
 #include "kernel.h"
 #include "vfs.h"
+#include "net.h"
 void kfree(void *p);
 
 struct task tasks[MAX_TASKS];
@@ -167,6 +168,7 @@ void task_exit(int code) {
     struct task *t = current;
     if (t->user) kprintf("[sched] '%s' (pid %d) exited with code %d\n", t->name, t->pid, code);
     wm_task_exit(t);
+    net_task_exit(t);
     t->state = PS_ZOMBIE;
     schedule();
     panic("zombie task was scheduled");
@@ -181,6 +183,7 @@ bool task_kill(int pid) {
         if (t->busy) { t->killed = true; return true; }
         kprintf("[sched] killed '%s' (pid %d)\n", t->name, t->pid);
         wm_task_exit(t);
+        net_task_exit(t);
         t->state = PS_ZOMBIE;
         return true;
     }

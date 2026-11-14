@@ -2,6 +2,7 @@
  * own page tables before the kernel touches it. */
 #include "kernel.h"
 #include "vfs.h"
+#include "net.h"
 
 #define UOK(p, n, w) user_ok(current->pml4, (const void *)(p), (n), (w))
 
@@ -119,7 +120,7 @@ uint64_t syscall_dispatch(struct frame *f) {
         return n < max ? n : max;
     }
     case SYS_FS_LIST: case SYS_FS_READ: case SYS_FS_WRITE: case SYS_FS_MKDIR: case SYS_FS_DELETE:
-    case SYS_FS_RENAME: case SYS_FS_STAT: case SYS_FS_COPY: {
+    case SYS_FS_RENAME: case SYS_FS_STAT: case SYS_FS_COPY: case SYS_FS_APPEND: {
         char p1[PATH_MAX_], p2[PATH_MAX_];
         if (!copy_str(p1, a, sizeof p1)) return (uint64_t)FS_EINVAL;
         int64_t r = FS_EINVAL;
@@ -134,6 +135,9 @@ uint64_t syscall_dispatch(struct frame *f) {
         case SYS_FS_WRITE:
             if (c <= (64u << 20) && (c == 0 || UOK(b, c, false))) r = vfs_write(p1, (const void *)b, c);
             break;
+        case SYS_FS_APPEND:
+            if (c <= (64u << 20) && (c == 0 || UOK(b, c, false))) r = vfs_append(p1, (const void *)b, c);
+            break;
         case SYS_FS_MKDIR: r = vfs_mkdir(p1); break;
         case SYS_FS_DELETE: r = vfs_delete(p1); break;
         case SYS_FS_RENAME: if (copy_str(p2, b, sizeof p2)) r = vfs_rename(p1, p2); break;
@@ -144,6 +148,50 @@ uint64_t syscall_dispatch(struct frame *f) {
         if (f->rax == SYS_FS_WRITE || f->rax == SYS_FS_DELETE || f->rax == SYS_FS_RENAME) apps_refresh();
         return (uint64_t)r;
     }
+    case SYS_NET_INFO:
+        if (!UOK(a, sizeof(struct dunc_netinfo), true)) return (uint64_t)-1;
+        net_get_info((struct dunc_netinfo *)a);
+        return 0;
+    case SYS_NET_CONFIG:
+        if (a == NETCFG_DNS) net_set_dns((uint32_t)b); else if (a == NETCFG_RENEW) net_renew();
+        return 0;
+    case SYS_NET_PING: {
+        current->busy++;
+        long r = net_ping((uint32_t)a, b > 10000 ? 10000 : (uint32_t)b);
+        current->busy--;
+        return (uint64_t)r;
+    }
+    case SYS_NET_RESOLVE: {
+        char name[128];
+        if (!copy_str(name, a, sizeof name) || !UOK(b, 4, true)) return (uint64_t)(int64_t)NET_EINVAL;
+        uint32_t ip = 0;
+        current->busy++;
+        int r = net_resolve(name, &ip);
+        current->busy--;
+        if (r == 0) *(uint32_t *)b = ip;
+        return (uint64_t)(int64_t)r;
+    }
+    case SYS_TCP_CONNECT: {
+        current->busy++;
+        int r = tcp_connect((uint32_t)a, (uint16_t)b);
+        current->busy--;
+        return (uint64_t)(int64_t)r;
+    }
+    case SYS_TCP_SEND: {
+        if (c > (16u << 20) || (c && !UOK(b, c, false))) return (uint64_t)(int64_t)NET_EINVAL;
+        current->busy++;
+        long r = tcp_send((int)a, (const void *)b, (uint32_t)c);
+        current->busy--;
+        return (uint64_t)r;
+    }
+    case SYS_TCP_RECV: {
+        if (!c || c > (16u << 20) || !UOK(b, c, true)) return (uint64_t)(int64_t)NET_EINVAL;
+        current->busy++;
+        long r = tcp_recv((int)a, (void *)b, (uint32_t)c, (int64_t)d);
+        current->busy--;
+        return (uint64_t)r;
+    }
+    case SYS_TCP_CLOSE: return (uint64_t)(int64_t)tcp_close((int)a);
     case SYS_FS_VOLUMES: {
         int max = (int)b;
         if (max <= 0 || max > 8 || !UOK(a, (uint64_t)max * sizeof(struct dunc_volume), true)) return (uint64_t)-1;

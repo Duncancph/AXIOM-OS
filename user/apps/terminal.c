@@ -138,6 +138,106 @@ static void cmd_cat(const char *arg) {
     if (cx) putch('\n');
 }
 
+static const char *strchr_(const char *s, char c) { for (; *s; s++) if (*s == c) return s; return 0; }
+
+static void cmd_ip(void) {
+    struct dunc_netinfo n; sys_netinfo(&n);
+    if (!n.present) { puts_c("No supported network adapter. DuncOS supports Intel and Realtek wired Ethernet.\n", C_GOLD); return; }
+    char a[16], m[16], g[16], d[16];
+    ip_str(n.ip, a); ip_str(n.mask, m); ip_str(n.gw, g); ip_str(n.dns, d);
+    print("  %s (%s)  ", n.adapter, n.driver);
+    puts_c(n.link ? (n.configured ? "connected\n" : "cable connected, getting an address...\n") : "no cable\n", n.configured ? C_GREEN : C_GOLD);
+    print("  MAC      %02x:%02x:%02x:%02x:%02x:%02x\n", n.mac[0], n.mac[1], n.mac[2], n.mac[3], n.mac[4], n.mac[5]);
+    if (n.configured) {
+        print("  Address  %s / %s\n  Gateway  %s\n  DNS      %s%s\n", a, m, g, d, n.dns_manual ? " (set by you)" : "");
+        print("  Lease    %u min\n", n.lease_s / 60);
+    }
+    print("  Traffic  %lu packets in (%lu KB), %lu out (%lu KB)\n", n.rx_packets, n.rx_bytes / 1024, n.tx_packets, n.tx_bytes / 1024);
+}
+
+static void cmd_ping(const char *arg) {
+    if (!*arg) { puts_c("usage: ping <host>\n", C_RED); return; }
+    uint32_t ip; int r = sys_resolve(arg, &ip);
+    if (r) { puts_c(net_strerror(r), C_RED); putch('\n'); return; }
+    char a[16]; ip_str(ip, a);
+    print("Pinging %s (%s):\n", arg, a);
+    draw();
+    int ok = 0; long best = -1, worst = 0, sum = 0;
+    for (int i = 0; i < 4; i++) {
+        uint64_t t0 = sys_time();
+        long us = sys_ping(ip, 2000);
+        if (us >= 0) {
+            ok++; sum += us; if (best < 0 || us < best) best = us; if (us > worst) worst = us;
+            print("  Reply from %s: time=%ld.%ld ms\n", a, us / 1000, (us / 100) % 10);
+        } else puts_c("  No reply (timed out)\n", C_GOLD);
+        draw();
+        uint64_t el = sys_time() - t0;
+        if (i < 3 && el < 1000) sys_sleep(1000 - el);
+    }
+    print("%d of 4 replies", ok);
+    if (ok) print(", time min %ld.%ld / avg %ld.%ld / max %ld.%ld ms", best / 1000, best / 100 % 10, sum / ok / 1000, sum / ok / 100 % 10, worst / 1000, worst / 100 % 10);
+    putch('\n');
+}
+
+static void cmd_host(const char *arg) {
+    uint32_t ip; int r = sys_resolve(arg, &ip);
+    if (r) { print("%s: ", arg); puts_c(net_strerror(r), C_RED); putch('\n'); return; }
+    char a[16]; ip_str(ip, a);
+    print("%s has address %s\n", arg, a);
+}
+
+struct dl { char path[256]; long got, total, next_report; int err; bool first; };
+static bool dl_sink(const char *d, long n, void *ctx) {
+    struct dl *x = ctx;
+    long r = x->first ? fs_write(x->path, d, n) : fs_append(x->path, d, n);
+    x->first = false;
+    if (r < 0) { x->err = (int)r; return false; }
+    x->got += n;
+    if (x->got >= x->next_report) {
+        x->next_report = x->got + 512 * 1024;
+        if (x->total > 0) print("  %ld KB of %ld KB (%ld%%)\n", x->got / 1024, x->total / 1024, x->got * 100 / x->total);
+        else print("  %ld KB\n", x->got / 1024);
+        draw();
+    }
+    return true;
+}
+
+static void cmd_get(const char *arg, bool save) {
+    char url[300], file[200] = "";
+    int k = 0; while (*arg && *arg != ' ' && k < 299) url[k++] = *arg++; url[k] = 0;
+    while (*arg == ' ') arg++;
+    if (!url[0]) { puts_c(save ? "usage: wget <url> [file]\n" : "usage: curl <url>\n", C_RED); return; }
+    int status = 0; char ct[64];
+    print("Connecting to %s ...\n", url); draw();
+    if (!save) {
+        static char body[16384];
+        long n = http_get(url, body, sizeof body, &status, ct, sizeof ct, 0, 0);
+        if (n < 0) { puts_c(http_strerror(n), C_RED); putch('\n'); return; }
+        for (long i = 0; i < n; i++) { char c = body[i]; if (c == '\n' || c == '\t' || (c >= 32 && c < 127)) putch(c); }
+        if (cx) putch('\n');
+        print("-- HTTP %d, %ld bytes%s\n", status, n, n == (long)sizeof body ? " (cut short; use wget to save it)" : "");
+        return;
+    }
+    if (*arg) strncpy0(file, arg, sizeof file);
+    else {   /* name the file after the last part of the URL */
+        const char *s = url; for (const char *p = url; *p; p++) if (*p == '/') s = p + 1;
+        if (!*s || strchr_(url + 7, '/') == 0) strncpy0(file, "index.html", sizeof file);
+        else { int j = 0; while (*s && *s != '?' && j < 60) file[j++] = *s++; file[j] = 0; }
+    }
+    static struct dl x;
+    memset(&x, 0, sizeof x);
+    path_resolve(cwd, file, x.path, sizeof x.path);
+    x.first = true; x.next_report = 512 * 1024;
+    uint64_t t0 = sys_time();
+    long n = http_fetch(url, dl_sink, &x, &status, &x.total, ct, sizeof ct, 0, 0);
+    if (n < 0) { puts_c(http_strerror(n), C_RED); putch('\n'); return; }
+    if (x.err) { puts_c(fs_strerror(x.err), C_RED); putch('\n'); return; }
+    if (x.first) fs_write(x.path, "", 0);
+    uint64_t ms = sys_time() - t0; if (!ms) ms = 1;
+    print("HTTP %d - saved %ld bytes to %s (%lu KB/s)\n", status, x.got, file, (uint64_t)x.got * 1000 / 1024 / ms);
+    if (x.total > 0 && x.got < x.total) puts_c("Warning: the download stopped early.\n", C_GOLD);
+}
+
 static void report(int r) { if (r < 0) { puts_c(fs_strerror(r), C_RED); putch('\n'); } }
 
 static bool app_installed(const char *id) {
@@ -146,8 +246,6 @@ static bool app_installed(const char *id) {
     return false;
 }
 
-static const char *strchr_(const char *s, char c) { for (; *s; s++) if (*s == c) return s; return 0; }
-
 static void cmd_help(void) {
     puts_c("Terminal commands\n", C_GOLD);
     static const char *h[][2] = {
@@ -155,6 +253,8 @@ static void cmd_help(void) {
         {"mkdir <name>", "make a folder"}, {"rm <path>", "delete a file or folder"}, {"mv <a> <b>", "move or rename"},
         {"cp <a> <b>", "copy"}, {"touch <file>", "create an empty file"}, {"echo hi > f", "write text to a file"},
         {"edit <file>", "open a file in Editor"}, {"df", "drives and free space"},
+        {"ip", "network status"}, {"ping <host>", "test a connection"}, {"host <name>", "look up an address"},
+        {"wget <url> [f]", "download a web page or file"}, {"curl <url>", "show a web page"}, {"dns <ip|auto>", "choose a DNS server"},
         {"apps", "list installed apps"}, {"open <app>", "start an app, e.g. 'open calc'"},
         {"ps", "list running processes"}, {"kill <pid>", "stop a process"},
         {"date", "show the date and time"}, {"fetch", "system summary"}, {"clear", "clear the screen"}, {"exit", "close this terminal"} };
@@ -196,12 +296,27 @@ static void run(char *line) {
     else if (!strcmp(line, "open") || !strcmp(line, "run") || !strcmp(line, "start")) {
         char app[32], rest[200] = "", full[256] = "";
         int k = 0; while (arg[k] && arg[k] != ' ' && k < 31) { app[k] = arg[k]; k++; } app[k] = 0;
-        if (arg[k] == ' ') { strncpy0(rest, arg + k + 1, sizeof rest); path_resolve(cwd, rest, full, sizeof full); }
+        if (arg[k] == ' ') {
+            strncpy0(rest, arg + k + 1, sizeof rest);
+            bool is_url = false; for (const char *s = rest; *s; s++) if (s[0] == ':' && s[1] == '/' && s[2] == '/') is_url = true;
+            if (is_url) strncpy0(full, rest, sizeof full); else path_resolve(cwd, rest, full, sizeof full);
+        }
         int pid = sys_spawn_arg(app, full);
         if (pid < 0) { puts_c("No such app. Type 'apps' for the list.\n", C_RED); }
         else print("Started %s (pid %d)\n", app, pid);
     }
     else if (!strcmp(line, "pwd")) print("%s\n", cwd);
+    else if (!strcmp(line, "ip") || !strcmp(line, "ifconfig")) cmd_ip();
+    else if (!strcmp(line, "ping")) cmd_ping(arg);
+    else if (!strcmp(line, "host") || !strcmp(line, "nslookup")) cmd_host(arg);
+    else if (!strcmp(line, "wget")) cmd_get(arg, true);
+    else if (!strcmp(line, "curl")) cmd_get(arg, false);
+    else if (!strcmp(line, "dns")) {
+        uint32_t ip;
+        if (!strcmp(arg, "auto")) { sys_set_dns(0); puts_c("DNS server: from the network (DHCP)\n", C_TEXT); }
+        else if (ip_parse(arg, &ip)) { sys_set_dns(ip); print("DNS server set to %s\n", arg); }
+        else puts_c("usage: dns <a.b.c.d> | dns auto\n", C_RED);
+    }
     else if (!strcmp(line, "cd")) {
         char path[256]; path_resolve(cwd, *arg ? arg : "~", path, sizeof path);
         struct dunc_stat st;

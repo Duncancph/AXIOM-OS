@@ -593,7 +593,53 @@ static void f_space(void *vol, uint64_t *total, uint64_t *freeb) {
     *freeb = (uint64_t)v->free_count * v->cbytes;
 }
 
-const struct fs_ops fat_ops = { f_list, f_read, f_write, f_mkdir, f_remove, f_rename, f_stat, f_space };
+static long f_append(void *vol, const char *rel, const void *buf, uint64_t len) {
+    struct fatvol *v = vol;
+    struct dent *d = kmalloc(sizeof *d);
+    if (!d) return FS_ENOSPC;
+    int r = lookup(v, rel, d);
+    if (!r && (d->attr & 0x10)) r = FS_EISDIR;
+    if (!r && (uint64_t)d->size + len > 0xFFFFFFFFULL) r = FS_ENOSPC;
+    if (r) { kfree(d); return r; }
+    uint8_t *cb = kmalloc(v->cbytes);
+    uint32_t size = d->size, first = d->clus, last = 0, c = first;
+    for (int guard = 0; c >= 2 && c < EOC && guard < 4000000; guard++) { last = c; if (fat_get(v, c, &c)) { r = FS_EIO; break; } }
+    uint64_t done = 0;
+    uint32_t used = size % v->cbytes;
+    if (!r && last && used) {                      /* top up the partly used last cluster */
+        if (rd(v, clus_lba(v, last), v->spc, cb)) r = FS_EIO;
+        else {
+            uint64_t n = v->cbytes - used < len ? v->cbytes - used : len;
+            memcpy(cb + used, buf, n);
+            if (wr(v, clus_lba(v, last), v->spc, cb)) r = FS_EIO;
+            done = n;
+        }
+    }
+    if (!r && done < len) {                        /* then add new clusters */
+        uint32_t need = (uint32_t)((len - done + v->cbytes - 1) / v->cbytes), nc;
+        if ((r = alloc_chain(v, need, &nc, false)) == FS_OK) {
+            uint32_t k = nc;
+            for (; !r && done < len; done += v->cbytes) {
+                uint64_t n = len - done < v->cbytes ? len - done : v->cbytes;
+                memcpy(cb, (const uint8_t *)buf + done, n);
+                if (n < v->cbytes) memset(cb + n, 0, v->cbytes - n);
+                if (wr(v, clus_lba(v, k), v->spc, cb) || fat_get(v, k, &k)) r = FS_EIO;
+            }
+            if (!r) { if (last) r = fat_set(v, last, nc); else first = nc; }
+            if (r) free_chain(v, nc);
+        }
+    }
+    if (!r) {
+        uint8_t *e = d->raw; uint16_t t, dt; fat_time(&t, &dt);
+        w16(e + 20, first >> 16); w16(e + 26, first & 0xFFFF); w32(e + 28, size + (uint32_t)len);
+        w16(e + 22, t); w16(e + 24, dt); e[11] |= 0x20;
+        r = ent_write(v, d->slot_clus[d->nslots - 1], d->slot_idx[d->nslots - 1], e);
+    }
+    kfree(cb); kfree(d);
+    return r ? r : (long)len;
+}
+
+const struct fs_ops fat_ops = { f_list, f_read, f_write, f_mkdir, f_remove, f_rename, f_stat, f_space, f_append };
 
 /* ---------------- mount ---------------- */
 static bool is_fat32_vbr(const uint8_t *b) {

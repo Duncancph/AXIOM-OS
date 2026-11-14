@@ -22,6 +22,10 @@ with true multitasking and memory protection between apps.
 - File system: an in-memory system disk (`/home`, `/apps`, `/system`) plus FAT32 USB drives at `/usb`
   (read/write, long file names, MBR/GPT/unpartitioned), mounted and removed as you plug them in
 - Apps can be installed from files: the `clan` package manager installs them into `/apps`
+- **Networking**: wired Ethernet with its own TCP/IP stack: Ethernet, ARP, IPv4, ICMP (ping), UDP,
+  DHCP (automatic address), DNS, and TCP (retransmission, flow control, orderly close).
+  Network cards: Intel e1000 / e1000e / I217-I219 (tested: 82540EM, 82574L) and Realtek RTL8111/8168
+  (written from the datasheet, not yet tested on hardware). Cable unplug/replug is detected.
 
 **Desktop: the "Highland" theme** (design by Bryan Duncan: `src/desktop_highland.c`, `src/gfx.h`,
 `common/theme_highland.h`, used unchanged, wired in by `src/highland.c`)
@@ -40,9 +44,10 @@ with true multitasking and memory protection between apps.
 | App | What it does |
 |---|---|
 | Files | Your Highland mockup made real: places sidebar, USB drives, folder grid; open, new folder, rename, copy/paste (also to and from USB drives), delete to Trash, empty Trash |
-| Terminal (castle shell) | `ls`, `cd`, `cat`, `mkdir`, `rm`, `mv`, `cp`, `touch`, `echo ... > file`, `edit`, `df`, `fetch`, `apps`, `open <app> [file]`, `ps`, `kill`, `date`, `clan`, plus `sysinfo`, `pci`, `usb`, `bt`, `bt scan`, `log`, `reboot`, `poweroff` |
+| Terminal (castle shell) | `ls`, `cd`, `cat`, `mkdir`, `rm`, `mv`, `cp`, `touch`, `echo ... > file`, `edit`, `df`, `ip`, `ping`, `host`, `wget`, `curl`, `dns`, `fetch`, `apps`, `open <app> [file]`, `ps`, `kill`, `date`, `clan`, plus `sysinfo`, `pci`, `usb`, `bt`, `bt scan`, `log`, `reboot`, `poweroff` |
 | System Monitor | Live CPU and memory graphs, every process with CPU % and memory, End task |
 | Bluetooth | Adapter details, scan for nearby Classic + Low Energy devices with names and signal strength |
+| Network | Connection status, address, gateway, DNS, live traffic graph, Test connection, Renew address, choose a DNS server |
 | Calculator | Mouse or keyboard, 6 decimal places |
 | Protection Test | Deliberately crashes or freezes itself to show the kernel containing it |
 | About DuncOS | Welcome screen with system details |
@@ -52,6 +57,7 @@ with true multitasking and memory protection between apps.
 |---|---|
 | editor 0.3 | Text editor: line numbers, save / save as, unsaved-changes prompt (`edit <file>` in castle, or double-click a file in Files) |
 | clock 1.0 | Analog and digital clock |
+| web 0.1 | Web browser for `http://` sites: headings, text, bold, lists, links, back, address bar. Try http://info.cern.ch, the first website |
 
 ## Put it on a PC
 
@@ -71,10 +77,14 @@ with true multitasking and memory protection between apps.
   implemented yet; Realtek, Broadcom and CSR USB dongles generally work without it. Bluetooth can scan
   but not pair or connect yet.
 - **Touchpads** work only if they appear as a PS/2 device; I2C touchpads (common on newer laptops) don't yet.
-- No networking or sound yet. One CPU core is used. Kernel threads are cooperative; apps are preemptive.
+- **No HTTPS yet.** Secure (`https://`) sites need TLS encryption, so Web and `wget` work with `http://`
+  addresses only. Most of today's web is HTTPS, so this is the next networking project.
+- **No Wi-Fi.** Wired Ethernet only. Wi-Fi chips need vendor firmware plus an 802.11/WPA2 stack.
+- Networking is IPv4 only (no IPv6), without IP fragments; the web browser shows text and links only.
+- No sound yet. One CPU core is used. Kernel threads are cooperative; apps are preemptive.
 - Needs a 32-bit graphics mode (any UEFI PC; most BIOS PCs). Otherwise it falls back to the text shell.
-- Tested in QEMU (UEFI and BIOS, USB 2/3 devices, a USB hub, USB drive hot-plug). Not yet tested on
-  physical hardware.
+- Tested in QEMU (UEFI and BIOS, USB 2/3 devices, a USB hub, USB drive hot-plug, Intel e1000/e1000e
+  networking against local web and DNS servers). Not yet tested on physical hardware.
 
 ## Build
 
@@ -104,6 +114,8 @@ src/             Thane kernel
   vfs.c kmalloc.c  file system layer (memory disk + mounted drives), kernel heap
   apps.c           app registry and the clan package manager
   msc.c fat.c      USB flash drives (Bulk-Only/SCSI) and the FAT32 file system
+  net.c            TCP/IP stack: Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP
+  nic_e1000.c nic_rtl8168.c   network card drivers
   syscall.c        system calls
   desktop.c        window manager + compositor, crown menu, notifications, input
   desktop_highland.c gfx.h   Highland design: wallpaper, top bar, window frames, dock
@@ -113,15 +125,15 @@ src/             Thane kernel
   bt.c             Bluetooth HCI
   kbd.c pci.c acpi.c rtc.c mem.c timer.c console.c shell.c ...
 common/          shared by kernel and apps: system call ABI, Highland theme tokens, 2D graphics, fonts, strings
-user/lib         libdunc: app runtime (system calls, windows, UI widgets)
-user/apps        the apps (editor.c and clock.c are clan packages, listed in repo/index.txt)
+user/lib         libdunc: app runtime (system calls, windows, UI widgets, HTTP client)
+user/apps        the apps (editor.c, clock.c and web.c are clan packages, listed in repo/index.txt)
 rootfs/          files copied onto the system disk at start-up
 ```
 
 ## Roadmap
 
-1. Persistent system disk (SATA/AHCI and NVMe drivers), exFAT for big USB drives
-2. Intel/MediaTek Bluetooth firmware loading; Bluetooth pairing and connections; Bluetooth keyboards/mice
-3. I2C-HID touchpads (needs an ACPI interpreter)
-4. Networking (Ethernet, then Wi-Fi), a browser
-5. Multi-core scheduling, sound
+1. HTTPS (TLS 1.3), so the browser and clan can reach today's web
+2. Persistent system disk (SATA/AHCI and NVMe drivers), exFAT for big USB drives
+3. Intel/MediaTek Bluetooth firmware loading; Bluetooth pairing and connections
+4. Wi-Fi; I2C-HID touchpads (needs an ACPI interpreter)
+5. Multi-core scheduling, sound, IPv6

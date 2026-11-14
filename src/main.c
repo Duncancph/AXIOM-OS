@@ -1,5 +1,6 @@
 #include "kernel.h"
 #include "vfs.h"
+#include "net.h"
 
 struct bootinfo bootinfo;
 
@@ -87,6 +88,8 @@ void kmain(uint32_t magic, uint64_t mbi) {
     LOG_OK("PCI: %d devices\n", pci_count);
     boot_progress(35);
     xhci_init_all();
+    boot_progress(70);
+    net_init();
     if (!bt_present()) LOG_INFO("No USB Bluetooth adapter detected\n");
     boot_progress(80);
 
@@ -99,6 +102,7 @@ void kmain(uint32_t magic, uint64_t mbi) {
     sched_init();
     task_create_kernel("Desktop", desktop_thread, 0);
     task_create_kernel("USB", usb_thread, 0);
+    task_create_kernel("Network", net_thread, 0);
     task_spawn("about");
     boot_progress(100);
     sleep_ms(400);

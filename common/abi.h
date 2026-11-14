@@ -13,6 +13,7 @@ enum {
     SYS_SPAWN, SYS_PROCS, SYS_KILL, SYS_KCMD, SYS_BT, SYS_SYSINFO, SYS_POWER, SYS_RTC, SYS_NOTIFY,
     SYS_FS_LIST, SYS_FS_READ, SYS_FS_WRITE, SYS_FS_MKDIR, SYS_FS_DELETE, SYS_FS_RENAME, SYS_FS_STAT,
     SYS_FS_VOLUMES, SYS_GETARG, SYS_WIN_RESIZE, SYS_APPS, SYS_FS_COPY,
+    SYS_FS_APPEND, SYS_NET_INFO, SYS_NET_CONFIG, SYS_NET_PING, SYS_NET_RESOLVE, SYS_TCP_CONNECT, SYS_TCP_SEND, SYS_TCP_RECV, SYS_TCP_CLOSE,
     SYS_COUNT
 };
 
@@ -54,3 +55,17 @@ struct dunc_app { char id[24], name[32]; int installed; };
 
 /* window flags */
 #define WIN_RESIZABLE 1
+
+/* ---- networking ---- */
+/* IPv4 addresses are kept in network byte order: a.b.c.d == a | b<<8 | c<<16 | d<<24 */
+#define IP4(a, b, c, d) ((uint32_t)(a) | (uint32_t)(b) << 8 | (uint32_t)(c) << 16 | (uint32_t)(d) << 24)
+struct dunc_netinfo {
+    int present, link, configured, dns_manual;
+    char adapter[48], driver[24];
+    uint8_t mac[6];
+    uint32_t ip, mask, gw, dns, lease_s;
+    uint64_t rx_packets, tx_packets, rx_bytes, tx_bytes;
+};
+enum { NET_OK = 0, NET_ENODEV = -1, NET_ENOTCONN = -2, NET_ETIMEDOUT = -3, NET_EREFUSED = -4, NET_ERESET = -5,
+       NET_ENOTFOUND = -6, NET_EINVAL = -7, NET_ENOMEM = -8, NET_EAGAIN = -9 };
+enum { NETCFG_DNS, NETCFG_RENEW };

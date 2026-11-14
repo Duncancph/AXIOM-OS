@@ -12,6 +12,7 @@ struct fs_ops {
     int  (*rename)(void *vol, const char *from, const char *to);
     int  (*stat)(void *vol, const char *rel, struct dunc_stat *st);
     void (*space)(void *vol, uint64_t *total, uint64_t *free);
+    long (*append)(void *vol, const char *rel, const void *buf, uint64_t len);   /* file must exist */
 };
 
 int  vfs_mount(const char *label, const char *kind, const struct fs_ops *ops, void *vol, char *path_out);
@@ -19,6 +20,7 @@ void vfs_unmount(void *vol);
 int  vfs_list(const char *path, struct dunc_dirent *out, int max);
 long vfs_read(const char *path, void *buf, uint64_t off, uint64_t len);
 long vfs_write(const char *path, const void *buf, uint64_t len);
+long vfs_append(const char *path, const void *buf, uint64_t len);   /* creates the file if missing */
 int  vfs_mkdir(const char *path);
 int  vfs_delete(const char *path);                       /* recursive */
 int  vfs_rename(const char *from, const char *to);       /* works across volumes */

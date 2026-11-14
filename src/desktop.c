@@ -7,6 +7,7 @@
 #include "../common/theme_highland.h"
 #include "font8x16.h"
 #include "highland.h"
+#include "net.h"
 
 #define TITLE (HL_TITLE_H + 1)          /* content starts below the title bar + divider */
 #define MAX_WIN 32
@@ -329,6 +330,16 @@ static void compose(struct rect r) {
         gfx_line(&cv, bx, cy - 7, bx, cy + 7, bc, 1);
         gfx_line(&cv, bx, cy - 7, bx + 4, cy - 3, bc, 1); gfx_line(&cv, bx + 4, cy - 3, bx - 4, cy + 4, bc, 1);
         gfx_line(&cv, bx - 4, cy - 4, bx + 4, cy + 3, bc, 1); gfx_line(&cv, bx + 4, cy + 3, bx, cy + 7, bc, 1);
+        /* network: two linked boxes, bright when connected */
+        int nx = bx - 30;
+        uint32_t nc = net_ready() ? HL_TEXT_DIM : 0x3A4560;
+        if (net_present()) {
+            gfx_rrect_outline(&cv, nx - 4, cy - 8, 8, 6, 1, nc, 255);
+            gfx_rrect_outline(&cv, nx - 10, cy + 2, 8, 6, 1, nc, 255);
+            gfx_rrect_outline(&cv, nx + 2, cy + 2, 8, 6, 1, nc, 255);
+            gfx_fill(&cv, nx, cy - 2, 1, 2, nc); gfx_fill(&cv, nx - 6, cy, 13, 1, nc);
+            gfx_fill(&cv, nx - 6, cy, 1, 2, nc); gfx_fill(&cv, nx + 6, cy, 1, 2, nc);
+        }
     }
     if (overlap(r, dock_area())) {
         int running[HL_MAX_DOCK]; const char *icons[HL_MAX_DOCK];
@@ -787,7 +798,7 @@ void desktop_thread(void *arg) {
             last_check = now;
             char app[48], clk[32], sig[96];
             bar_text(app, sizeof app, clk, sizeof clk);
-            ksnprintf(sig, sizeof sig, "%s|%s", app, clk);
+            ksnprintf(sig, sizeof sig, "%s|%s|%d", app, clk, net_present() + 2 * net_ready());
             if (strcmp(sig, bar_sig)) { strncpy0(bar_sig, sig, sizeof bar_sig); damage_r(bar_rect()); }
             int rs = HL_NAPPS << 20;
             for (int i = 0; i < HL_NAPPS; i++) if (app_running(i)) rs |= 1 << i;

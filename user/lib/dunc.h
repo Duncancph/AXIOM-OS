@@ -27,10 +27,37 @@ static inline long fs_write(const char *p, const void *buf, uint64_t len) { retu
 static inline int fs_mkdir(const char *p) { return sys_call(SYS_FS_MKDIR, (long)p, 0, 0, 0, 0); }
 static inline int fs_delete(const char *p) { return sys_call(SYS_FS_DELETE, (long)p, 0, 0, 0, 0); }
 static inline int fs_rename(const char *a, const char *b) { return sys_call(SYS_FS_RENAME, (long)a, (long)b, 0, 0, 0); }
+static inline long fs_append(const char *p, const void *buf, uint64_t len) { return sys_call(SYS_FS_APPEND, (long)p, (long)buf, len, 0, 0); }
 static inline int fs_copy(const char *a, const char *b) { return sys_call(SYS_FS_COPY, (long)a, (long)b, 0, 0, 0); }
 static inline int fs_stat(const char *p, struct dunc_stat *st) { return sys_call(SYS_FS_STAT, (long)p, (long)st, 0, 0, 0); }
 static inline int fs_volumes(struct dunc_volume *v, int max) { return sys_call(SYS_FS_VOLUMES, (long)v, max, 0, 0, 0); }
 const char *fs_strerror(int e);
+
+/* networking */
+static inline void sys_netinfo(struct dunc_netinfo *n) { sys_call(SYS_NET_INFO, (long)n, 0, 0, 0, 0); }
+static inline void sys_set_dns(uint32_t ip) { sys_call(SYS_NET_CONFIG, NETCFG_DNS, ip, 0, 0, 0); }
+static inline void sys_net_renew(void) { sys_call(SYS_NET_CONFIG, NETCFG_RENEW, 0, 0, 0, 0); }
+static inline long sys_ping(uint32_t ip, uint32_t ms) { return sys_call(SYS_NET_PING, ip, ms, 0, 0, 0); }
+static inline int sys_resolve(const char *name, uint32_t *ip) { return sys_call(SYS_NET_RESOLVE, (long)name, (long)ip, 0, 0, 0); }
+static inline int tcp_open(uint32_t ip, int port) { return sys_call(SYS_TCP_CONNECT, ip, port, 0, 0, 0); }
+static inline long tcp_write(int h, const void *b, uint32_t n) { return sys_call(SYS_TCP_SEND, h, (long)b, n, 0, 0); }
+static inline long tcp_read(int h, void *b, uint32_t n, long timeout_ms) { return sys_call(SYS_TCP_RECV, h, (long)b, n, timeout_ms, 0); }
+static inline int tcp_shut(int h) { return sys_call(SYS_TCP_CLOSE, h, 0, 0, 0, 0); }
+const char *net_strerror(int e);
+void ip_str(uint32_t ip, char *out);          /* out: at least 16 bytes */
+bool ip_parse(const char *s, uint32_t *out);
+
+/* HTTP (http:// only for now). Returns the body length (truncated to max), or a negative error.
+ * Follows redirects. status/ctype/final_url may be NULL. */
+#define HTTP_EHTTPS -20
+#define HTTP_EURL -21
+#define HTTP_EBAD -22
+long http_get(const char *url, char *body, long max, int *status, char *ctype, int ctlen, char *final_url, int fulen);
+/* Streaming version: sink() receives the body piece by piece (return false to stop).
+ * *total is set to Content-Length when the server sends it, else -1. Returns bytes received or an error. */
+typedef bool (*http_sink)(const char *data, long len, void *ctx);
+long http_fetch(const char *url, http_sink sink, void *ctx, int *status, long *total, char *ctype, int ctlen, char *final_url, int fulen);
+const char *http_strerror(long e);
 /* join a directory and a name / resolve a user path (supports ~, ., ..) into out */
 void path_resolve(const char *cwd, const char *in, char *out, int n);
 static inline int sys_procs(struct procinfo *p, int max) { return sys_call(SYS_PROCS, (long)p, max, 0, 0, 0); }

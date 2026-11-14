@@ -225,6 +225,34 @@ long vfs_write(const char *path, const void *buf, uint64_t len) {
     return r;
 }
 
+long vfs_append(const char *path, const void *buf, uint64_t len) {
+    struct dunc_stat st;
+    if (vfs_stat(path, &st) == FS_ENOENT) return vfs_write(path, buf, len);
+    if (st.is_dir) return FS_EISDIR;
+    struct path p; char rel[PATH_MAX_];
+    if (!parse(path, &p) || p.n == 0) return FS_EINVAL;
+    lock();
+    long r;
+    struct mount *m = route(&p, rel, sizeof rel);
+    if (m) r = m->ops->append ? m->ops->append(m->vol, rel, buf, len) : FS_EROFS;
+    else {
+        struct vnode *v = walk(&p, p.n);
+        if (!v) r = FS_ENOENT;
+        else {
+            uint8_t *nd = kmalloc(v->size + len ? v->size + len : 1);
+            if (!nd) r = FS_ENOSPC;
+            else {
+                memcpy(nd, v->data, v->size); memcpy(nd + v->size, buf, len);
+                kfree(v->data); v->data = nd; v->size += len; v->cap = v->size; ram_used += len;
+                r = (long)len;
+            }
+        }
+    }
+    if (r >= 0) notify_changed();
+    unlock();
+    return r;
+}
+
 int vfs_mkdir(const char *path) {
     struct path p; char rel[PATH_MAX_];
     if (!parse(path, &p) || p.n == 0 || !valid_name(p.c[p.n - 1])) return FS_EINVAL;

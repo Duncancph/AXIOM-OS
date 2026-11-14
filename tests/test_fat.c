@@ -71,6 +71,15 @@ int main(int argc, char **argv) {
     CHECK(o->write(v, "/delete me.txt", "bye\n", 4) == 4 && o->remove(v, "/delete me.txt") == 0, "delete file");
     CHECK(o->stat(v, "/delete me.txt", &st) == FS_ENOENT, "deleted gone");
     for (int i = 0; i < 40; i += 2) { char p[96]; snprintf(p, sizeof p, "/My Folder/Sub dir/document number %02d.txt", i); CHECK(o->remove(v, p) == 0, "remove %d", i); }
+    /* append: across cluster boundaries, to an empty file, to a file with exact cluster size */
+    CHECK(o->write(v, "/log.txt", "start\n", 6) == 6, "append base");
+    for (int i = 0; i < 300; i++) { char t[32]; int n = snprintf(t, sizeof t, "line %03d\n", i); CHECK(o->append(v, "/log.txt", t, n) == n, "append %d", i); }
+    CHECK(o->stat(v, "/log.txt", &st) == 0 && st.size == 6 + 300 * 9, "append size %lu", st.size);
+    r = o->read(v, "/log.txt", buf, 6 + 299 * 9, 9);
+    CHECK(r == 9 && !memcmp(buf, "line 299\n", 9), "append content");
+    CHECK(o->append(v, "/empty file.txt", big, 1000) == 1000 && o->read(v, "/empty file.txt", buf, 0, 2000) == 1000 && !memcmp(buf, big, 1000), "append to empty");
+    CHECK(o->write(v, "/exact.bin", big, 512) == 512 && o->append(v, "/exact.bin", big + 512, 700) == 700, "append after exact cluster");
+    CHECK(o->read(v, "/exact.bin", buf, 0, 2000) == 1212 && !memcmp(buf, big, 1212), "exact content");
     uint64_t tot, fr; o->space(v, &tot, &fr);
     printf("space: %lu MB total, %lu KB free; %ld sector reads, %ld writes\n", tot >> 20, fr >> 10, reads, writes);
     fat_unmount(v);

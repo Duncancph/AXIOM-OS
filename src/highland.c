@@ -44,6 +44,13 @@ static const char *ICON_CLOCK[16] = {
     "..#..........#..", "...##......##...", ".....######.....", "................",
 };
 
+static const char *ICON_NETWORK[16] = {
+    "................", "......####......", "......#..#......", "......####......",
+    ".......##.......", ".......##.......", "..############..", "..#....##....#..",
+    "..#.........#...", ".####......####.", ".#..#......#..#.", ".####......####.",
+    "................", "................", "................", "................",
+};
+
 struct named_icon { const char *name; const char **rows; uint32_t bg, fg; };
 static const struct named_icon ICONS[] = {
     { "folder",    ICON_FOLDER,    0x1C3A52u, HL_CYAN   },
@@ -56,6 +63,7 @@ static const struct named_icon ICONS[] = {
     { "code",      ICON_CODE,      0x2A1F3Du, 0xA78BFAu },
     { "clock",     ICON_CLOCK,     0x1E2A44u, 0x8BE3F2u },
     { "globe",     ICON_GLOBE,     0x1E2A44u, 0x8BE3F2u },
+    { "network",   ICON_NETWORK,   0x123326u, HL_GREEN  },
     { "photo",     ICON_PHOTO,     0x3A2A12u, HL_GOLD   },
     { "gear",      ICON_GEAR,      0x1F2937u, 0xCBD5E1u },
 };
