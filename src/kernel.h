@@ -3,7 +3,11 @@
 #include <stddef.h>
 #include <stdarg.h>
 
-#define EMBER_VERSION "0.1"
+#include "../common/abi.h"
+
+#define OS_NAME "DuncOS"
+#define KERNEL_NAME "Thane"
+#define OS_VERSION "0.1"
 
 typedef int bool;
 #define true 1
@@ -31,19 +35,10 @@ static inline void mmio_w64(volatile void *a, uint64_t v) {
     ((volatile uint32_t *)a)[1] = (uint32_t)(v >> 32);
 }
 
-/* ---- lib.c ---- */
-void *memset(void *d, int c, size_t n);
-void *memcpy(void *d, const void *s, size_t n);
-void *memmove(void *d, const void *s, size_t n);
-int memcmp(const void *a, const void *b, size_t n);
-size_t strlen(const char *s);
-int strcmp(const char *a, const char *b);
-int strncmp(const char *a, const char *b, size_t n);
-char *strncpy0(char *d, const char *s, size_t n);   /* always NUL-terminates */
-int kvsnprintf(char *buf, size_t n, const char *fmt, va_list ap);
-int ksnprintf(char *buf, size_t n, const char *fmt, ...);
+/* ---- common/str.c + lib.c ---- */
+#include "../common/str.h"
 void kprintf(const char *fmt, ...);
-long katoi(const char *s);
+void panic(const char *msg) __attribute__((noreturn));
 
 /* ---- serial.c ---- */
 void serial_init(void);
@@ -60,6 +55,8 @@ void console_set_color(int fg);
 void console_clear(void);
 void console_cursor(bool on);
 void console_info(char *buf, size_t n);
+void console_gui_mode(void);
+void console_log_read(char *buf, size_t n);
 extern bool console_has_fb;
 
 /* ---- multiboot / boot info ---- */
@@ -78,8 +75,11 @@ extern struct bootinfo bootinfo;
 
 /* ---- mem.c ---- */
 void mem_init(void);
-void *page_alloc(size_t pages);      /* zeroed, 4 KiB aligned, below 4 GiB, never freed */
+void *page_alloc(size_t pages);      /* zeroed, 4 KiB aligned, below 4 GiB; NULL if out of memory */
+void *page_alloc_or_panic(size_t pages);
+void page_free(void *page);          /* single 4 KiB page */
 void map_mmio(uint64_t phys, uint64_t size);
+void map_mmio_flags(uint64_t phys, uint64_t size, uint64_t cache);
 uint64_t mem_total(void);
 uint64_t mem_used(void);
 
@@ -87,13 +87,19 @@ uint64_t mem_used(void);
 void idt_init(void);
 void timer_init(void);
 uint64_t uptime_ms(void);
+uint64_t uptime_us(void);
 void sleep_ms(uint64_t ms);
 uint64_t tsc_hz(void);
 
 /* ---- input (kbd.c) ---- */
-enum { KEY_UP = 0x80, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_HOME, KEY_END, KEY_DEL };
+#define KEY_SUPER 0x90
 void ps2_init(void);
+void ps2_poll(void);
 void input_push(int c);
+int input_pop(void);        /* -1 if empty (does not poll hardware) */
+void mouse_push(int dx, int dy, int buttons, int wheel);
+bool mouse_pop(int *dx, int *dy, int *buttons, int *wheel);
+extern bool mouse_present;
 int input_poll(void);    /* non-blocking, -1 if none; also services USB */
 int input_getc(void);    /* blocking */
 extern bool ps2_present;
@@ -134,6 +140,93 @@ bool bt_present(void);
 
 /* ---- shell.c ---- */
 void shell_run(void);
+void shell_execute(char *line);
+
+/* ---- cpu.c ---- */
+void gdt_init(void);
+void tss_set_rsp0(uint64_t rsp);
+void lapic_timer_start(uint32_t hz);
+void lapic_eoi(void);
+void fb_write_combining(uint64_t addr, uint64_t size);
+
+/* ---- rtc.c ---- */
+void rtc_read(struct rtc_time *t);
+
+/* ---- vm.c ---- */
+uint64_t *vm_create(void);
+bool vm_map(uint64_t *pml4, uint64_t va, uint64_t pa, bool writable, bool owned);
+long vm_alloc(uint64_t *pml4, uint64_t va, uint64_t len);
+uint64_t vm_phys(uint64_t *pml4, uint64_t va);
+bool user_ok(uint64_t *pml4, const void *p, uint64_t len, bool write);
+void vm_destroy(uint64_t *pml4);
+void vm_unmap(uint64_t *pml4, uint64_t va, uint64_t pages);
+long elf_load(uint64_t *pml4, const uint8_t *img, uint64_t size, uint64_t *entry);
+
+/* ---- sched.c ---- */
+#define MAX_TASKS 32
+#define EVQ_SIZE 64
+struct task {
+    int pid, state;            /* state: 0 = free slot, else PS_* */
+    bool user, killed, waiting_event;
+    int busy;                  /* inside a long kernel operation: defer kills */
+    char name[32];
+    const char *app;
+    uint64_t rsp, kstack_top;
+    uint8_t *kstack;
+    uint64_t *pml4;
+    uint64_t wake_at, ticks, pages;
+    struct dunc_event evq[EVQ_SIZE]; int evh, evt;
+    int nwin;
+    char *capture; size_t cap_len, cap_max;
+};
+struct frame {
+    uint64_t r15, r14, r13, r12, r11, r10, r9, r8, rbp, rdi, rsi, rdx, rcx, rbx, rax;
+    uint64_t vec, err, rip, cs, rflags, rsp, ss;
+};
+extern struct task tasks[MAX_TASKS];
+extern struct task *current;
+extern volatile uint64_t sched_ticks;
+extern bool sched_running;
+void sched_init(void);
+struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg);
+int task_spawn(const char *app);
+void sched_start(void) __attribute__((noreturn));
+void schedule(void);
+void task_yield(void);
+void task_sleep(uint64_t ms);
+void task_exit(int code) __attribute__((noreturn));
+bool task_kill(int pid);
+void task_reap(void);
+void event_push(struct task *t, const struct dunc_event *ev);
+void sched_tick(struct frame *f);
+void kyield(void);
+uint64_t cpu_time_us(void);   /* also brings the running task's CPU time up to date */         /* yield if the scheduler runs, else spin */
+struct app_image { const char *id, *title; const uint8_t *start, *end; };
+const struct app_image *app_find(const char *id);
+extern const struct app_image app_images[];
+extern const int app_count;
+
+/* ---- syscall.c ---- */
+uint64_t syscall_dispatch(struct frame *f);
+
+/* ---- desktop.c (window manager + compositor) ---- */
+struct window;
+bool desktop_available(void);
+void desktop_init(void);
+void desktop_thread(void *arg);
+struct window *wm_create(struct task *t, int w, int h, const char *title, uint32_t **buf, int *pages, uint64_t uva);
+int wm_id(struct window *w);
+bool wm_flush(struct task *t, int id, int x, int y, int w, int h);
+bool wm_set_title(struct task *t, int id, const char *title);
+bool wm_close(struct task *t, int id);
+void wm_task_exit(struct task *t);
+int wm_count(struct task *t);
+void desktop_notify(const char *title, const char *msg);
+void boot_progress(int percent);
+
+/* ---- bt.c (GUI API) ---- */
+void bt_get_adapter(struct bt_adapter *a);
+int bt_get_results(struct bt_device *out, int max);
 
 #define LOG_OK(...)   do { console_set_color(C_LGREEN); kprintf("[ ok ] "); console_set_color(C_LGRAY); kprintf(__VA_ARGS__); } while (0)
 #define LOG_WARN(...) do { console_set_color(C_YELLOW); kprintf("[warn] "); console_set_color(C_LGRAY); kprintf(__VA_ARGS__); } while (0)

@@ -56,6 +56,7 @@ static void cmd_help(void) {
         {"echo <text>", "print text"},
         {"clear", "clear the screen"},
         {"uptime", "time since boot"},
+        {"log", "kernel messages"},
         {"reboot", "restart the computer"},
         {"poweroff", "turn the computer off"},
     };
@@ -77,7 +78,7 @@ static void cmd_sysinfo(void) {
     }
     char *bp = brand; while (*bp == ' ') bp++;
     char disp[96]; console_info(disp, sizeof disp);
-    kprintf("  OS        EmberOS %s\n", EMBER_VERSION);
+    kprintf("  OS        %s %s (%s kernel)\n", OS_NAME, OS_VERSION, KERNEL_NAME);
     kprintf("  CPU       %s (%s), %lu MHz\n", bp[0] ? bp : "unknown", vendor, tsc_hz() / 1000000);
     kprintf("  Memory    %lu MiB usable, %lu KiB used by kernel allocations\n", mem_total() >> 20, mem_used() >> 10);
     kprintf("  Display   %s\n", disp);
@@ -98,7 +99,7 @@ static void cmd_uptime(void) {
     kprintf("up %lu h %lu min %lu s\n", s / 3600, (s / 60) % 60, s % 60);
 }
 
-static void execute(char *line) {
+void shell_execute(char *line) {
     char *argv[8]; int argc = 0;
     for (char *p = line; *p && argc < 8;) {
         while (*p == ' ') *p++ = 0;
@@ -121,6 +122,10 @@ static void execute(char *line) {
     }
     else if (!strcmp(c, "echo")) { for (int i = 1; i < argc; i++) kprintf("%s%s", argv[i], i + 1 < argc ? " " : ""); kprintf("\n"); }
     else if (!strcmp(c, "uptime")) cmd_uptime();
+    else if (!strcmp(c, "log") || !strcmp(c, "dmesg")) {
+        char *b = page_alloc(8);
+        if (b) { console_log_read(b, 8 * 4096); console_write(b); for (int i = 0; i < 8; i++) page_free(b + i * 4096); }
+    }
     else if (!strcmp(c, "reboot") || !strcmp(c, "restart")) { kprintf("Restarting...\n"); acpi_reboot(); }
     else if (!strcmp(c, "poweroff") || !strcmp(c, "shutdown")) { kprintf("Powering off...\n"); acpi_poweroff(); }
     else kprintf("Unknown command '%s'. Type 'help'.\n", c);
@@ -129,13 +134,13 @@ static void execute(char *line) {
 void shell_run(void) {
     kprintf("\nType ");
     console_set_color(C_LCYAN); kprintf("help"); console_set_color(C_LGRAY);
-    kprintf(" to see what EmberOS can do.\n\n");
+    kprintf(" to see what DuncOS can do.\n\n");
     char line[128];
     for (;;) {
-        console_set_color(C_LGREEN); kprintf("ember");
+        console_set_color(C_LGREEN); kprintf("dunc");
         console_set_color(C_WHITE); kprintf("> ");
         console_set_color(C_LGRAY);
         read_line(line, sizeof line);
-        execute(line);
+        shell_execute(line);
     }
 }

@@ -41,6 +41,7 @@ align 4096
 global boot_pml4
 boot_pml4:  resb 4096
 boot_pdpt:  resb 4096
+global boot_pd
 boot_pd:    resb 4096 * 4               ; identity-map first 4 GiB with 2 MiB pages
 stack_bottom: resb 65536
 stack_top:

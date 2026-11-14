@@ -66,9 +66,11 @@ void xhci_poll(void) {
 }
 uint64_t uptime_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1000 + t.tv_nsec / 1000000; }
 int input_poll(void) { return -1; }
+void kyield(void) {}
+bool sched_running;
+struct task *current;
 void console_set_color(int c) {}
 void kprintf(const char *f, ...) { va_list a; va_start(a, f); vprintf(f, a); va_end(a); }
-int ksnprintf(char *b, size_t n, const char *f, ...) { va_list a; va_start(a, f); int r = vsnprintf(b, n, f, a); va_end(a); return r; }
 
 int main(void) {
     dev.ep_buf[3] = epbuf; dev.vid = 0x0BDA; dev.pid = 0xB85B;

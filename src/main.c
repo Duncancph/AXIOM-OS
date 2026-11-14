@@ -42,31 +42,52 @@ static void parse_multiboot(uint64_t addr) {
 void kmain(uint32_t magic, uint64_t mbi) {
     serial_init();
     if (magic != 0x36D76289) {
-        kprintf("EmberOS must be started by a Multiboot2 loader (GRUB).\n");
+        kprintf("DuncOS must be started by a Multiboot2 loader (GRUB).\n");
         return;
     }
     parse_multiboot(mbi);
     mem_init();
-    console_init();
+    gdt_init();
     idt_init();
+    console_init();
+    bool gui = desktop_available();
+    if (gui) console_gui_mode();
+    boot_progress(5);
 
     console_set_color(C_YELLOW);
-    kprintf("EmberOS %s", EMBER_VERSION);
+    kprintf("%s %s", OS_NAME, OS_VERSION);
     console_set_color(C_LGRAY);
-    kprintf("  -  booted %s via %s\n\n", bootinfo.uefi ? "UEFI" : "BIOS", bootinfo.bootloader[0] ? bootinfo.bootloader : "multiboot2");
+    kprintf("  -  %s kernel, booted %s via %s\n\n", KERNEL_NAME, bootinfo.uefi ? "UEFI" : "BIOS",
+            bootinfo.bootloader[0] ? bootinfo.bootloader : "multiboot2");
 
     timer_init();
     LOG_OK("CPU clock %lu MHz\n", tsc_hz() / 1000000);
     LOG_OK("Memory %lu MiB usable\n", mem_total() >> 20);
     char buf[96]; console_info(buf, sizeof buf);
     LOG_OK("Display %s\n", buf);
+    boot_progress(15);
     ps2_init();
-    if (ps2_present) LOG_OK("PS/2 keyboard controller\n");
+    if (ps2_present) LOG_OK("PS/2 controller%s\n", mouse_present ? " (keyboard + mouse)" : "");
     acpi_init();
+    boot_progress(25);
     pci_scan();
     LOG_OK("PCI: %d devices\n", pci_count);
+    boot_progress(35);
     xhci_init_all();
     if (!bt_present()) LOG_INFO("No USB Bluetooth adapter detected\n");
+    boot_progress(80);
 
-    shell_run();
+    if (!gui) {
+        LOG_WARN("No 32-bit graphics mode: starting the text shell instead of the desktop\n");
+        shell_run();
+    }
+    desktop_init();
+    boot_progress(92);
+    sched_init();
+    task_create_kernel("Desktop", desktop_thread, 0);
+    task_spawn("about");
+    boot_progress(100);
+    sleep_ms(400);
+    LOG_OK("Starting desktop\n");
+    sched_start();
 }

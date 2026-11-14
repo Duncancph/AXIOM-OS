@@ -1,72 +1,101 @@
-# EmberOS
+# DuncOS
 
-A small 64-bit operating system written from scratch in C and assembly.
-It boots on real PCs (both modern UEFI and older BIOS machines) from a USB stick,
-and includes its own USB 3 driver and a first-stage Bluetooth stack.
+A 64-bit operating system built from scratch, running on its own kernel, **Thane**.
+Created by Bryan Duncan.
 
-## What works (v0.1)
+It boots on real PCs (modern UEFI and older BIOS) from a USB stick into a modern desktop,
+with true multitasking and memory protection between apps.
 
-| Area | Status |
+## Features (v0.1)
+
+**Thane kernel**
+- 64-bit x86 kernel in C and assembly, booted by GRUB (Multiboot2)
+- **Preemptive multitasking**: the local APIC timer switches between programs 250 times a second,
+  so a frozen or busy app can't lock up the computer
+- **Memory protection**: every app runs in user mode (ring 3) in its own address space.
+  The kernel is mapped supervisor-only, and apps can't see each other's memory or touch hardware ports.
+  An app that misbehaves is stopped, the rest of the system carries on, and a notification explains what happened
+- System call interface (`int 0x80`); every pointer from an app is checked against its own page tables
+- ELF program loader, per-process page tables, CPU-time accounting
+- Drivers: framebuffer, PS/2 keyboard + mouse/touchpad, USB 3 (xHCI) with USB keyboards and mice,
+  USB Bluetooth (HCI), PCI, ACPI power-off/reboot, real-time clock
+
+**Desktop**
+- Compositing window manager: rounded windows with soft shadows, drag to move, minimise, close
+- Taskbar with centred dock, running-app indicators, tooltips, clock/date and Bluetooth status
+- Start menu (crown button or the Windows/Super key) with apps, Restart and Shut down
+- Notifications, a "not responding" detector with force-close
+- Smooth (anti-aliased) Inter font for the UI, GNU Unifont for the terminal and boot screen
+- Graphical boot splash with progress bar (`src/fb_boot_logo.c`)
+
+**Apps** (each a separate, protected program)
+| App | What it does |
 |---|---|
-| Boot | GRUB → Multiboot2 → 64-bit long mode. UEFI and legacy BIOS, from USB stick or CD |
-| Display | Firmware framebuffer text console (any resolution; 2x font on 4K), VGA text fallback |
-| Keyboard | PS/2 (laptop built-in keyboards) and USB keyboards |
-| USB | xHCI (USB 3.x) host controller driver: USB 1.1 / 2.0 / 3.x devices on root ports |
-| Bluetooth | USB Bluetooth adapters: adapter info, scan for nearby Classic + Low Energy devices with names and signal strength |
-| Hardware | PCI device listing, CPU/memory info |
-| Power | ACPI power-off and reboot |
-
-Shell commands: `help`, `sysinfo`, `pci`, `usb`, `bt`, `bt scan [seconds]`, `bt list`, `echo`, `clear`, `uptime`, `reboot`, `poweroff`.
+| Terminal | Command line: `apps`, `open <app>`, `ps`, `kill <pid>`, `date`, plus kernel commands `sysinfo`, `pci`, `usb`, `bt`, `bt scan`, `log`, `reboot`, `poweroff` |
+| System Monitor | Live CPU and memory graphs, every process with CPU % and memory, End task |
+| Bluetooth | Adapter details, scan for nearby Classic + Low Energy devices with names and signal strength |
+| Calculator | Mouse or keyboard, 6 decimal places |
+| Protection Test | Deliberately crashes or freezes itself to show the kernel containing it |
+| About DuncOS | Welcome screen with system details |
 
 ## Put it on a PC
 
-1. Write `emberos.iso` to a USB stick with [balenaEtcher](https://etcher.balena.io/) or Rufus (choose "DD image" mode),
-   or on Linux/macOS: `sudo dd if=emberos.iso of=/dev/sdX bs=4M` (double-check the device!).
-2. In the PC's firmware settings, **disable Secure Boot** (EmberOS isn't signed).
-3. Plug in the stick, power on and open the boot menu (usually F12, F11, F8, Esc or F10), pick the USB stick.
-4. Nothing on the computer's disk is touched. Remove the stick and reboot to get back to your normal OS.
+1. Write `duncos.iso` to a USB stick with [balenaEtcher](https://etcher.balena.io/) or Rufus ("DD image" mode).
+2. In the PC's firmware settings, **disable Secure Boot** (DuncOS isn't signed).
+3. Boot from the stick using the boot menu key (usually F12, F11, F8, Esc or F10).
+   If the screen looks wrong, pick **DuncOS (safe graphics 1024x768)** in the boot menu.
+4. Nothing on the computer's disk is touched. Remove the stick and restart to get your normal OS back.
 
 ## Known limitations
 
-- **Intel Bluetooth** (most laptops since ~2019: AX200/AX201/AX210/AX211) needs a firmware file uploaded
-  at start-up before it works. Not implemented yet; Realtek, Broadcom, Qualcomm/CSR USB dongles generally
-  answer without it. MediaTek also needs firmware.
-- **USB hubs** aren't supported yet, so devices behind a hub (including some desktop front ports and
-  hub-based docks) won't show up.
-- No pairing/connecting to Bluetooth devices yet, no disk/file system, no networking, no mouse.
-- The OS polls hardware rather than using interrupts (simpler and robust, but uses a CPU core at 100%).
-- Tested in QEMU (BIOS and UEFI, USB 2/3 devices). Not yet tested on physical hardware.
+- **Intel Bluetooth** (most laptops since ~2019) and MediaTek need firmware uploaded at start-up. Not
+  implemented yet; Realtek, Broadcom and CSR USB dongles generally work without it.
+- **USB hubs** aren't supported yet: devices behind a hub (some desktop front ports, docks) won't appear.
+- **Touchpads** work only if they appear as a PS/2 device; I2C touchpads (common on newer laptops) don't yet.
+- No file system, networking or sound yet. Apps are built into the kernel image.
+- Uses one CPU core. Kernel threads (the desktop) are cooperative; apps are preemptive.
+- Needs a 32-bit graphics mode (any UEFI PC; most BIOS PCs). Otherwise it falls back to the text shell.
+- Tested in QEMU (UEFI and BIOS). Not yet tested on physical hardware.
 
 ## Build
 
 Needs `gcc`, `nasm`, `ld`, `grub-mkrescue` (grub-pc-bin + grub-efi-amd64-bin), `xorriso`, `mtools`.
 
 ```
-make            # builds emberos.iso
-make run        # boot in QEMU (BIOS)
-make run-uefi   # boot in QEMU (UEFI, needs ovmf)
+make            # builds duncos.iso
+make run        # QEMU, BIOS
+make run-uefi   # QEMU, UEFI (needs the ovmf package)
 ```
 
-`tests/test_bt.c` runs the Bluetooth driver on the host against a simulated adapter:
-`gcc -std=gnu17 -w -o test_bt tests/test_bt.c src/bt.c && ./test_bt`
+Fonts are generated by `tools/genunifont.py` (GNU Unifont, GPLv2+ with font embedding exception)
+and `tools/genuifont.py` (Inter, SIL Open Font License).
+`tests/test_bt.c` runs the Bluetooth driver against a simulated adapter:
+`gcc -std=gnu17 -w -fno-builtin -o test_bt tests/test_bt.c src/bt.c common/str.c && ./test_bt`
 
 ## Layout
 
 ```
-src/boot.asm     Multiboot2 header, 32→64-bit switch, initial page tables
-src/main.c       boot info parsing, start-up sequence
-src/console.c    framebuffer text console     src/font.h  8x16 font (from DejaVu Sans Mono)
-src/kbd.c        PS/2 keyboard + input queue  src/usbkbd.c USB HID keyboard
-src/xhci.c       USB 3 host controller + device enumeration
-src/bt.c         Bluetooth HCI over USB: info, inquiry, LE scanning, remote names
-src/pci.c acpi.c mem.c timer.c idt.c serial.c lib.c shell.c
+src/             Thane kernel
+  boot.asm         Multiboot2 entry, switch to 64-bit mode
+  cpu.c            GDT/TSS (privilege levels), local APIC timer, write-combining video memory
+  isr.asm idt.c    interrupt entry, context switch, exception handling (stops faulting apps)
+  sched.c          tasks, preemptive scheduler, process spawn/exit/kill
+  vm.c             per-process page tables, ELF loader
+  syscall.c        system calls
+  desktop.c        window manager + compositor, taskbar, Start menu, notifications
+  fb_boot_logo.c   boot splash
+  xhci.c usbkbd.c  USB 3 host controller, USB keyboard/mouse
+  bt.c             Bluetooth HCI
+  kbd.c pci.c acpi.c rtc.c mem.c timer.c console.c shell.c ...
+common/          shared by kernel and apps: system call ABI, 2D graphics, fonts, strings
+user/lib         libdunc: app runtime (system calls, windows, UI widgets)
+user/apps        the apps
 ```
 
 ## Roadmap
 
-1. USB hub support (reach every port on desktops/docks)
-2. Intel/MediaTek Bluetooth firmware loading (read firmware from the boot USB stick)
-3. Bluetooth connections: L2CAP, pairing (SMP / Secure Simple Pairing)
-4. Bluetooth keyboards and mice (HID over GATT / Classic HID)
-5. Interrupt-driven I/O, mouse, a simple windowed desktop
-6. FAT32 file system on the USB stick, NVMe/SATA disks
+1. USB hub support; I2C-HID touchpads
+2. Intel/MediaTek Bluetooth firmware loading; Bluetooth pairing and connections; Bluetooth keyboards/mice
+3. FAT32 file system on the USB stick, a Files app, loading apps from disk
+4. Multi-core scheduling (SMP), interrupt-driven drivers
+5. Networking (Ethernet, then Wi-Fi)

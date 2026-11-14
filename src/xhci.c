@@ -244,7 +244,8 @@ static void attach_drivers(struct usb_dev *d) {
         if (p[1] != 4) continue;
         if (p[3] != 0) continue;                  /* alternate settings: only use alt 0 */
         cur_if = p[2]; ic = p[5]; is = p[6]; ip = p[7];
-        if (ic == 0x03 && is == 1 && ip == 1 && !d->driver) usbkbd_attach(d, cur_if);
+        if (ic == 0x03 && is == 1 && ip == 1) usbkbd_attach(d, cur_if);
+        else if (ic == 0x03 && is == 1 && ip == 2) usbmouse_attach(d, cur_if);
         else if (ic == 0xE0 && is == 1 && ip == 1 && !d->driver) {
             const uint8_t *ss;
             const uint8_t *ep = usb_find_endpoint(d, cur_if, 3, true, &ss);

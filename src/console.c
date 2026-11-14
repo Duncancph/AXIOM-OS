@@ -1,7 +1,7 @@
 /* Text console drawn on the firmware framebuffer (UEFI/BIOS graphics),
  * with a fallback to legacy VGA text mode. Output is mirrored to COM1. */
 #include "kernel.h"
-#include "font.h"
+#include "font8x16.h"
 
 #define MAX_COLS 480
 #define MAX_ROWS 160
@@ -39,7 +39,8 @@ static void draw_cell(int x, int y, bool inverse) {
         if (fb) ((volatile uint16_t *)fb)[y * 80 + x] = ch | ((inverse ? (grid_fg[y][x] << 4) : grid_fg[y][x]) << 8);
         return;
     }
-    const uint8_t *g = &font8x16[(ch & 0x7F) * 16];
+    static const uint8_t blank[16];
+    const uint8_t *g = (ch >= FONT_FIRST && ch <= FONT_LAST) ? font8x16[ch - FONT_FIRST] : blank;
     uint32_t f = pal[grid_fg[y][x]], b = pal[bg];
     if (inverse) { uint32_t t = f; f = b; b = t; }
     uint32_t ox = x * 8 * scale, oy = y * 16 * scale;
@@ -120,5 +121,27 @@ static void putc_raw(char c) {
     if (cursor_on) draw_cell(cx, cy, true);
 }
 
-void console_putc(char c) { serial_putc(c); putc_raw(c); }
+/* Kernel log ring buffer (shown by the 'log' command) */
+static char logbuf[32768]; static size_t log_pos; static bool log_wrapped;
+static bool gui;
+
+void console_gui_mode(void) { gui = true; }
+
+void console_log_read(char *buf, size_t n) {
+    size_t k = 0;
+    if (log_wrapped) for (size_t i = log_pos; i < sizeof logbuf && k + 1 < n; i++) buf[k++] = logbuf[i];
+    for (size_t i = 0; i < log_pos && k + 1 < n; i++) buf[k++] = logbuf[i];
+    buf[k] = 0;
+}
+
+void console_putc(char c) {
+    serial_putc(c);
+    logbuf[log_pos++] = c;
+    if (log_pos == sizeof logbuf) { log_pos = 0; log_wrapped = true; }
+    if (current && current->capture) {
+        if (current->cap_len < current->cap_max) current->capture[current->cap_len++] = c;
+        return;
+    }
+    if (!gui) putc_raw(c);
+}
 void console_write(const char *s) { while (*s) console_putc(*s++); }

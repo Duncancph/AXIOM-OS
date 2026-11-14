@@ -56,7 +56,7 @@ static int hci_cmd(uint16_t op, const void *params, uint8_t plen, uint8_t *ret, 
     uint64_t end = uptime_ms() + 3000;
     while (uptime_ms() < end) {
         uint8_t *e = next_event();
-        if (!e) { cpu_relax(); continue; }
+        if (!e) { kyield(); continue; }
         if (e[0] == 0x0E && e[1] >= 3 && (e[3] | e[4] << 8) == op) {
             int n = e[1] - 3;
             if (ret) memcpy(ret, e + 5, n < retmax ? n : retmax);
@@ -224,8 +224,18 @@ void bt_list(void) {
     for (int i = 0; i < nfound; i++) announce(&found[i]);
 }
 
+static bool scanning;
+
 void bt_scan(int seconds) {
     if (!bdev) { kprintf("No Bluetooth adapter found.\n"); return; }
+    if (scanning) { kprintf("A Bluetooth scan is already running.\n"); return; }
+    scanning = true;
+    void bt_scan_inner(int seconds);
+    bt_scan_inner(seconds);
+    scanning = false;
+}
+
+void bt_scan_inner(int seconds) {
     if (!info_ok) { kprintf("Bluetooth adapter is not responding.\n"); return; }
     if (seconds < 3) seconds = 3;
     if (seconds > 60) seconds = 60;
@@ -245,15 +255,15 @@ void bt_scan(int seconds) {
     uint8_t len = (seconds * 100 + 127) / 128; if (len > 0x30) len = 0x30;
     uint8_t inq[5] = {0x33, 0x8B, 0x9E, len, 0};                 /* GIAC, length x1.28s, unlimited */
     bool classic = hci_cmd(0x0401, inq, 5, 0, 0) == 0;
-    kprintf("Scanning for %d seconds (%s%s%s). Press any key to stop.\n", seconds,
-            classic ? "Classic" : "", classic && le ? " + " : "", le ? "Low Energy" : "");
+    kprintf("Scanning for %d seconds (%s%s%s)%s\n", seconds,
+            classic ? "Classic" : "", classic && le ? " + " : "", le ? "Low Energy" : "", sched_running ? "..." : ". Press any key to stop.");
     uint64_t end = uptime_ms() + seconds * 1000ULL;
     bool inquiry_done = !classic;
     while (uptime_ms() < end) {
         uint8_t *e = next_event();
         if (e) { if (e[0] == 0x01) inquiry_done = true; else handle_async(e); continue; }
-        if (input_poll() >= 0) break;
-        cpu_relax();
+        if (!sched_running && input_poll() >= 0) break;
+        kyield();
     }
     if (le) { uint8_t dis[2] = {0, 0}; hci_cmd(0x200C, dis, 2, 0, 0); }
     if (!inquiry_done) hci_cmd(0x0402, 0, 0, 0, 0);              /* Inquiry_Cancel */
@@ -268,11 +278,34 @@ void bt_scan(int seconds) {
         uint64_t t = uptime_ms() + 5000;
         while (uptime_ms() < t && !f->name[0]) {
             uint8_t *e = next_event();
-            if (!e) { cpu_relax(); continue; }
+            if (!e) { kyield(); continue; }
             handle_async(e);
             if (e[0] == 0x07) break;
         }
     }
     kprintf("\nFound %d device%s:\n", nfound, nfound == 1 ? "" : "s");
     bt_list();
+}
+
+void bt_get_adapter(struct bt_adapter *a) {
+    memset(a, 0, sizeof *a);
+    if (!bdev) return;
+    a->present = 1; a->ok = info_ok; a->le = le_ok;
+    strncpy0(a->maker, mfr_name(manufacturer), sizeof a->maker);
+    strncpy0(a->version, ver_name(hci_ver), sizeof a->version);
+    fmt_addr(a->addr, bdaddr);
+    strncpy0(a->name, local_name, sizeof a->name);
+    ksnprintf(a->usb, sizeof a->usb, "%s %s (%04x:%04x)", bdev->manufacturer, bdev->product, bdev->vid, bdev->pid);
+}
+
+int bt_get_results(struct bt_device *out, int max) {
+    int n = 0;
+    for (int i = 0; i < nfound && n < max; i++, n++) {
+        struct found *f = &found[i];
+        memcpy(out[n].addr, f->addr, 6);
+        out[n].le = f->le; out[n].rssi = f->rssi; out[n].cod = f->cod;
+        strncpy0(out[n].name, f->name, sizeof out[n].name);
+        strncpy0(out[n].kind, f->le ? "" : cod_name(f->cod), sizeof out[n].kind);
+    }
+    return n;
 }

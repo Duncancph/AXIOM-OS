@@ -33,7 +33,9 @@ static void on_report(struct usb_dev *d, int dci, int cc, uint32_t len) {
             else if (k == 0x4D) input_push(KEY_END);
             else if (k == 0x4C) input_push(KEY_DEL);
             else if (k == 0x58) input_push('\n');
+            else if (k == 0xE3 || k == 0xE7) input_push(KEY_SUPER);
         }
+        if ((r[0] & 0x88) && !(prev[0] & 0x88)) input_push(KEY_SUPER);
         memcpy(prev, r, 8);
     }
     usb_queue_in(d, dci, on_report);
@@ -50,4 +52,25 @@ void usbkbd_attach(struct usb_dev *d, int iface) {
     kbd_dci = dci;
     d->driver = "keyboard";
     usb_queue_in(d, dci, on_report);
+}
+
+/* USB HID mouse (boot protocol): byte 0 buttons, 1 dx, 2 dy, [3 wheel] */
+static void on_mouse(struct usb_dev *d, int dci, int cc, uint32_t len) {
+    if (cc != CC_SUCCESS && cc != CC_SHORT) return;
+    int8_t *r = (int8_t *)d->ep_buf[dci];
+    if (len >= 3) mouse_push(r[1], r[2], r[0] & 7, len >= 4 ? -r[3] : 0);
+    usb_queue_in(d, dci, on_mouse);
+}
+
+void usbmouse_attach(struct usb_dev *d, int iface) {
+    const uint8_t *ss;
+    const uint8_t *ep = usb_find_endpoint(d, iface, 3, true, &ss);
+    if (!ep) return;
+    usb_control(d, 0x21, 0x0B, 0, iface, 0, 0);   /* SET_PROTOCOL(boot) */
+    usb_control(d, 0x21, 0x0A, 0, iface, 0, 0);
+    int dci = usb_configure_ep(d, ep, ss);
+    if (dci < 0) return;
+    d->driver = d->driver ? "keyboard + mouse" : "mouse";
+    mouse_present = true;
+    usb_queue_in(d, dci, on_mouse);
 }
