@@ -262,7 +262,7 @@ uint64_t syscall_dispatch(struct frame *f) {
             bt_pair_status((struct bt_pair *)b);
             return 0;
         }
-        if (a == BT_PAIR_CONFIRM) { bt_pair_confirm((int)b); return 0; }
+        if (a == BT_PAIR_CONFIRM) { bt_pair_confirm((int)c); return 0; }        /* sys_bt(BT_PAIR_CONFIRM, 0, yes) */
         if (a == BT_PAIRED) {
             int max = (int)c;
             if (max < 0 || max > 16 || !UOK(b, (uint64_t)max * sizeof(struct bt_paired), true)) return (uint64_t)-1;
