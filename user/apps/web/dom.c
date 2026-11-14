@@ -35,6 +35,21 @@ static uint64_t h_now(void *c) { struct rtc_time t; sys_rtc(&t);
     return (uint64_t)((days * 86400 + t.hour * 3600 + t.min * 60 + t.sec) * 1000 + sys_time() % 1000); }
 static uint64_t h_mono(void *c) { return sys_time(); }
 static uint64_t run_start, page_deadline, last_look;
+/* How much processor time the page's scripts have used, counted with the cycle counter (timer jobs
+ * are often far shorter than a millisecond). A page that keeps scripts busy without end (YouTube's
+ * app, for one) has its scripts turned off after PAGE_CPU_MS, so it can't keep a core busy forever. */
+#define PAGE_CPU_MS 20000
+static uint64_t cyc_begin, page_cycles, cal_tsc0, cal_ms0;
+static inline uint64_t cyc(void) { uint32_t lo, hi; __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi)); return (uint64_t)hi << 32 | lo; }
+static uint64_t cycles_per_ms(void) {
+    uint64_t t = sys_time();
+    if (!cal_ms0) { cal_ms0 = t; cal_tsc0 = cyc(); }
+    if (t - cal_ms0 < 200) return 3000000;               /* until measured: assume 3 GHz */
+    return (cyc() - cal_tsc0) / (t - cal_ms0);
+}
+static void script_begin(void) { run_start = sys_time(); cyc_begin = cyc(); }
+static void script_end(void) { if (cyc_begin) page_cycles += cyc() - cyc_begin; cyc_begin = 0; }
+static uint64_t page_cpu_ms(void) { return (page_cycles + (cyc_begin ? cyc() - cyc_begin : 0)) / cycles_per_ms(); }
 static bool skip_said;
 static void scripts_off(const char *why) { con_add("[stopped] ", why); page_on = false; }
 /* Called often while a script runs: stops scripts that run too long, and keeps the window answering
@@ -43,6 +58,7 @@ static _Bool h_interrupt(void *c) {
     uint64_t now = sys_time();
     if (!page_on) return true;
     if (now - run_start > 4000) { scripts_off("a script ran for more than 4 seconds; this page's scripts were turned off"); return true; }
+    if (page_cpu_ms() > PAGE_CPU_MS) { scripts_off("this page's scripts kept the processor busy for 20 seconds, so they were turned off"); return true; }
     if (now - last_look > 100) {
         last_look = now;
         struct dunc_event e;
@@ -539,7 +555,7 @@ static void report(const char *where) {
     char pre[80]; ksnprintf(pre, sizeof pre, "[error] %s: ", where);
     con_add(pre, t); free(t);
 }
-static void after_task(void) { run_start = sys_time(); js_run_jobs(rt); }
+static void after_task(void) { script_end(); script_begin(); js_run_jobs(rt); script_end(); }
 void js_run_timers(void) {
     if (!page_on) return;
     uint64_t now = sys_time();
@@ -549,7 +565,8 @@ void js_run_timers(void) {
         if (timers[i].every) timers[i].due = now + timers[i].every; else { timers[i].used = false; }
         jsval keep = fn; js_root(rt, &keep);
         if (!timers[i].every) timers[i].fn = js_undefined();
-        run_start = sys_time();
+        if (page_cpu_ms() > PAGE_CPU_MS) { scripts_off("this page's scripts kept the processor busy for 20 seconds, so they were turned off"); break; }
+        script_begin();
         jsval res;
         if (js_call(rt, keep, js_undefined(), 0, 0, &res) < 0) report("timer");
         js_unroot(rt, &keep);
@@ -623,7 +640,7 @@ static bool js_type_ok(struct node *s) {
            !strcmp(l, "application/ecmascript") || !strcmp(l, "text/jscript") || !strcmp(l, "application/x-javascript");
 }
 static void run_code(const char *code, long n, const char *name) {
-    run_start = sys_time();
+    script_begin();
     jsval res;
     if (js_eval(rt, code, n, name, &res) < 0) report(name);
     after_task();
@@ -665,7 +682,7 @@ static void collect_scripts(struct node *e, struct node **list, int *n, int max,
 }
 static jsval call_api(const char *fname, int argc, jsval *argv) {
     jsval f = js_get(rt, api, fname), res = js_undefined();
-    if (js_is_function(f)) { run_start = sys_time(); if (js_call(rt, f, api, argc, argv, &res) < 0) { report(fname); res = js_undefined(); } }
+    if (js_is_function(f)) { script_begin(); if (js_call(rt, f, api, argc, argv, &res) < 0) { report(fname); res = js_undefined(); } script_end(); }
     return res;
 }
 
@@ -715,7 +732,7 @@ void js_page_start(struct doc *d) {
     }
     js_define(rt, g, "__d", dd, false);
     js_unroot(rt, &dd);
-    page_deadline = sys_time() + 15000; skip_said = false;
+    page_deadline = sys_time() + 15000; skip_said = false; page_cycles = 0; cyc_begin = 0;
     run_code(dom_prelude, sizeof dom_prelude - 1, "web prelude");
     call_api("start", 0, 0);
     for (int i = 0; i < ns && page_on; i++) run_script_node(list[i]);

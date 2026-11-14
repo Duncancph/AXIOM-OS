@@ -1570,9 +1570,14 @@ int main(void) {
             draw();
             continue;
         }
-        if (need_draw) { need_draw = false; draw(); }
+        /* changes made by scripts are drawn at most ~30 times a second (a page that changes itself
+         * constantly would otherwise keep the desktop redrawing it all the time) */
+        static uint64_t last_draw;
+        uint64_t tnow = sys_time();
+        if (need_draw && tnow - last_draw >= 33) { need_draw = false; last_draw = tnow; draw(); }
         if (nrequeued) { struct dunc_event q = requeued[0]; for (int i = 1; i < nrequeued; i++) requeued[i - 1] = requeued[i]; nrequeued--; handle_event(&q); continue; }
         long wait = js_timer_wait();                    /* scripts' timers */
+        if (need_draw) { long dw = 33 - (long)(tnow - last_draw); if (dw < 1) dw = 1; if (wait < 0 || dw < wait) wait = dw; }
         if (sys_event(&e, wait) > 0) handle_event(&e);
         js_run_timers();
     }
