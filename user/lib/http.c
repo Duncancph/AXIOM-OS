@@ -450,9 +450,11 @@ long http_request(const char *url_in, const struct http_req *rq, http_sink sink,
             strncpy0(http_sec.issuer, tls_conn.issuer, sizeof http_sec.issuer);
         }
         char target[1600]; encode_target(u.path, target, sizeof target);
-        int rl = ksnprintf(req, sizeof req, "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: DuncOS/0.3 (Thane kernel) Web/0.3\r\n"
-                           "Accept: text/html,application/xhtml+xml,text/css,image/png,image/jpeg,image/gif,*/*;q=0.5\r\n%sConnection: close\r\n",
-                           method, target, hp, want_gz ? "Accept-Encoding: gzip\r\n" : "");
+        bool browser = http_options != 0;
+        int rl = ksnprintf(req, sizeof req, "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: DuncOS/0.1 (Thane kernel)%s\r\nAccept: %s\r\n%sConnection: close\r\n",
+                           method, target, hp, browser ? " Web/0.3" : "",
+                           browser ? "text/html,application/xhtml+xml,text/css,image/png,image/jpeg,image/gif,*/*;q=0.5" : "*/*",
+                           want_gz ? "Accept-Encoding: gzip\r\n" : "");
         if (rq && rq->referer && rq->referer[0]) rl += ksnprintf(req + rl, sizeof req - rl, "Referer: %s\r\n", rq->referer);
         if (cookies) rl += cookie_header(req + rl, sizeof req - rl - 200, u.host, u.path, u.https);
         if (body) rl += ksnprintf(req + rl, sizeof req - rl, "Content-Type: %s\r\nContent-Length: %ld\r\n",

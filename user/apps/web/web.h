@@ -109,6 +109,8 @@ void css_add_sheet(const char *text, long len, const char *base_url, int import_
 void css_cascade(struct doc *d, int viewport_w);      /* compute node->st for every element */
 bool css_parse_color(const char *s, int n, uint32_t *out);
 bool css_media_dependent(void);
+void *css_save(void);                                 /* the current author rules, to put back with css_restore */
+void css_restore(void *saved);                        /* (frees saved) */
 bool css_media_matches(const char *s, int n, int width);   /* a media attribute / query list */                       /* some rules depend on the window width */
 /* fetch a style sheet for @import (implemented in web.c); returns malloc'd text or 0 */
 char *web_fetch_text(const char *url, long *len, long cap);

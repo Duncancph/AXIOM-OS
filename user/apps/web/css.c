@@ -570,6 +570,20 @@ void css_reset(struct arena *page) {
 }
 bool css_media_dependent(void) { return media_dep; }
 
+/* keep the author style sheets of the page on screen while another page's are read (and put them back) */
+struct css_saved { struct ruleset set; bool media_dep; };
+void *css_save(void) {
+    struct css_saved *s = malloc(sizeof *s);
+    if (s) { s->set = au_set; s->media_dep = media_dep; }
+    return s;
+}
+void css_restore(void *p) {
+    struct css_saved *s = p;
+    if (!s) return;
+    au_set = s->set; media_dep = s->media_dep;
+    free(s);
+}
+
 /* ---------------- media queries ---------------- */
 static int media_len_px(const char *s, int n) {
     long v; int u;

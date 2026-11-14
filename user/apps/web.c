@@ -643,7 +643,7 @@ static void set_title(void) {
     app_title(&a, t);
 }
 
-static int page_w(void) { return WW - SCROLLBAR; }
+static int page_w(void) { return WW - SCROLLBAR > 120 ? WW - SCROLLBAR : 120; }
 static void relayout(void) {
     if (!doc) return;
     if (need_cascade && !styles_loading) { css_cascade(doc, page_w()); need_cascade = false; }
@@ -651,7 +651,7 @@ static void relayout(void) {
     need_layout = false;
     last_layout_t = sys_time();
 }
-static int view_h(void) { return WH - BAR_H - STATUS_H; }
+static int view_h(void) { return WH - BAR_H - STATUS_H > 20 ? WH - BAR_H - STATUS_H : 20; }
 static void scroll_by(int d) {
     scroll += d;
     int mx = lay.doc_h - view_h();
@@ -892,8 +892,10 @@ static void navigate(const char *target, bool post, const char *body, long blen,
                 struct doc *d = parse_page(b, n, ct, url);
                 free(b);
                 if (d) {
+                    void *saved = css_save();
                     load_styles(d);
-                    if (pend || quit) { free_doc(d); return; }
+                    if (pend || quit) { free_doc(d); css_restore(saved); return; }   /* the old page stays */
+                    free(saved);
                     show_doc(d);
                 }
             } else if (pre_ci(ct, "text/") || pre_ci(ct, "application/json") || pre_ci(ct, "application/javascript") || pre_ci(ct, "application/xml")) {
@@ -1126,6 +1128,7 @@ static void draw_toolbar(struct canvas *c) {
     ui_button(c, 50, 10, 34, 32, ">", BTN_NORMAL, hover_btn == 4, hpos + 1 >= hcount);
     ui_button(c, 88, 10, 34, 32, loading ? "X" : "R", BTN_NORMAL, hover_btn == 1, false);
     int ax = 130, aw = WW - ax - 12 - 64;
+    if (aw < 60) aw = 60;
     gfx_rrect(c, ax, 10, aw, 32, 8, HL_TERM_BG, 255);
     gfx_rrect_outline(c, ax, 10, aw, 32, 8, addr_focus ? HL_ACCENT : HL_WIN_BORDER, 255);
     int tx = ax + 12;
