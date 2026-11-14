@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 68
-notes Uses your screen's wide 1920x800 mode (restart twice); busy pages like YouTube can't keep a core busy
-file kernel b68/thane.elf.gz 14620448 635fc3e14360112de513103eed00d64606e56e02462056cee9ab6c15fc3d4575
-file initrd b68/initrd.tar.gz 1269760 399ab03363a9110747d798a8c46b9b0aa0900def67dab8741386674c78a4be24
-file bootx64 b68/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b68/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022100ef0bdd3af831e99402e95e616e78d2e383588955c786d12794c2bbc9aa792eeb0220289398bd2ab456f2c4b4913c50e6c14f55bad76b994e36ac252f7c561aca7da6
+build 69
+notes Web stays responsive while big sites load their scripts; wide 1920x800 screen (restart twice)
+file kernel b69/thane.elf.gz 14624544 b728615ce1cc69fc2f60495743c7e55523791a77847b974dbff323b8892a2c48
+file initrd b69/initrd.tar.gz 1269760 399ab03363a9110747d798a8c46b9b0aa0900def67dab8741386674c78a4be24
+file bootx64 b69/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b69/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3044022026c2841627b9d85dfedeff1066bb10a13745222a708cf237796eb2a4bda5423402200a1ead960a1f8b44afcd0b034d9fc6c3dbb6c3bb7a068332377209b73a657ed0
