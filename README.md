@@ -18,14 +18,32 @@ with true multitasking and memory protection between apps.
 - System call interface (`int 0x80`); every pointer from an app is checked against its own page tables
 - ELF program loader, per-process page tables, CPU-time accounting
 - Drivers: framebuffer, PS/2 keyboard + mouse/touchpad, USB 3 (xHCI) with hubs and hot-plug,
-  USB keyboards, mice and flash drives, USB Bluetooth (HCI), PCI, ACPI power-off/reboot, real-time clock
-- File system: an in-memory system disk (`/home`, `/apps`, `/system`) plus FAT32 USB drives at `/usb`
-  (read/write, long file names, MBR/GPT/unpartitioned), mounted and removed as you plug them in
+  USB keyboards, mice and flash drives, USB network adapters, USB Bluetooth (HCI), **SATA (AHCI) and
+  NVMe disks**, **Intel HD Audio sound**, PCI, ACPI power-off/reboot, real-time clock
+- **Install to a disk**: Settings > Storage installs DuncOS on an internal SATA or NVMe disk, or on a USB
+  stick (it erases that disk: a GPT disk with one FAT32 EFI system partition holding the boot loader,
+  the system and your files). Started from there, your files (`/home`), installed apps (`/apps`) and
+  settings (`/system/config`) are kept across restarts. "Update DuncOS" puts a newer version on the disk
+  and keeps your files. Other partitions on internal disks (Windows, Linux) are listed but never touched
+- File system: FAT32 on the DuncOS disk and on USB drives at `/usb` (read/write, long file names,
+  MBR/GPT/unpartitioned), mounted and removed as you plug them in; started without a DuncOS disk,
+  the system disk lives in memory
 - Apps can be installed from files: the `clan` package manager installs them into `/apps`
+- Apps get a real memory allocator (malloc/free) that grows as they need, up to 1 GiB each
+- **Text in Western European languages**: the fonts and keyboards use Windows-1252 (accents, ß, £, €);
+  UTF-8 files and web pages are converted. Keyboard layouts: English (US), English (UK), German, French
+  and Spanish, with AltGr and accent (dead) keys. Shared clipboard (Ctrl+C / Ctrl+X / Ctrl+V)
+- **Time zones** with daylight saving (EU, US/Canada, Australia, New Zealand), 12- or 24-hour clock,
+  and an option for PCs whose clock keeps local time (as Windows sets it)
+- **Lock screen** with a password (Windows key + L, at start-up and after an idle time you choose),
+  and the screen turns off after a set idle time. Print Screen saves a screenshot in `~/Pictures`
 - **Networking**: wired Ethernet with its own TCP/IP stack: Ethernet, ARP, IPv4, ICMP (ping), UDP,
   DHCP (automatic address), DNS, and TCP (retransmission, flow control, orderly close).
   Network cards: Intel e1000 / e1000e / I217-I219 (tested: 82540EM, 82574L) and Realtek RTL8111/8168
   (written from the datasheet, not yet tested on hardware). Cable unplug/replug is detected.
+  **USB networking**: USB Ethernet adapters (CDC-ECM and CDC-NCM, which covers e.g. Realtek RTL8152/8153
+  adapters in their standard mode) and **Android phones with USB tethering** (RNDIS), plugged in at
+  any time. With several adapters, DuncOS uses the one that has a working connection
 - **IPv6**, alongside IPv4 or on its own (IPv6-only networks work too): Neighbour Discovery, automatic
   addresses from the router's advertisements (SLAAC) with duplicate address detection, DNS servers from
   router advertisements (RDNSS) or stateless DHCPv6, link MTU, ICMPv6 ping, MLDv2 so switches deliver
@@ -59,10 +77,12 @@ with true multitasking and memory protection between apps.
 **Apps** (each a separate, protected program)
 | App | What it does |
 |---|---|
-| Files | Your Highland mockup made real: places sidebar, USB drives, folder grid; open, new folder, rename, copy/paste (also to and from USB drives), delete to Trash, empty Trash |
-| Terminal (castle shell) | `ls`, `cd`, `cat`, `mkdir`, `rm`, `mv`, `cp`, `touch`, `echo ... > file`, `edit`, `df`, `ip`, `ping` (`-4`/`-6`, `ping6`), `host`, `wget`, `curl` (http and https), `dns`, `trust`, `fetch`, `apps`, `open <app> [file]`, `ps`, `kill`, `date`, `clan`, plus `sysinfo`, `pci`, `usb`, `bt`, `bt scan`, `log`, `reboot`, `poweroff` |
+| Files | Your Highland mockup made real: places sidebar, USB drives, folder grid; open (pictures in Viewer, web pages in Web, text in Editor, installing the app if needed), new folder, rename, copy/paste (also to and from USB drives), delete to Trash, empty Trash |
+| Terminal (castle shell) | `ls`, `cd`, `cat`, `mkdir`, `rm`, `mv`, `cp`, `touch`, `echo ... > file`, `edit`, `df`, `disks`, `install`, `settings`, `set`, `ip`, `ping` (`-4`/`-6`, `ping6`), `host`, `wget`, `curl` (http and https), `dns`, `trust`, `fetch`, `apps`, `open <app or file>`, `ps`, `kill`, `date`, `clan`, plus `sysinfo`, `pci`, `usb`, `bt`, `bt scan`, `log`, `reboot`, `poweroff`. Scroll back with the mouse wheel or PgUp/PgDn; select with the mouse to copy (Ctrl+C or Ctrl+Shift+C), paste with Ctrl+V or a right click |
+| Settings | Keyboard layout, date & time (time zone, 24-hour clock), display size, sound volume, lock screen password, screen-off time, restart / shut down, storage (install or update DuncOS on a disk), about |
+| Viewer | Pictures (PNG, JPEG, GIF, BMP): fit to window, zoom, drag, previous/next in the folder |
 | System Monitor | Live CPU and memory graphs, every process with CPU % and memory, End task |
-| Bluetooth | Adapter details, scan for nearby Classic + Low Energy devices with names and signal strength |
+| Bluetooth | Adapter details, scan for nearby Classic + Low Energy devices with names and signal strength, pair with Classic devices (number check), paired devices kept and forgettable |
 | Network | Connection status (IPv4, IPv6 or both), addresses, gateway and IPv6 router, DNS, MTU, live traffic graph, Test connection, Renew address, choose a DNS server (IPv4 or IPv6) |
 | Calculator | Mouse or keyboard, 6 decimal places |
 | Protection Test | Deliberately crashes or freezes itself to show the kernel containing it |
@@ -71,7 +91,7 @@ with true multitasking and memory protection between apps.
 **clan packages** (`clan list`, `clan install <name>`, `clan remove <name>`)
 | Package | What it does |
 |---|---|
-| editor 0.3 | Text editor: line numbers, save / save as, unsaved-changes prompt (`edit <file>` in castle, or double-click a file in Files) |
+| editor 0.4 | Text editor: line numbers, selection (Shift+arrows, mouse), copy/cut/paste, select all, save / save as, UTF-8 files, unsaved-changes prompt (`edit <file>` in castle, or double-click a file in Files) |
 | clock 1.0 | Analog and digital clock |
 | web 0.2 | Web browser for `https://` and `http://` sites: headings, text, bold, lists, links, back, address bar. A padlock and the status bar show the encryption and who the certificate belongs to; sites that fail the security checks are blocked with an explanation. The start page links to text-only sites that suit it, such as text.npr.org and lite.duckduckgo.com |
 
@@ -82,16 +102,23 @@ with true multitasking and memory protection between apps.
 3. Boot from the stick using the boot menu key (usually F12, F11, F8, Esc or F10).
    If the screen looks wrong, pick **DuncOS (safe graphics 1024x768)** in the boot menu.
 4. Nothing on the computer's disk is touched. Remove the stick and restart to get your normal OS back.
+5. To keep DuncOS and your files: Settings > Storage > **Install here...** on a disk or another USB stick.
+   This erases that whole disk. The installed system starts on UEFI PCs (pick the disk in the boot menu,
+   or make it the first boot option). Display size for installed systems: Settings > Display.
 
 ## Known limitations
 
-- **Files in `~` (the system disk) live in memory** and are reset when the computer restarts.
-  Copy anything you want to keep to a USB drive. (A persistent system disk needs SATA/NVMe drivers.)
+- **Started from the ISO, files in `~` live in memory** and are reset when the computer restarts; install
+  DuncOS on a disk or USB stick (Settings > Storage) to keep them.
+- **Installing erases the whole target disk**: DuncOS can't yet share a disk with Windows or Linux (no
+  partition resizing). Installed systems start on UEFI only (old BIOS-only PCs can keep using the ISO).
 - **USB drives must be FAT32.** exFAT (common on drives of 64 GB or more), NTFS and FAT16 are recognised
   but not readable yet. Changes are written immediately, so a drive is safe to unplug once a copy finishes.
 - **Intel Bluetooth** (most laptops since ~2019) and MediaTek need firmware uploaded at start-up. Not
   implemented yet; Realtek, Broadcom and CSR USB dongles generally work without it. Bluetooth can scan
-  but not pair or connect yet.
+  and pair with Classic devices, but there are no Bluetooth profiles yet, so a paired keyboard, mouse
+  or headset doesn't work with DuncOS yet. Low Energy pairing isn't supported. Pairing is tested only
+  against a simulated adapter (`make test`), as there's no Bluetooth hardware in the test setup.
 - **Touchpads** work only if they appear as a PS/2 device; I2C touchpads (common on newer laptops) don't yet.
 - **HTTPS is TLS 1.3 only.** Most sites support it, but some older servers offer only TLS 1.2 and can't be
   reached (you get a clear message). Not supported yet: P-521 and Ed25519 certificates (rare), checking
@@ -99,20 +126,28 @@ with true multitasking and memory protection between apps.
 - The encryption code is careful but new and has not had an independent security review. AES uses lookup
   tables, which can in theory leak timing information, so ChaCha20-Poly1305 is preferred when the server
   agrees. Don't rely on DuncOS for anything sensitive yet.
-- The clock comes from the PC's real-time clock, which is assumed to be UTC. If it's very wrong,
-  certificates can look expired or not yet valid.
-- **No Wi-Fi.** Wired Ethernet only. Wi-Fi chips need vendor firmware plus an 802.11/WPA2 stack.
+- The clock comes from the PC's real-time clock (UTC, or local time if set in Settings); there's no
+  network time yet. If it's very wrong, certificates can look expired or not yet valid.
+- **No Wi-Fi yet.** Every Wi-Fi chip needs its own driver plus vendor firmware, and an 802.11 + WPA2/WPA3
+  stack, and none of it can be tested in the emulator used to build DuncOS. Until then: a network cable,
+  a USB Ethernet adapter, or USB tethering from an Android phone. CDC-NCM (some newer adapters and phones)
+  is implemented but untested; CDC-ECM and RNDIS are tested.
+- **No battery level or sleep**: laptops report these through ACPI programs (AML) that DuncOS can't run yet.
+- Sound: Intel HD Audio only (nearly all PCs; USB audio isn't supported), tested in QEMU, not on real
+  codecs. Only system sounds for now (test chime, notifications).
+- Keyboard layouts and text cover Western European languages only (Windows-1252).
 - IP fragments aren't supported (rarely needed with TCP); the web browser shows text and links only.
 - IPv6 gets its address by SLAAC. Networks that hand out IPv6 addresses only by DHCPv6 (the router's
   "M" flag with no autoconfiguration prefix, found on some business networks) give DuncOS no global
   IPv6 address; it then uses IPv4. Stateless DHCPv6 (for DNS) is supported.
 - IPv6 path MTU discovery is implemented for TCP but hasn't been tested yet.
-- No sound yet. One CPU core is used. Kernel threads are cooperative; apps are preemptive.
+- One CPU core is used. Kernel threads are cooperative; apps are preemptive.
 - Needs a 32-bit graphics mode (any UEFI PC; most BIOS PCs). Otherwise it falls back to the text shell.
 - Tested in QEMU (UEFI and BIOS, USB 2/3 devices, a USB hub, USB drive hot-plug, Intel e1000/e1000e
   networking against local web and DNS servers, HTTPS against OpenSSL test servers, IPv6 against
   QEMU's network and against `tests/ipv6/v6net.py`, a scripted IPv6-only router, DNS, DHCPv6 and web
-  relay that can also fake an address conflict). The sandbox it was
+  relay that can also fake an address conflict, NVMe/SATA/USB installs booted again from each disk,
+  USB network adapters (ECM and RNDIS, hot-plug), Intel HD Audio recorded to a file). The sandbox it was
   built in has no internet access, so HTTPS has not yet been tried against real public websites.
   Not yet tested on physical hardware.
 
@@ -133,7 +168,10 @@ driver against a disk image made by `mkfs.fat`, which is then checked with `fsck
 with `mtools` (needs dosfstools and mtools). It also checks the crypto against Python's `cryptography`
 (OpenSSL) on random inputs, parses every Mozilla root certificate, and runs the TLS client against
 `openssl s_server` with 21 good and deliberately broken setups (needs python3-cryptography and openssl),
-and checks IPv4/IPv6 address parsing and formatting against Python's `ipaddress` on 6,000 addresses.
+and checks IPv4/IPv6 address parsing and formatting against Python's `ipaddress` on 6,000 addresses,
+time zones against Python's `zoneinfo` (every zone, hourly for 7 years), the app memory allocator under
+AddressSanitizer, FAT32 formatting with `fsck.fat`, Bluetooth pairing against a simulated phone, and the
+image codecs against Pillow (`python3 tests/test_img.py`).
 `tests/ipv6/v6net.py` (needs scapy) is an IPv6 test network to run DuncOS against in QEMU; see the
 top of the file for how to start it.
 
@@ -151,7 +189,13 @@ src/             Thane kernel
   vm.c             per-process page tables, ELF loader
   vfs.c kmalloc.c  file system layer (memory disk + mounted drives), kernel heap
   apps.c           app registry and the clan package manager
-  msc.c fat.c      USB flash drives (Bulk-Only/SCSI) and the FAT32 file system
+  msc.c fat.c      USB flash drives (Bulk-Only/SCSI) and the FAT32 file system (+ formatting)
+  ahci.c nvme.c    SATA and NVMe disks
+  disk.c           disk list, partitions, the DuncOS system volume, the installer
+  usbnet.c         USB network adapters (CDC-ECM, CDC-NCM, RNDIS)
+  hda.c            Intel HD Audio
+  keymap.c keymaps.h  keyboard layouts (generated by tools/genkeymaps.py)
+  settings.c tz.c  saved settings, time zones, lock screen password
   random.c         random number generator (RDSEED/RDRAND, jitter, events -> ChaCha20)
   net.c            TCP/IP stack: Ethernet, ARP, IPv4, ICMP, DHCP, IPv6, ICMPv6, NDP, SLAAC, DHCPv6, UDP, DNS, TCP
   nic_e1000.c nic_rtl8168.c   network card drivers
@@ -174,8 +218,8 @@ rootfs/          files copied onto the system disk at start-up
 
 ## Roadmap
 
-1. Persistent system disk (SATA/AHCI and NVMe drivers), exFAT for big USB drives
-2. Intel/MediaTek Bluetooth firmware loading; Bluetooth pairing and connections
-3. Wi-Fi; I2C-HID touchpads (needs an ACPI interpreter)
-4. TLS 1.2 fallback, revocation checks; images and CSS in Web
-5. Multi-core scheduling, sound
+1. Test on real PCs; exFAT for big USB drives; installing next to Windows (partition resizing)
+2. Bluetooth profiles (keyboards and mice first), Intel/MediaTek Bluetooth firmware loading
+3. Wi-Fi; an ACPI interpreter (battery, sleep, I2C-HID touchpads)
+4. TLS 1.2 fallback, revocation checks; JavaScript in Web
+5. Multi-core scheduling, USB audio, network time
