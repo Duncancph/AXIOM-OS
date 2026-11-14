@@ -6,8 +6,8 @@
 #define WH 580
 #define SIDE 190
 static struct app a;
-enum { S_KEYB, S_MOUSE, S_TIME, S_DISPLAY, S_SOUND, S_LOCK, S_POWER, S_UPDATES, S_STORAGE, S_ABOUT, NSECT };
-static const char *sect_names[NSECT] = { "Keyboard", "Mouse", "Date & time", "Display", "Sound", "Lock screen", "Power", "Updates", "Storage", "About" };
+enum { S_KEYB, S_MOUSE, S_TIME, S_DISPLAY, S_PERSONAL, S_SOUND, S_LOCK, S_POWER, S_UPDATES, S_STORAGE, S_ABOUT, NSECT };
+static const char *sect_names[NSECT] = { "Keyboard", "Mouse", "Date & time", "Display", "Personalise", "Sound", "Lock screen", "Power", "Updates", "Storage", "About" };
 static int sect, hover = -1;
 
 /* ---- clickable regions, rebuilt on every draw ---- */
@@ -145,6 +145,85 @@ static void draw_time(void) {
 }
 
 static const char *modes[] = { "", "1024x768", "1280x720", "1280x800", "1366x768", "1440x900", "1600x900", "1920x1080", "1920x1200", "2560x1440" };
+/* ---- Personalise: wallpaper, accent colour, name ---- */
+static const struct { const char *name; const char *hex; } accents[] = {
+    { "Cream", "" }, { "Sky", "9CC9F5" }, { "Mint", "9FE0B6" }, { "Peach", "F5B88E" }, { "Rose", "F2A7C3" }, { "Lilac", "C9B6F5" } };
+static char pics[8][96]; static int npics;
+static bool is_pic(const char *n) {
+    int l = strlen(n); if (l < 5) return false;
+    const char *e = n + l - 4; char x[5]; for (int i = 0; i < 4; i++) x[i] = (e[i] >= 'A' && e[i] <= 'Z') ? e[i] + 32 : e[i]; x[4] = 0;
+    return !strcmp(x, ".png") || !strcmp(x, ".jpg") || !strcmp(x, "jpeg") || !strcmp(x, ".bmp") || !strcmp(x, ".gif");
+}
+static void find_pictures(void) {
+    static const char *dirs[] = { "/home/Pictures", "/home", "/home/Downloads" };
+    struct dunc_dirent e[64]; npics = 0;
+    for (int d = 0; d < 3; d++) {
+        int n = fs_list(dirs[d], e, 64);
+        for (int i = 0; i < n && npics < 8; i++) if (!e[i].is_dir && is_pic(e[i].name)) ksnprintf(pics[npics++], sizeof pics[0], "%s/%s", dirs[d], e[i].name);
+    }
+}
+static void *wa(void *c, size_t n) { return malloc(n); }
+static void wf_(void *c, void *p) { free(p); }
+static void use_picture(const char *path) {
+    struct dunc_stat st;
+    if (fs_stat(path, &st) < 0 || st.size > (32 << 20)) { say(UI_RED, "That picture can't be read (or is bigger than 32 MB)."); return; }
+    uint8_t *data = malloc(st.size); if (!data) return;
+    long n = fs_read(path, data, 0, st.size);
+    struct image im; struct img_alloc al = { 0, wa, wf_ };
+    int r = n > 0 ? img_decode(data, n, &im, &al) : -1;
+    free(data);
+    if (r != IMG_OK) { say(UI_RED, "That picture can't be opened."); return; }
+    int w = im.w, h = im.h, step = 1;                     /* keep it to about screen size */
+    while (w / step > 2560 || h / step > 1600) step++;
+    int ow = w / step, oh = h / step;
+    long bytes = 12 + (long)ow * oh * 4;
+    uint8_t *out = malloc(bytes);
+    if (!out) { free(im.px); say(UI_RED, "Not enough memory for that picture."); return; }
+    memcpy(out, "AXWP", 4); *(uint32_t *)(out + 4) = ow; *(uint32_t *)(out + 8) = oh;
+    uint32_t *px = (uint32_t *)(out + 12);
+    for (int y = 0; y < oh; y++) for (int x = 0; x < ow; x++) {
+        uint32_t p = im.px[(long)y * step * w + (long)x * step], al = p >> 24;
+        px[(long)y * ow + x] = al == 255 ? (p & 0xFFFFFF) : gfx_mix(0x050505, p & 0xFFFFFF, al);
+    }
+    free(im.px);
+    fs_mkdir("/system/config");
+    long wr = fs_write("/system/config/wallpaper.raw", out, bytes);
+    free(out);
+    if (wr < 0) { say(UI_RED, "The picture couldn't be saved."); return; }
+    sys_setting_set("desktop.wallpaper", "axiom"); sys_setting_set("desktop.wallpaper", "picture");
+    say(UI_GREEN, "Wallpaper changed.");
+}
+static void draw_personal(void) {
+    heading("Personalise", "Wallpaper, accent colour and your name.");
+    char wp[32] = ""; sys_setting_get("desktop.wallpaper", wp, sizeof wp);
+    label(SIDE + 32, 104, UI_TEXT, "Wallpaper");
+    option(SIDE + 32, 116, 200, "AXIOM glow", !strcmp(wp, "axiom") || !wp[0], H_LIST + 0);
+    option(SIDE + 252, 116, 200, "Plain black", !strcmp(wp, "black"), H_LIST + 1);
+    int y = 158;
+    if (!npics) label(SIDE + 32, y + 20, UI_MUTED, "For a picture, put a PNG or JPEG in Pictures (or Home) in Files.");
+    for (int i = 0; i < npics; i++) {
+        const char *nm = pics[i]; for (const char *q = pics[i]; *q; q++) if (*q == '/') nm = q + 1;
+        option(SIDE + 32 + (i % 2) * 220, y + (i / 2) * 36, 200, nm, false, H_LIST + 10 + i);
+    }
+    y += ((npics + 1) / 2) * 36 + (npics ? 14 : 44);
+    label(SIDE + 32, y, UI_TEXT, "Accent colour"); y += 12;
+    char ac[16] = ""; sys_setting_get("ui.accent", ac, sizeof ac);
+    for (int i = 0; i < 6; i++) {
+        int x = SIDE + 32 + i * 92;
+        uint32_t col = accent_from_setting(accents[i].hex);
+        bool sel = !strcmp(ac, accents[i].hex);
+        gfx_rrect(&a.c, x, y, 84, 52, 10, sel ? 0x2E2E2B : UI_PANEL, 255);
+        if (sel) gfx_rrect_outline(&a.c, x, y, 84, 52, 10, col, 255);
+        gfx_circle(&a.c, x + 42, y + 18, 10, col, 255);
+        gfx_text_center(&a.c, &font_ui, x, 84, y + 46, sel ? UI_TEXT : UI_MUTED, accents[i].name);
+        add_hit(x, y, 84, 52, H_LIST + 30 + i);
+    }
+    y += 76;
+    label(SIDE + 32, y, UI_TEXT, "Your name (shown in the terminal)");
+    field(SIDE + 32, y + 12, 260, 3, "bryan");
+    button(SIDE + 304, y + 12, 90, "Save", BTN_PRIMARY, H_BTN + 50, false);
+}
+
 static void draw_display(void) {
     char b[96];
     heading("Display", 0);
@@ -425,7 +504,7 @@ void draw(void) {
         add_hit(12, y, SIDE - 24, 36, H_SECT + i);
     }
     switch (sect) {
-    case S_KEYB: draw_keyboard(); break; case S_MOUSE: draw_mouse(); break; case S_TIME: draw_time(); break; case S_DISPLAY: draw_display(); break;
+    case S_KEYB: draw_keyboard(); break; case S_MOUSE: draw_mouse(); break; case S_TIME: draw_time(); break; case S_DISPLAY: draw_display(); break; case S_PERSONAL: draw_personal(); break;
     case S_SOUND: draw_sound(); break; case S_LOCK: draw_lock(); break; case S_POWER: draw_power(); break;
     case S_UPDATES: draw_updates(); break; case S_STORAGE: draw_storage(); break; case S_ABOUT: draw_about(); break;
     }
@@ -467,6 +546,7 @@ static void open_section(int s) {
         if (list_scroll > nlist - 9) list_scroll = nlist > 9 ? nlist - 9 : 0;
     }
     if (s == S_STORAGE) ndisks = sys_disks(disks, 8);
+    if (s == S_PERSONAL) { find_pictures(); char un[64] = ""; sys_setting_get("user.name", un, sizeof un); strncpy0(fields[3].s, un, sizeof fields[3].s); fields[3].len = strlen(fields[3].s); }
 }
 
 static void click(int id, int mx) {
@@ -477,6 +557,13 @@ static void click(int id, int mx) {
         int i = id - H_LIST;
         if (sect == S_KEYB && i < nlist) set("keyboard.layout", lid[i]);
         if (sect == S_TIME && i < nlist) set("time.zone", lid[i]);
+        if (sect == S_PERSONAL) {
+            if (i == 0) { sys_setting_set("desktop.wallpaper", "axiom"); say(UI_MUTED, "Wallpaper: AXIOM glow."); }
+            else if (i == 1) { sys_setting_set("desktop.wallpaper", "black"); say(UI_MUTED, "Wallpaper: plain black."); }
+            else if (i >= 10 && i < 10 + npics) { say(UI_MUTED, "Setting the wallpaper..."); draw(); use_picture(pics[i - 10]); }
+            else if (i >= 30 && i < 36) { sys_setting_set("ui.accent", accents[i - 30].hex); hl_accent = accent_from_setting(accents[i - 30].hex); say(UI_GREEN, "Accent colour changed. Apps opened from now on use it too."); }
+            return;
+        }
         if (sect == S_DISPLAY) { set("display.mode", modes[i]); say(UI_MUTED, i ? "Saved. It takes effect the next time AXIOM starts." : "Saved: automatic."); }
         if (sect == S_LOCK) { static const char *v[] = { "0", "1", "5", "10", "30" }; set("lock.idle_min", v[i]); }
         if (sect == S_POWER) { static const char *v[] = { "0", "2", "5", "10", "30" }; set("screen.off_min", v[i]); }
@@ -506,6 +593,13 @@ static void click(int id, int mx) {
     if (id == H_BTN + 4) sys_power(0);
     if (id >= H_DISK && id < H_DISK + 16) { confirm_disk = (id - H_DISK) / 2; confirm_mode = (id - H_DISK) % 2 ? INSTALL_UPDATE : INSTALL_ERASE; }
     if (id == H_BTN + 40) sys_spawn("sandbox");
+    if (id == H_BTN + 50) {
+        int k = 0; char nm[41];                                   /* letters, digits, - and _ only, lower case */
+        for (int i = 0; fields[3].s[i] && k < 32; i++) { char c = fields[3].s[i]; if (c >= 'A' && c <= 'Z') c += 32; if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_') nm[k++] = c; }
+        nm[k] = 0;
+        if (!k) say(UI_RED, "Type a name first (letters and numbers).");
+        else { sys_setting_set("user.name", nm); say(UI_GREEN, "Saved. New terminals will show it."); }
+    }
     if (id == H_BTN + 31) check_updates();
     if (id == H_BTN + 30 && ustate == U_AVAILABLE) install_update();
     if (id == H_BTN + 32) sys_power(1);
@@ -531,6 +625,7 @@ static void key(int k) {
     if (k == '\b') { if (f->len) f->s[--f->len] = 0; }
     else if (k == '\t' && sect == S_LOCK) focus = focus == 0 ? 1 : 0;
     else if (k == '\n' && sect == S_LOCK) click(H_BTN + 0, 0);
+    else if (k == '\n' && sect == S_PERSONAL) click(H_BTN + 50, 0);
     else if (k == 22 && !f->secret) clip_paste_line(f->s, &f->len, 41);
     else if (key_is_char(k) && f->len < 40) { f->s[f->len++] = (char)k; f->s[f->len] = 0; }
 }

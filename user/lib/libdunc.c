@@ -14,7 +14,14 @@ bool app_resize(struct app *a, const struct dunc_event *e) {
     gfx_init(&a->c, a->wi.buf, a->wi.w, a->wi.h, a->wi.w);
     return true;
 }
+uint32_t hl_accent = HL_CREAM;
+uint32_t accent_from_setting(const char *v) {             /* "rrggbb" -> colour (cream if unset) */
+    uint32_t c = 0; int n = 0;
+    for (; *v && n < 6; v++, n++) { int d = *v >= '0' && *v <= '9' ? *v - '0' : *v >= 'a' && *v <= 'f' ? *v - 'a' + 10 : *v >= 'A' && *v <= 'F' ? *v - 'A' + 10 : -1; if (d < 0) break; c = c << 4 | d; }
+    return n == 6 ? c : HL_CREAM;
+}
 bool app_open_ex(struct app *a, int w, int h, const char *title, int flags) {
+    { char v[16] = ""; sys_setting_get("ui.accent", v, sizeof v); hl_accent = accent_from_setting(v); }
     if (sys_call(SYS_WIN_CREATE, w, h, (long)title, (long)&a->wi, flags) < 0) return false;
     gfx_init(&a->c, a->wi.buf, a->wi.w, a->wi.h, a->wi.w);
     return true;

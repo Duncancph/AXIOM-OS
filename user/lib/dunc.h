@@ -117,6 +117,7 @@ static inline void app_title(struct app *a, const char *t) { sys_call(SYS_WIN_TI
 /* memory */
 /* a key event that types a character (Windows-1252) */
 static inline bool key_is_char(int k) { return k >= 32 && k <= 255 && k != 127; }
+uint32_t accent_from_setting(const char *v);
 void *malloc(size_t n);
 void free(void *p);
 void *realloc(void *p, size_t n);

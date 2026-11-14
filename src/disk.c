@@ -243,6 +243,9 @@ static int write_grubcfg(const char *dir) {
     struct dunc_stat st; char bp[64]; ksnprintf(bp, sizeof bp, "%s/biosboot.img", dir);
     const char *bios = vfs_stat(bp, &st) == FS_OK ? "    module2 /duncos/biosboot.img biosboot\n" : "";   /* only if it's there */
     int n = ksnprintf(cfg, sizeof cfg, GRUBCFG_FMT, first, bios, bios);
+    if (n < (int)sizeof cfg - 300)                         /* what the graphics card offers (Settings > Display can only pick from these) */
+        n += ksnprintf(cfg + n, sizeof cfg - n, "menuentry \"Show the screen sizes this computer offers\" {\n    videoinfo\n"
+                       "    echo\n    echo \"AXIOM can use the sizes listed above. Press a key to go back.\"\n    sleep --interruptible 300\n}\n");
     char pk[64]; ksnprintf(pk, sizeof pk, "%s/thane-prev.elf", dir);
     if (vfs_stat(pk, &st) == FS_OK && n < (int)sizeof cfg - 400)       /* the version before the last update */
         n += ksnprintf(cfg + n, sizeof cfg - n, "menuentry \"AXIOM (previous version)\" {\n    set gfxpayload=auto\n"

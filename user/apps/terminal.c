@@ -22,7 +22,7 @@ static int cur_col = 0;
 static int view;                                   /* lines scrolled back from the bottom */
 static int sel_l0 = -1, sel_c0, sel_l1, sel_c1;    /* selection (line, column), -1: none */
 static bool dragging;
-static const uint32_t pal[] = { HL_TEXT, HL_ACCENT, HL_GOLD, HL_GREEN, HL_RED, HL_TEXT_FAINT, HL_TEXT_DIM };
+static uint32_t pal[] = { HL_TEXT, HL_CREAM, HL_GOLD, HL_GREEN, HL_RED, HL_TEXT_FAINT, HL_TEXT_DIM };
 enum { C_TEXT, C_CYAN, C_GOLD, C_GREEN, C_RED, C_DIM, C_WHITE };
 
 static void newline(void) {
@@ -64,7 +64,7 @@ static void fetch(void) {
     static const char *k[] = { "OS", "Kernel", "Shell", "Uptime", "Memory", "Font" };
     if (cx) putch('\n');
     fetch_line = nlines - 1;
-    puts_c("            ", C_TEXT); puts_c("bryan", C_CYAN); puts_c("@", C_TEXT); puts_c("axiom\n", C_CYAN);
+    puts_c("            ", C_TEXT); { char un[40] = ""; sys_setting_get("user.name", un, sizeof un); puts_c(un[0] ? un : "bryan", C_CYAN); } puts_c("@", C_TEXT); puts_c("axiom\n", C_CYAN);
     puts_c("            -------------\n", C_DIM);
     for (int i = 0; i < 6; i++) { puts_c("            ", C_TEXT); print("%s", ""); cur_col = C_GOLD; print("%-9s", k[i]); cur_col = C_TEXT; print("%s\n", v[i]); }
     putch('\n');
@@ -560,6 +560,7 @@ static void paste(void) {
 
 int main(void) {
     if (!app_open_ex(&a, WW, WH, "castle - ~", WIN_RESIZABLE)) return 1;
+    pal[1] = HL_ACCENT;                                  /* the accent colour from Settings > Personalise */
     fetch();
     puts_c("Type 'help' to see the available commands.\n", C_DIM);
     prompt();

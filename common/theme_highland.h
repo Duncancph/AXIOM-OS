@@ -37,7 +37,9 @@
 #define HL_SHADOW_ALPHA  110
 
 /* ---- Accent (change this one value to recolour the UI) ---- */
-#define HL_ACCENT        HL_CREAM
+#include <stdint.h>
+extern uint32_t hl_accent;                    /* Settings > Personalise (cream unless changed) */
+#define HL_ACCENT        hl_accent
 #define HL_ON_ACCENT     0x0B0B0Bu   /* text on accent-coloured buttons */
 
 /* ---- Metrics (pixels) ---- */

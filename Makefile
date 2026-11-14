@@ -124,15 +124,15 @@ build/initrd.tar: $(shell find rootfs -type f) $(REPO_PKGS) repo/index.txt $(K_S
 	tar --format=ustar --owner=0 --group=0 -cf $@ -C build/rootfs .
 
 # The boot loader the installer puts on disks: GRUB with its modules built in, finds /duncos on any disk
-GRUB_MODS := part_gpt part_msdos fat multiboot2 normal search search_fs_file configfile all_video gfxterm echo sleep test
-build/bootx64.efi: tools/grub-embed.cfg
+GRUB_MODS := part_gpt part_msdos fat multiboot2 normal search search_fs_file configfile all_video gfxterm echo sleep test videoinfo
+build/bootx64.efi: tools/grub-embed.cfg Makefile
 	@mkdir -p build
 	grub-mkstandalone -O x86_64-efi -o $@ --modules="$(GRUB_MODS)" --install-modules="$(GRUB_MODS)" \
 	    --locales= --fonts= --themes= "boot/grub/grub.cfg=tools/grub-embed.cfg"
 
 # ... and for PCs started in legacy BIOS mode: GRUB's MBR code (boot.img) followed by its core image, which
 # the installer writes into the gap between the partition table and the first partition
-build/biosboot.img: tools/grub-embed.cfg
+build/biosboot.img: tools/grub-embed.cfg Makefile
 	@mkdir -p build
 	grub-mkimage -O i386-pc -o build/core.img -p /duncos -c tools/grub-embed.cfg biosdisk $(GRUB_MODS)
 	cat /usr/lib/grub/i386-pc/boot.img build/core.img > $@

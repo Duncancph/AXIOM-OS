@@ -9,6 +9,8 @@
 #include "highland.h"
 #include "net.h"
 
+uint32_t hl_accent = HL_CREAM;          /* Settings > Personalise */
+
 #define TITLE (HL_TITLE_H + 1)          /* content starts below the title bar + divider */
 #define MAX_WIN 32
 
@@ -25,6 +27,7 @@ struct window {
     int want_w, want_h;                 /* size requested from the app */
     int rx, ry, rw, rh;                 /* position/size to restore after maximise */
     uint64_t last_title_click;
+    bool snapped;                       /* filling half the screen (dragged to an edge) */
 };
 static inline int fw(struct window *w) { return w->w + 2; }
 static inline int fh(struct window *w) { return w->h + TITLE + 1; }
@@ -43,6 +46,9 @@ static struct canvas cv;
 static struct framebuffer full;
 
 static int mx, my, mbtn, drag_win = -1, drag_ox, drag_oy, capture_win = -1, hover_win = -1;
+static int snap_zone;                    /* while dragging a window: 1 left half, 2 right half, 3 full screen */
+static int sw_list[32], sw_n, sw_sel;    /* Alt+Tab: the windows in the order they were last used, and the choice */
+static uint64_t sw_until;
 static int resize_win = -1, resize_mode, resize_ox, resize_oy, resize_w0, resize_h0;   /* mode: 1 right, 2 bottom, 3 corner */
 #define MIN_W 280
 #define MIN_H 160
@@ -75,7 +81,7 @@ static struct rect bar_rect(void) { return (struct rect){ 0, 0, W, HL_BAR_H }; }
 static struct rect dock_rect(void) { int x, y, w, h; hl_dock_rect(W, H, HL_NAPPS, &x, &y, &w, &h); return (struct rect){ x, y, w, h }; }
 static struct rect dock_area(void) { struct rect d = dock_rect(); return (struct rect){ d.x - 1, d.y - 1, d.w + 2, d.h + 10 }; }  /* incl. shadow */
 static struct rect dock_item(int i) { struct rect d = dock_rect(); return (struct rect){ d.x + HL_DOCK_PAD + i * (HL_DOCK_ICON + HL_DOCK_GAP), d.y + HL_DOCK_PAD, HL_DOCK_ICON, HL_DOCK_ICON }; }
-static struct rect frame_area(struct window *w) { return (struct rect){ w->x - 8, w->y - 2, fw(w) + 16, fh(w) + 30 }; }
+static struct rect frame_area(struct window *w) { return (struct rect){ w->x - 16, w->y - 12, fw(w) + 32, fh(w) + 44 }; }   /* incl. the shadow */
 static struct rect crown_btn(void) { return (struct rect){ 6, 3, 132, HL_BAR_H - 6 }; }
 #define MENU_W 300
 #define MENU_ROW 46
@@ -410,6 +416,37 @@ static void lock_key(int k) {
     damage(0, 0, W, H);
 }
 
+/* the area a window fills when dragged to the left/right edge or the top */
+static struct rect snap_rect(int z) {
+    int top = HL_BAR_H, h = dock_rect().y - 8 - top;
+    if (z == 1) return (struct rect){ 0, top, W / 2, h };
+    if (z == 2) return (struct rect){ W / 2, top, W - W / 2, h };
+    return (struct rect){ 0, top, W, h };
+}
+static struct rect switcher_rect(void) { int h = 70 + sw_n * 44; if (h > H - 120) h = H - 120; return (struct rect){ (W - 460) / 2, (H - h) / 2, 460, h }; }
+static void draw_switcher(void) {
+    struct rect s = switcher_rect();
+    gfx_rrect(&cv, s.x - 2, s.y + 8, s.w + 4, s.h + 4, 18, HL_SHADOW, 120);
+    gfx_rrect(&cv, s.x, s.y, s.w, s.h, 16, HL_WIN_BG, 245);
+    gfx_rrect_outline(&cv, s.x, s.y, s.w, s.h, 16, HL_CREAM, 70);
+    gfx_text(&cv, &font_ui_bold, s.x + 20, s.y + 30, HL_TEXT_DIM, "Switch to");
+    for (int i = 0; i < sw_n && 50 + i * 44 + 40 < s.h; i++) {
+        struct window *w = &wins[sw_list[i]];
+        if (!w->used) continue;
+        int y = s.y + 44 + i * 44;
+        if (i == sw_sel) gfx_rrect(&cv, s.x + 10, y, s.w - 20, 40, 10, HL_CREAM, 40);
+        const struct app_entry *ae = w->owner && w->owner->appid[0] ? apps_find(w->owner->appid) : 0;
+        const uint32_t *ic = hl_app_icon(ae ? ae->icon : "gear", 1);
+        for (int j = 0; j < 34; j++) for (int k = 0; k < 34; k++) {
+            uint32_t p = ic[j * 34 + k], al = p >> 24;
+            if (al) { uint32_t *d = &bb[(y + 3 + j) * W + s.x + 18 + k]; *d = al == 255 ? (p & 0xFFFFFF) : gfx_mix(*d, p & 0xFFFFFF, al); }
+        }
+        char t[48]; strncpy0(t, w->title, sizeof t);
+        gfx_text(&cv, i == sw_sel ? &font_ui_bold : &font_ui, s.x + 64, y + 26, i == sw_sel ? HL_TEXT : HL_TEXT_DIM, t);
+        if (w->minimized) gfx_text(&cv, &font_ui, s.x + s.w - 110, y + 26, HL_TEXT_FAINT, "minimised");
+    }
+}
+
 static void compose(struct rect r) {
     gfx_clip(&cv, r.x, r.y, r.w, r.h);
     if (screen_off) { gfx_fill(&cv, r.x, r.y, r.w, r.h, 0x000000); flush_rect(r); return; }
@@ -458,6 +495,8 @@ static void compose(struct rect r) {
     }
     draw_dock_overlay();
     if (menu_open) draw_menu();
+    if (snap_zone) { struct rect s = snap_rect(snap_zone); gfx_rrect(&cv, s.x + 6, s.y + 6, s.w - 12, s.h - 12, 14, HL_CREAM, 34); gfx_rrect_outline(&cv, s.x + 6, s.y + 6, s.w - 12, s.h - 12, 14, HL_CREAM, 120); }
+    if (sw_until) draw_switcher();
     draw_toasts();
     flush_rect(r);
 }
@@ -778,8 +817,8 @@ static void click(int button) {
             uint64_t now = uptime_ms();
             if (now - w->last_title_click < 400) { toggle_maximize(w); w->last_title_click = 0; return; }
             w->last_title_click = now;
-            if (w->maximized) {   /* dragging a maximised window restores it under the cursor */
-                w->maximized = false;
+            if (w->maximized || w->snapped) {   /* dragging a maximised or snapped window restores it under the cursor */
+                w->maximized = false; w->snapped = false;
                 damage_frame(w);
                 w->x = mx - w->rw / 2; if (w->x < 0) w->x = 0;
                 request_size(w, w->rw, w->rh);
@@ -839,12 +878,27 @@ static void handle_mouse(int dx, int dy, int b, int wheel) {
         if (w->x + fw(w) < 80) w->x = 80 - fw(w);
         if (w->x > W - 80) w->x = W - 80;
         damage_frame(w);
+        int z = !w->resizable ? 0 : mx <= 1 ? 1 : mx >= W - 2 ? 2 : my <= HL_BAR_H ? 3 : 0;   /* snapping to an edge */
+        if (z != snap_zone) { if (snap_zone) damage_r(snap_rect(snap_zone)); snap_zone = z; if (z) damage_r(snap_rect(z)); }
     }
     int pressed = b & ~mbtn, released = mbtn & ~b;
     mbtn = b;
     if (pressed & 1) click(1);
     if (pressed & 2) click(2);
     if (released & 3) {
+        if (drag_win >= 0 && snap_zone) {
+            struct window *w = &wins[drag_win];
+            int z = snap_zone; damage_r(snap_rect(z)); snap_zone = 0;
+            if (z == 3) { if (!w->maximized) toggle_maximize(w); }
+            else {
+                struct rect s = snap_rect(z);
+                if (!w->snapped && !w->maximized) { w->rx = w->x; w->ry = w->y; w->rw = w->w; w->rh = w->h; }
+                damage_frame(w);
+                w->x = s.x; w->y = s.y; w->snapped = true; w->maximized = false;
+                request_size(w, s.w - 2, s.h - TITLE - 1);
+                damage_frame(w);
+            }
+        }
         drag_win = -1;
         if (resize_win >= 0) { resize_win = -1; update_hover(); }
         if (capture_win >= 0) { send_mouse(capture_win, EV_MOUSE_UP, (released & 1) ? 1 : 2); capture_win = -1; }
@@ -907,6 +961,21 @@ static void handle_key(int k) {
     if (KEY_CODE(k) == KEY_PRTSC) { take_screenshot(); return; }
     if (k == (KEYMOD_ALT | KEY_F4)) { int t = top_window(); if (t >= 0) close_window_clicked(&wins[t]); return; }
     if (k == KEY_SUPER) { toggle_menu(!menu_open); return; }
+    if ((k & ~KEYMOD_SHIFT) == (KEYMOD_ALT | '\t')) {       /* Alt+Tab (Alt+Shift+Tab goes back) */
+        uint64_t now = uptime_ms();
+        if (!sw_until || now > sw_until) {                    /* a new round: windows from the most recently used */
+            sw_n = 0;
+            for (int z = nz - 1; z >= 0 && sw_n < 32; z--) if (wins[zorder[z]].used) sw_list[sw_n++] = zorder[z];
+            sw_sel = 0;
+        }
+        if (sw_n < 1) return;
+        damage_r(switcher_rect());
+        sw_sel = (sw_sel + ((k & KEYMOD_SHIFT) ? sw_n - 1 : 1)) % sw_n;
+        if (wins[sw_list[sw_sel]].used) raise(sw_list[sw_sel]);
+        sw_until = now + 1400;
+        damage_r(switcher_rect());
+        return;
+    }
     if (menu_open && k == 27) { toggle_menu(false); return; }
     int t = top_window();
     if (t < 0) return;
@@ -934,6 +1003,7 @@ void boot_progress(int percent) {
     boot_logo_progress(&splash_fb, percent);
 }
 
+static void draw_wallpaper(void);
 void desktop_init(void) {
     struct bootinfo *b = &bootinfo;
     W = b->fb_w; H = b->fb_h; fb_stride = b->fb_pitch / 4;
@@ -962,10 +1032,42 @@ void desktop_init(void) {
     fb_write_combining(b->fb_addr, (uint64_t)b->fb_pitch * b->fb_h);
     gfx_init(&cv, bb, W, H, W);
     full = (struct framebuffer){ bb, W, H, W * 4 };
-    struct framebuffer wf = { wall, W, H, W * 4 };
-    ax_draw_wallpaper(&wf);
+    draw_wallpaper();
     mx = W / 2; my = H / 2;
     desktop_ok = true;
+}
+
+/* Settings > Personalise: the AXIOM glow (default), plain black, or a picture
+ * (/system/config/wallpaper.raw: "AXWP", width, height, then 0xRRGGBB pixels, made by Settings) */
+static void draw_wallpaper(void) {
+    const char *v = settings_get("desktop.wallpaper");
+    if (!strcmp(v, "black")) { for (long i = 0; i < (long)W * H; i++) wall[i] = 0x050505; return; }
+    if (!strcmp(v, "picture")) {
+        uint64_t len; uint8_t *f = vfs_read_all("/system/config/wallpaper.raw", &len);
+        if (f && len > 12 && !memcmp(f, "AXWP", 4)) {
+            uint32_t pw = *(uint32_t *)(f + 4), ph = *(uint32_t *)(f + 8);
+            if (pw && ph && pw <= 8192 && ph <= 8192 && len >= 12 + (uint64_t)pw * ph * 4) {
+                const uint32_t *px = (const uint32_t *)(f + 12);
+                /* cover the screen, keeping the picture's shape (the middle is kept) */
+                uint64_t sx = (uint64_t)pw * 65536 / W, sy = (uint64_t)ph * 65536 / H, s = sx < sy ? sx : sy;
+                uint64_t ox = ((uint64_t)pw * 65536 - s * W) / 2, oy = ((uint64_t)ph * 65536 - s * H) / 2;
+                for (int y = 0; y < H; y++) {
+                    uint32_t yy = (uint32_t)((oy + s * y) >> 16); if (yy >= ph) yy = ph - 1;
+                    for (int x = 0; x < W; x++) { uint32_t xx = (uint32_t)((ox + s * x) >> 16); if (xx >= pw) xx = pw - 1; wall[y * W + x] = px[yy * pw + xx] & 0xFFFFFF; }
+                }
+                kfree(f);
+                return;
+            }
+        }
+        kfree(f);
+    }
+    struct framebuffer wf = { wall, W, H, W * 4 };
+    ax_draw_wallpaper(&wf);
+}
+void desktop_restyle(void) {                              /* the wallpaper or accent colour changed */
+    if (!desktop_ok) return;
+    draw_wallpaper();
+    damage(0, 0, W, H);
 }
 
 void desktop_size(int *w, int *h, bool *is_scaled) { *w = W; *h = H; if (is_scaled) *is_scaled = scaled; }
@@ -985,6 +1087,7 @@ void desktop_thread(void *arg) {
         uint64_t now = uptime_ms();
         for (int i = 0; i < 4; i++)
             if (toasts[i].used && now > toasts[i].until) { toasts[i].used = false; struct rect r = toast_rect(i); damage(r.x - 6, r.y, r.w + 12, r.h + 16); }
+        if (sw_until && now > sw_until) { sw_until = 0; struct rect r = switcher_rect(); damage(r.x - 4, r.y, r.w + 8, r.h + 16); }
         static uint64_t last_check;
         if (now - last_check > 250) {
             last_check = now;

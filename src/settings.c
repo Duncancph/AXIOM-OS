@@ -25,6 +25,7 @@ static const char *defaults[][2] = {
     { "keyboard.layout", "us" }, { "time.zone", "UTC" }, { "time.rtc_local", "0" }, { "time.24h", "0" },
     { "display.mode", "" }, { "mouse.speed", "5" }, { "mouse.natural", "0" }, { "mouse.left", "0" }, { "sound.volume", "70" }, { "lock.password", "" }, { "lock.idle_min", "0" }, { "screen.off_min", "10" },
     { "update.url", UPDATE_URL },
+    { "ui.accent", "" }, { "desktop.wallpaper", "axiom" }, { "user.name", "bryan" },
 };
 
 const char *settings_get(const char *key) {
@@ -39,7 +40,15 @@ static void store(const char *key, const char *val) {
     if (nset < NSET) { strncpy0(set[nset].key, key, sizeof set[nset].key); strncpy0(set[nset].val, val, sizeof set[nset].val); nset++; }
 }
 
+void desktop_restyle(void);
 static void apply(const char *key) {
+    if (!strcmp(key, "ui.accent") || !strcmp(key, "desktop.wallpaper")) {
+        extern uint32_t hl_accent;
+        const char *v = settings_get("ui.accent"); uint32_t c = 0; int n = 0;
+        for (; *v && n < 6; v++, n++) { int d = *v >= '0' && *v <= '9' ? *v - '0' : *v >= 'a' && *v <= 'f' ? *v - 'a' + 10 : *v >= 'A' && *v <= 'F' ? *v - 'A' + 10 : -1; if (d < 0) break; c = c << 4 | d; }
+        hl_accent = n == 6 ? c : 0xF4F1DEu;
+        desktop_restyle();
+    }
     if (!strcmp(key, "keyboard.layout")) kbd_set_layout(settings_get(key));
     if (!strcmp(key, "display.mode")) {
         char m[40] = "";
