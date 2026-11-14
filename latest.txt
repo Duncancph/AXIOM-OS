@@ -1,0 +1,8 @@
+AXIOM update 1
+version 0.2
+build 34
+notes AXIOM: new name and design, freeze fixes, log saved to disk
+file kernel b34/thane.elf.gz 10832400 0d8ba7cc56a867210c498a3f2e391fa5f4bd1439548725b86daefe5363707cf7
+file initrd b34/initrd.tar.gz 1228800 14b15a9b4b56c8da86342d3ec57442cee44da4e0d150e1f40f98fca4f3390222
+file bootx64 b34/bootx64.efi.gz 1482752 98497ad9f01e43ebd7c2f7d02e49e28a288ca8119cc42ac3cd9e487cb31806c4
+signature 3044022041572ff5770305e795eaa8e623e966fee9339cca7fee296b013bfb2b345abb7e02202841bd3a18f14a21195a5492d18536a5fdb747f68f9a318cef4851b39a790868
