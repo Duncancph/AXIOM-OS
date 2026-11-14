@@ -58,6 +58,25 @@ const uint8_t *bootmod(const char *name, uint64_t *len) {
     return 0;
 }
 
+/* Saves the kernel log to the installed disk every few seconds (/system/config/boot.log), and keeps the
+ * previous start's log as last-boot.log, so that after a lock-up and restart we can see what happened. */
+static void log_thread(void *arg) {
+    static char buf[32768 + 128];
+    task_sleep(3000);
+    if (disk_system_id() < 0) task_exit(0);              /* running from memory only: nowhere to keep it */
+    struct dunc_stat st;
+    if (!vfs_stat("/system/config/boot.log", &st)) { vfs_delete("/system/config/last-boot.log"); vfs_rename("/system/config/boot.log", "/system/config/last-boot.log"); }
+    uint64_t last_len = 0;
+    for (;;) {
+        console_log_read(buf, 32768);
+        uint64_t n = strlen(buf);
+        uint64_t up = uptime_ms() / 1000;
+        n += ksnprintf(buf + n, sizeof buf - n, "--- saved %lu min %lu s after starting (build %d) ---\n", up / 60, up % 60, OS_BUILD);
+        if (n != last_len || up % 30 == 0) { vfs_write("/system/config/boot.log", buf, n); last_len = n; }
+        task_sleep(5000);
+    }
+}
+
 /* Watches for USB devices being plugged in or removed. */
 static void usb_thread(void *arg) {
     for (;;) { xhci_service(); task_sleep(100); }
@@ -122,6 +141,7 @@ void kmain(uint32_t magic, uint64_t mbi) {
     task_create_kernel("Desktop", desktop_thread, 0);
     task_create_kernel("USB", usb_thread, 0);
     task_create_kernel("Network", net_thread, 0);
+    task_create_kernel("Log", log_thread, 0);
     task_spawn("about");
     boot_progress(100);
     sleep_ms(400);

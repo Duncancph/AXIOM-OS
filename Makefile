@@ -29,7 +29,7 @@ all: duncos.iso
 # build number = number of commits; updates must have a higher one than the running system
 BUILD_NUM := $(shell git rev-list --count HEAD 2>/dev/null || echo 0)
 $(shell mkdir -p build; [ "`cat build/build_num 2>/dev/null`" = "$(BUILD_NUM)" ] || echo $(BUILD_NUM) > build/build_num)
-K_BUILD_OBJS := build/k/src/update.o build/k/src/syscall.o build/k/src/shell.o build/k/src/sched.o build/k/src/idt.o
+K_BUILD_OBJS := build/k/src/main.o build/k/src/update.o build/k/src/syscall.o build/k/src/shell.o build/k/src/sched.o build/k/src/idt.o
 $(K_BUILD_OBJS): build/build_num
 $(K_BUILD_OBJS): KCFLAGS += -DOS_BUILD=$(BUILD_NUM)
 

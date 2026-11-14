@@ -12,7 +12,7 @@
 #define OS_BUILD 0                       /* set by the Makefile: the number of commits */
 #endif
 /* where Settings looks for updates (a signed manifest; see tools/make-release.py); "" = not set up */
-#define UPDATE_URL ""
+#define UPDATE_URL "https://raw.githubusercontent.com/Duncancph/AXIOM-OS/updates/latest.txt"
 
 typedef int bool;
 #define true 1

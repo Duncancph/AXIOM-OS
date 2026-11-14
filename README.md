@@ -111,7 +111,8 @@ Settings > Updates checks for a newer AXIOM and installs it on the disk AXIOM is
 
 To publish an update: commit, `make`, then
 `python3 tools/make-release.py <signing key .pem> "what's new"`, and upload the `release/` folder
-(`latest.txt` and `b<build>/`) to where `UPDATE_URL` in `src/kernel.h` points (or the `update.url`
+(`latest.txt` and `b<build>/`) to where `UPDATE_URL` in `src/kernel.h` points: the `updates` branch of
+the AXIOM-OS repository on GitHub, which must be public (or the `update.url`
 setting: `set update.url <url>` in castle). `tools/update-keygen.py` makes a new key pair; the
 private key must stay private, because whoever has it can make updates that AXIOM installs.
 

@@ -92,8 +92,15 @@ static void r_poll(struct netif *n) {
     if (r8(t, 0x6C) & 2 && now - t->last_restart > 30000 && t->restarts < 20 &&
         ((t->isr_seen & 0x50 && now - t->last_rx > 2000) || now - t->last_rx > 30000)) {
         t->last_restart = now;
-        if (t->restarts++ < 5) LOG_WARN("rtl8168: receiving stopped after %lu packets (status %04x); restarting the card (%d)\n", n->rx_packets, t->isr_seen, t->restarts);
-        start_hw(t);
+        /* re-arm receiving only: the receive buffers are handed back and RX restarted. (Resetting the whole chip
+         * here is what Linux does for some models, but it may have locked up some machines.) */
+        if (t->restarts++ < 5) LOG_WARN("rtl8168: receiving stopped after %lu packets (status %04x); re-arming receive (%d)\n", n->rx_packets, t->isr_seen, t->restarts);
+        w8(t, 0x37, 0x04);                                   /* TX only */
+        for (int i = 0; i < NRX; i++) { t->rx[i].opts2 = 0; t->rx[i].opts1 = OWN | (i == NRX - 1 ? EOR : 0) | 2048; }
+        t->rx_cur = 0; mb();
+        w32(t, 0xE4, (uint32_t)(uint64_t)t->rx); w32(t, 0xE8, (uint64_t)t->rx >> 32);
+        w8(t, 0x37, 0x0C);
+        t->isr_seen = 0; t->last_rx = now;
     }
 }
 
