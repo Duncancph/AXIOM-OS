@@ -131,6 +131,7 @@ double js_exp(double x) {
     }
     if (hx > 0x3fd62e42) {
         if (hx < 0x3FF0A2B2) {
+            if (x == 1.0) return 2.718281828459045; /* as V8: exp(1) is exactly Math.E */
             hi = x - ln2HI[xsb];
             lo = ln2LO[xsb];
             k = 1 - xsb - xsb;
@@ -147,9 +148,9 @@ double js_exp(double x) {
         k = 0;
     t = x * x;
     if (k >= -1021)
-        twopk = mkd(0x3ff00000 + (k << 20), 0);
+        twopk = mkd(0x3ff00000 + (int32_t)((uint32_t)k << 20), 0);
     else
-        twopk = mkd(0x3ff00000 + ((k + 1000) << 20), 0);
+        twopk = mkd(0x3ff00000 + (int32_t)((uint32_t)(k + 1000) << 20), 0);
     c = x - t * (P1 + t * (P2 + t * (P3 + t * (P4 + t * P5))));
     if (k == 0) return 1.0 - ((x * c) / (c - 2.0) - x);
     y = 1.0 - ((lo - (x * c) / (2.0 - c)) - hi);
@@ -341,7 +342,7 @@ double js_expm1(double x) {
     t = 3.0 - r1 * hfx;
     e = hxs * ((r1 - t) / (6.0 - x * t));
     if (k == 0) return x - (x * e - hxs);
-    twopk = mkd(0x3ff00000 + (k << 20), 0);
+    twopk = mkd(0x3ff00000 + (int32_t)((uint32_t)k << 20), 0);
     e = (x * (e - c) - c);
     e -= hxs;
     if (k == -1) return 0.5 * (x - e) - 0.5;
@@ -617,7 +618,7 @@ double js_pow(double x, double y) {
     r = (z * t1) / (t1 - 2.0) - (w + z * w);
     z = 1.0 - (r - z);
     j = HI(z);
-    j += (n << 20);
+    j += (int32_t)((uint32_t)n << 20);
     if ((j >> 20) <= 0)
         z = js_ldexp(z, n);
     else
@@ -1612,9 +1613,12 @@ static int round_digits(char *d, int n, int keep, int *k) {
         if (i >= 0)
             d[i]++;
         else {
-            memmove(d + 1, d, (size_t)n);
             d[0] = '1';
-            n++;
+            for (int j = 1; j < n; j++) d[j] = '0';
+            if (n == 0) {
+                d[0] = '1';
+                n = 1;
+            }
             (*k)++;
         }
     }

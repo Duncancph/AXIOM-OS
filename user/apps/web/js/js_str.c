@@ -209,7 +209,7 @@ void str_flatten(js_rt *rt, JSString *s) {
     s->h.flags |= STR_OWNBUF;
     s->s8 = (uint8_t *)buf;
     s->right = 0;
-    rt->bytes += len;
+    if (rt) rt->bytes += len;
 }
 
 JSString *str_sub(js_rt *rt, JSString *s, uint32_t start, uint32_t end) {

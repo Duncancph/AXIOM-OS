@@ -170,7 +170,7 @@ NATIVE(array_from) {
 }
 
 /* ---------------- mutators ---------------- */
-NATIVE(array_push) {
+NATIVE(ap_push) {
     if (dense(this_)) {
         JSObject *a = vobj(this_);
         if ((a->oflags & OF_EXTENSIBLE) && !(a->oflags & (OF_LEN_RO | OF_FROZEN_EL | OF_SEALED_EL))) {
@@ -1170,7 +1170,7 @@ void init_array(js_rt *rt) {
     def_method(rt, ctor, "of", array_of, 0, 0);
     def_method(rt, ctor, "from", array_from, 1, 0);
     def_getter_k(rt, ctor, SYM(species), "get [Symbol.species]", array_species, 0);
-    def_method(rt, ap, "push", array_push, 1, 0);
+    def_method(rt, ap, "push", ap_push, 1, 0);
     def_method(rt, ap, "pop", array_pop, 0, 0);
     def_method(rt, ap, "shift", array_shift, 0, 0);
     def_method(rt, ap, "unshift", array_unshift, 1, 0);

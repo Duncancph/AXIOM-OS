@@ -716,6 +716,19 @@ static JSBig *big_shift(js_rt *rt, JSBig *a, int64_t sh) {
     return r;
 }
 
+jsval big_from_u64(js_rt *rt, uint64_t v, bool neg) {
+    JSBig *b = bnew(rt, 2);
+    b->d[0] = (uint32_t)v;
+    b->d[1] = (uint32_t)(v >> 32);
+    bnorm(b);
+    return mkbig(with_sign(b, neg));
+}
+uint64_t big_to_u64(JSBig *b) {
+    uint64_t v = b->n > 0 ? b->d[0] : 0;
+    if (b->n > 1) v |= (uint64_t)b->d[1] << 32;
+    if (bneg(b)) v = (uint64_t)0 - v;
+    return v;
+}
 jsval big_neg(js_rt *rt, jsval a) {
     JSBig *x = (JSBig *)vptr(a);
     JSBig *r = bnew(rt, x->n);

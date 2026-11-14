@@ -136,6 +136,7 @@ typedef struct ParseResult {
     JSString *file;
     char errmsg[256];
     int errline;
+    int errtype;
     Node **refs; /* every identifier reference (malloc'd) */
     int nrefs;
 } ParseResult;

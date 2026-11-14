@@ -99,3 +99,12 @@ void js_root(js_rt *rt, jsval *slot);                     /* the slot is scanned
 void js_unroot(js_rt *rt, jsval *slot);
 void js_gc(js_rt *rt);
 long js_heap_bytes(js_rt *rt);
+
+/* ---- additions (engine extensions; everything above is unchanged) ---- */
+/* inside a js_native: true if it was invoked with `new` (this_ is then a fresh object whose
+ * prototype is newTarget.prototype; returning an object replaces it) */
+bool js_is_constructing(js_rt *rt);
+/* true while an exception is pending (e.g. after js_get ran a throwing getter inside a native) */
+bool js_has_exception(js_rt *rt);
+/* `new ctor(...argv)`. Returns 0, or -1 if it threw. */
+int  js_construct(js_rt *rt, jsval ctor, int argc, const jsval *argv, jsval *result);

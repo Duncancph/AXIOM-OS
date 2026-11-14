@@ -527,12 +527,23 @@ jsval get_v(js_rt *rt, jsval obj, jsval key) {
 }
 
 /* ---------------- [[Set]] ---------------- */
-static int fail_set(js_rt *rt, bool th, jsval key, const char *why) {
+static bool strstr_js(const char *h, const char *n) {
+    size_t ln = strlen(n);
+    for (; *h; h++)
+        if (!strncmp(h, n, ln)) return true;
+    return false;
+}
+static int fail_set_o(js_rt *rt, bool th, jsval key, const char *why, jsval obj) {
     if (!th) return 0;
     jsval kd = key_to_display(rt, key);
-    throw_error(rt, E_TYPE, why, vstr(kd));
+    JSString *od = is_obj(obj) ? val_brief(rt, obj) : 0;
+    if (od && strstr_js(why, "of object"))
+        throw_error(rt, E_TYPE, "Cannot assign to read only property '%S' of %s '%S'", vstr(kd), (vobj(obj)->oflags & OF_CALLABLE) ? "function" : "object", od);
+    else
+        throw_error(rt, E_TYPE, why, vstr(kd));
     return -1;
 }
+#define fail_set(rt, th, key, why) fail_set_o(rt, th, key, why, receiver)
 
 static bool chain_has_idx(JSObject *o) {
     for (; o; o = o->proto)
@@ -542,6 +553,8 @@ static bool chain_has_idx(JSObject *o) {
 
 /* define/overwrite a data property on receiver per OrdinarySet step 2 */
 static int set_on_receiver(js_rt *rt, jsval receiver, jsval key, jsval val, bool th) {
+    jsval obj = receiver;
+    (void)obj;
     if (!is_obj(receiver)) {
         if (!th) return 0;
         jsval kd = key_to_display(rt, key);
@@ -1571,13 +1584,13 @@ bool same_value(js_rt *rt, jsval a, jsval b) {
 int loose_eq(js_rt *rt, jsval a, jsval b) {
     for (int guard = 0; guard < 8; guard++) {
         if (is_num(a) && is_num(b)) return vnum(a) == vnum(b);
-        if ((vtag(a) == vtag(b) && !is_num(a)) || (is_boolv(a) && is_boolv(b))) return strict_eq(rt, a, b);
-        if (is_nullish(a) && is_nullish(b)) return 1;
         if (is_nullish(a) || is_nullish(b)) {
+            if (is_nullish(a) && is_nullish(b)) return 1;
             if (is_obj(a) && (vobj(a)->oflags & OF_HTMLDDA)) return 1;
             if (is_obj(b) && (vobj(b)->oflags & OF_HTMLDDA)) return 1;
             return 0;
         }
+        if ((vtag(a) == vtag(b) && !is_num(a) && !is_nullish(a)) || (is_boolv(a) && is_boolv(b))) return strict_eq(rt, a, b);
         if (is_num(a) && is_str(b)) return vnum(a) == str_to_number(rt, vstr(b));
         if (is_str(a) && is_num(b)) return str_to_number(rt, vstr(a)) == vnum(b);
         if (is_big(a) && is_str(b)) {

@@ -2159,8 +2159,8 @@ static jsval run(js_rt *rt, bool throwing) {
         NEXT;
     CASE(OPT_CHK)
         if (is_nullish(sp[-1 - pc[1]])) {
-            sp -= pc[2];
-            *sp++ = JS_UNDEF;
+            sp -= pc[2] & 0x7F;
+            *sp++ = (pc[2] & 0x80) ? JS_TRUE : JS_UNDEF;
             pc += 7 + (int32_t)rd32(pc + 3);
         } else
             pc += 7;
@@ -2701,7 +2701,7 @@ exception:
 /* ---------------- coroutines ---------------- */
 jsval coro_resume(js_rt *rt, JSObject *co, int mode, jsval v) {
     CoroData *cd = (CoroData *)co->u.data.p;
-    if (cd->state == 2 || cd->state == 4) return throw_error(rt, E_TYPE, "Generator is already running");
+    if (cd->state == 2) return throw_error(rt, E_TYPE, "Generator is already running");
     if (cd->state == 3) {
         rt->coro_status = 0;
         if (mode == 1) return throw_val(rt, v);
@@ -2785,8 +2785,7 @@ jsval eval_code(js_rt *rt, JSString *src, const char *file, bool is_fn_ctor) {
     FuncProto *fp = compile_script(rt, u, n, file, 0, &err);
     free(u);
     if (!fp) {
-        /* strip location suffix for SyntaxError messages from eval */
-        return throw_val(rt, mkobj(make_error(rt, E_SYNTAX, err)));
+        return throw_val(rt, mkobj(make_error(rt, rt->compile_errtype == E_RANGE ? E_RANGE : E_SYNTAX, err)));
     }
     (void)is_fn_ctor;
     return run_script(rt, fp);

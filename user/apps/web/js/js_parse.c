@@ -73,6 +73,7 @@ typedef struct P {
     js_jmp_buf jb;
     char *errmsg;
     int *errline;
+    int *errtype;
     int depth;
     int hidden;
     bool in_class_body;
@@ -80,7 +81,7 @@ typedef struct P {
     FuncNode *pending_arrow;
 } P;
 
-#define CHK_DEPTH(p) do { if (++(p)->depth > 1000 || check_stack((p)->rt)) p_error(p, "Maximum call stack size exceeded (code too deeply nested)"); } while (0)
+#define CHK_DEPTH(p) do { if (++(p)->depth > 1000 || check_stack((p)->rt)) { *(p)->errtype = E_RANGE; p_error(p, "Maximum call stack size exceeded"); } } while (0)
 #define END_DEPTH(p) ((p)->depth--)
 
 static __attribute__((noreturn)) void p_error_line(P *p, int line, const char *fmt, ...);
@@ -1320,7 +1321,10 @@ static Node *to_pattern(P *p, Node *e, bool binding) {
             n->b = e->b;
             return n;
         }
-    case N_ASSIGN_PAT: return e;
+    case N_ASSIGN_PAT:
+    case N_ARRAY_PAT:
+    case N_OBJECT_PAT:
+    case N_REST: return e;
     case N_ARRAY: {
         Node *n = mk(p, N_ARRAY_PAT);
         n->line = e->line;
@@ -2635,6 +2639,7 @@ static Node *parse_function_decl(P *p, bool is_async) {
         f |= FN_GEN;
         next(p);
     }
+    if (is(p, T_LPAREN)) p_error(p, "Function statements require a function name");
     if (!is(p, T_IDENT)) unexpected(p);
     jsval name = p->t.s;
     if (is_reserved(p, name) && !(name == A(yield) || name == A(await))) unexpected(p);
@@ -2998,6 +3003,8 @@ int js_parse(js_rt *rt, const char *src, size_t len, const char *file, int flags
     p->ar = &out->arena;
     p->errmsg = out->errmsg;
     p->errline = &out->errline;
+    p->errtype = &out->errtype;
+    out->errtype = E_SYNTAX;
     out->src = str_new8(rt, (const uint8_t *)src, (uint32_t)len);
     out->file = str_utf8(rt, file ? file : "<anonymous>", strlen(file ? file : "<anonymous>"));
     int rc = 0;

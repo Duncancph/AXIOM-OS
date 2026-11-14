@@ -1076,7 +1076,7 @@ static void gen_delete(FS *fs, Node *n) {
         Node *m = t->a;
         if (m->kind == N_MEMBER || m->kind == N_INDEX) {
             gen_expr(fs, m->a);
-            if (m->flags & NF_OPTIONAL) opt_check(fs, 0, 1);
+            if (m->flags & NF_OPTIONAL) opt_check(fs, 0, 0x81);
             if (m->kind == N_MEMBER) {
                 op(fs, OP_DELETE_FIELD);
                 u32_(fs, cst(fs, m->u.atom));
@@ -2373,12 +2373,18 @@ FuncProto *compile_script(js_rt *rt, const char *src, size_t len, const char *fi
     ParseResult pr;
     *err = 0;
     if (js_parse(rt, src, len, file, flags, &pr) < 0) {
-        *err = jsfmt(rt, "%s (%s:%d)", pr.errmsg, file ? file : "<anonymous>", pr.errline);
+        *err = jsfmt(rt, "%s", pr.errmsg);
+        rt->throw_line = pr.errline;
+        rt->compile_errtype = pr.errtype;
         arena_free(&pr.arena);
         return 0;
     }
     FuncProto *fp = js_codegen(rt, &pr, flags);
-    if (!fp) *err = jsfmt(rt, "%s (%s:%d)", pr.errmsg, file ? file : "<anonymous>", pr.errline);
+    rt->compile_errtype = E_SYNTAX;
+    if (!fp) {
+        *err = jsfmt(rt, "%s", pr.errmsg);
+        rt->throw_line = pr.errline;
+    }
     free(pr.refs);
     arena_free(&pr.arena);
     return fp;

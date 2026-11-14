@@ -268,6 +268,7 @@ enum {
     I_DataViewProto, I_WeakRefProto, I_FinRegProto,
     I_Promise, I_Array, I_Object, I_Function, I_ArrayValues, I_ArrayIterNext, I_ThrowTypeError, I_Error, I_RegExp,
     I_TypedArrayCtor, I_Symbol, I_Eval, I_PromiseThen, I_GeneratorFunction, I_AsyncFunction, I_AsyncGeneratorFunction,
+    I_RegExpExec, I_ConsoleCounts,
     I_TA_FIRST, /* typed array prototypes and constructors: 2 per kind */
     I__COUNT = I_TA_FIRST + 2 * 12
 };
@@ -328,11 +329,13 @@ struct js_rt {
     void *regex_cache;
     uint32_t sym_counter;
     JSObject *cur_this_fn; /* scratch */
+    int group_indent;      /* console.group */
+    int compile_errtype;
 };
 
 #define JS_STACK_SLOTS (192 * 1024)
 #define JS_MAX_FRAMES 9000
-#define JS_MAX_REC 400
+#define JS_MAX_REC 1000
 
 /* ---------------- gc.c ---------------- */
 void *gc_alloc(js_rt *rt, size_t size, int type);
@@ -692,6 +695,24 @@ jsval big_binop(js_rt *rt, int op, jsval a, jsval b);
 jsval big_neg(js_rt *rt, jsval a);
 bool big_is_zero(JSBig *b);
 jsval to_bigint(js_rt *rt, jsval v);
+jsval big_from_u64(js_rt *rt, uint64_t v, bool neg);
+uint64_t big_to_u64(JSBig *b);
+
+int strchr_safe(const char *s, uint32_t c);
+JSString *get_substitution(js_rt *rt, JSString *matched, JSString *str, uint32_t pos, jsval *caps, int ncaps, jsval groups,
+                           JSString *rep);
+JSString *format_locale_number(js_rt *rt, double d, jsval opts);
+void regex_cache_free(js_rt *rt);
+void coro_trace(js_rt *rt, JSObject *o);
+void coro_finalize(JSObject *o);
+void promise_trace(js_rt *rt, JSObject *o);
+void promise_finalize(JSObject *o);
+void regexp_trace(js_rt *rt, JSObject *o);
+void regexp_finalize(JSObject *o);
+void map_trace(js_rt *rt, JSObject *o);
+void map_finalize(JSObject *o);
+void buffer_trace(js_rt *rt, JSObject *o);
+void buffer_finalize(JSObject *o);
 
 /* lazily-built data of collections */
 JSObject *map_new(js_rt *rt, bool is_set);
