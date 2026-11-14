@@ -9,7 +9,7 @@ static int ndev = -1, hover;
 static bool scanning;
 static struct bt_paired paired[16]; static int npaired;
 static bool pairing; static struct bt_pair ps;
-static int hover_id = -1;                  /* 100+i: Pair button of device i, 200+i: Forget, 300/301: dialog buttons */
+static int hover_id = -1, list_off;         /* list_off: first nearby device shown (mouse wheel scrolls) */                  /* 100+i: Pair button of device i, 200+i: Forget, 300/301: dialog buttons */
 static void addr_str(const uint8_t *a, char *o) { ksnprintf(o, 18, "%02X:%02X:%02X:%02X:%02X:%02X", a[5], a[4], a[3], a[2], a[1], a[0]); }
 static bool is_paired(const uint8_t *a) { for (int i = 0; i < npaired; i++) if (!memcmp(paired[i].addr, a, 6)) return true; return false; }
 
@@ -76,7 +76,9 @@ static void draw(void) {
     if (scanning) gfx_text(c, &font_ui, 22, y + 20, UI_MUTED, "Looking for Classic and Low Energy devices (10 seconds)...");
     else if (ndev < 0) gfx_text(c, &font_ui, 22, y + 20, UI_MUTED, "Press Scan to search for phones, headphones, watches and more.");
     else if (ndev == 0) gfx_text(c, &font_ui, 22, y + 20, UI_MUTED, "No devices found. Make sure they are discoverable.");
-    for (int i = 0; i < ndev && y + 46 < WH; i++, y += 50) {
+    if (list_off > ndev - 1) list_off = ndev > 0 ? ndev - 1 : 0;
+    if (list_off) { char more[32]; ksnprintf(more, sizeof more, "%d more above", list_off); gfx_text(c, &font_ui, WW - 140, y - 8, UI_MUTED, more); }
+    for (int i = list_off; i < ndev && y + 46 < WH; i++, y += 50) {
         ui_card(c, 20, y, WW - 40, 44);
         gfx_circle(c, 44, y + 22, 13, devs[i].le ? 0x0E7490 : 0x6D28D9, 255);
         gfx_text_center(c, &font_ui_bold, 31, 26, y + 27, 0xFFFFFF, devs[i].le ? "LE" : "BR");
@@ -130,7 +132,7 @@ static int hit(int x, int y0) {
         for (int i = 0; i < npaired && y + 40 < WH; i++, y += 42) if (ui_in(x, y0, WW - 110, y + 4, 80, 28)) return 200 + i;
         y += 18 + 26;
     }
-    for (int i = 0; i < ndev && y + 46 < WH; i++, y += 50) if (!devs[i].le && ui_in(x, y0, WW - 200, y + 8, 64, 28)) return 100 + i;
+    for (int i = list_off; i < ndev && y + 46 < WH; i++, y += 50) if (!devs[i].le && ui_in(x, y0, WW - 200, y + 8, 64, 28)) return 100 + i;
     return -1;
 }
 
@@ -149,6 +151,7 @@ int main(void) {
             draw(); continue;
         }
         if (e.type == EV_CLOSE) break;
+        if (e.type == EV_WHEEL && !pairing) { list_off += e.key; if (list_off < 0) list_off = 0; draw(); continue; }
         if (e.type == EV_MOUSE_MOVE) { int h = hit(e.x, e.y); if (h != hover_id) { hover_id = h; draw(); } }
         if (e.type == EV_MOUSE_DOWN && e.button == 1) {
             int h = hit(e.x, e.y);
@@ -169,7 +172,7 @@ int main(void) {
         if (e.type == EV_MOUSE_UP && e.button == 1 && !pairing && ad.present && ad.ok && ui_in(e.x, e.y, WW - 170, 252, 150, 36)) {
             scanning = true; draw();
             sys_bt(BT_SCAN, 0, 10);
-            ndev = sys_bt(BT_RESULTS, devs, 64);
+            ndev = sys_bt(BT_RESULTS, devs, 64); list_off = 0;
             scanning = false; draw();
         }
     }

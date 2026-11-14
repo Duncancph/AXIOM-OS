@@ -120,8 +120,10 @@ static void parse_ad(struct found *f, const uint8_t *p, int len) {
         int l = p[i], t = p[i + 1];
         if (i + 1 + l > len) break;
         if ((t == 0x08 || t == 0x09) && l > 1 && (t == 0x09 || !f->name[0])) {
-            int n = l - 1 < 63 ? l - 1 : 63, k = 0;
-            for (int j = 0; j < n; j++) { uint8_t c = p[i + 2 + j]; f->name[k++] = (c >= 32 && c < 127) ? c : '?'; }
+            int n = l - 1 < 63 ? l - 1 : 63;
+            char raw[64]; memcpy(raw, p + i + 2, n);
+            long m = utf8_to_cp1252(raw, n);                /* names are UTF-8 */
+            int k = 0; for (long j = 0; j < m && k < 63; j++) { uint8_t c = raw[j]; f->name[k++] = c >= 32 && c != 127 ? c : '?'; }
             f->name[k] = 0;
         }
         i += l + 1;
@@ -129,8 +131,11 @@ static void parse_ad(struct found *f, const uint8_t *p, int len) {
 }
 
 static void set_name(struct found *f, const uint8_t *s, int max) {
+    char raw[249]; int n = 0;
+    while (n < max && n < 248 && s[n]) { raw[n] = s[n]; n++; }
+    long m = utf8_to_cp1252(raw, n);                         /* names are UTF-8 */
     int k = 0;
-    for (int j = 0; j < max && s[j] && k < 63; j++) f->name[k++] = (s[j] >= 32 && s[j] < 127) ? s[j] : '?';
+    for (long j = 0; j < m && k < 63; j++) { uint8_t c = raw[j]; f->name[k++] = c >= 32 && c != 127 ? c : '?'; }
     f->name[k] = 0;
 }
 
@@ -242,7 +247,7 @@ void bt_pair_run(const uint8_t *addr) {
     cc[8] = f ? f->pscan : 1; cc[9] = 0;
     uint16_t clk = f ? (f->clk | 0x8000) : 0; cc[10] = clk & 0xFF; cc[11] = clk >> 8; cc[12] = 1;
     if (hci_cmd(0x0405, cc, 13, 0, 0) != 0) { say(BTP_FAILED, "The adapter refused to connect."); return; }   /* Create_Connection */
-    int handle = -1; bool authed = false; uint8_t newkey[16]; bool havekey = false;
+    int handle = -1; bool authed = false; uint8_t newkey[16]; bool havekey = false; int remote_io = -1;
     uint64_t end = uptime_ms() + 60000;
     while (uptime_ms() < end && pst.state != BTP_DONE && pst.state != BTP_FAILED) {
         if (pst.state == BTP_CONFIRM && pair_answer >= 0) {     /* the user answered the code question */
@@ -272,7 +277,15 @@ void bt_pair_run(const uint8_t *addr) {
             hci_cmd(0x042B, r, 9, 0, 0);
             break;
         }
-        case 0x33:                                              /* User_Confirmation_Request: show the number */
+        case 0x32:                                              /* IO_Capability_Response: what the device can do */
+            if (!memcmp(p, addr, 6)) remote_io = p[6];
+            break;
+        case 0x33:                                              /* User_Confirmation_Request */
+            if (remote_io == 3) {                               /* no screen or keys (headphones, speakers): "just works" */
+                hci_cmd(0x042C, addr, 6, 0, 0);                 /* the user already chose Pair */
+                say(BTP_WORKING, "Pairing...");
+                break;
+            }
             pst.code = p[6] | p[7] << 8 | p[8] << 16 | (uint32_t)p[9] << 24;
             say(BTP_CONFIRM, "Check that the same number is shown on the device.");
             break;

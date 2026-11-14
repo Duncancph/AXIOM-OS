@@ -7,8 +7,8 @@
 #include "../src/usb.h"
 
 static usb_xfer_cb evt_cb; static struct usb_dev dev; static uint8_t epbuf[64];
-static uint8_t pending[64][260]; static int np, rp; static int sent_cmds[256], ncmds;
-static uint8_t peer[6]; static int iocap = -1, authreq = -1, used_stored_key, declined, answer = 1;
+static uint8_t pending[1024][260]; static int np, rp; static int sent_cmds[4096], ncmds;
+static int justworks; static uint8_t peer[6]; static int iocap = -1, authreq = -1, used_stored_key, declined, answer = 1;
 
 static void q(const uint8_t *e, int n) { memcpy(pending[np++], e, n); }
 static void cc(uint16_t op, const uint8_t *ret, int n) {
@@ -67,7 +67,7 @@ int usb_control(struct usb_dev *d, uint8_t rt, uint8_t req, uint16_t val, uint16
     case 0x042B: {                                         /* our IO capabilities -> theirs, then the number */
         iocap = p[9]; authreq = p[11];
         uint8_t r[7] = {0}; memcpy(r + 1, peer, 6); cc(op, r, 7);
-        uint8_t e1[11] = {0x32, 9}; memcpy(e1 + 2, peer, 6); e1[8] = 1; e1[9] = 0; e1[10] = 3; q(e1, 11);
+        uint8_t e1[11] = {0x32, 9}; memcpy(e1 + 2, peer, 6); e1[8] = justworks ? 3 : 1; e1[9] = 0; e1[10] = justworks ? 0 : 3; q(e1, 11);
         uint8_t e2[12] = {0x33, 10}; memcpy(e2 + 2, peer, 6); e2[8] = 0x40; e2[9] = 0xE2; e2[10] = 0x01; e2[11] = 0; q(e2, 12);   /* 123456 */
         break;
     }
@@ -143,11 +143,17 @@ int main(void) {
     bt_pair_run(phone); bt_pair_status(&st);
     printf("pair 2: %s\n", st.msg);
     CHECK(st.state == BTP_DONE && used_stored_key, "second pairing should use the stored key");
-    /* 3: the user says no to the number */
+    /* 3: a device with no screen (headphones): paired without asking */
+    justworks = 1; uint8_t phones[6] = {0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6}; bt_forget(phones);
+    bt_pair_run(phones); bt_pair_status(&st);
+    printf("pair 3: %s\n", st.msg);
+    CHECK(st.state == BTP_DONE, "a no-screen device should pair without a number");
+    justworks = 0; bt_forget(phones);
+    /* 4: the user says no to the number */
     uint8_t car[6] = {0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6};
     answer = 0;
     bt_pair_run(car); bt_pair_status(&st);
-    printf("pair 3: %s\n", st.msg);
+    printf("pair 4: %s\n", st.msg);
     CHECK(st.state == BTP_FAILED && declined, "declining should send a negative reply and fail");
     bt_forget(phone);
     CHECK(bt_paired(pd, 4) == 0, "forget should remove the key");
