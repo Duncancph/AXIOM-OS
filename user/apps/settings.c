@@ -404,7 +404,12 @@ static void draw_about(void) {
     ksnprintf(b, sizeof b, "Display: %s", get("display.current")); label(SIDE + 32, y, UI_TEXT, b); y += 26;
     ksnprintf(b, sizeof b, "Up for %lu minutes", s.uptime_ms / 60000); label(SIDE + 32, y, UI_TEXT, b); y += 40;
     label(SIDE + 32, y, UI_MUTED, "Fonts: GNU Unifont (GPLv2+ with font exception), Inter (SIL OFL 1.1)."); y += 22;
-    label(SIDE + 32, y, UI_MUTED, "Trusted certificate authorities: Mozilla CA list (MPL 2.0).");
+    label(SIDE + 32, y, UI_MUTED, "Trusted certificate authorities: Mozilla CA list (MPL 2.0)."); y += 40;
+    ui_card(&a.c, SIDE + 32, y, WW - SIDE - 64, 92);
+    gfx_text(&a.c, &font_ui_bold, SIDE + 48, y + 26, UI_TEXT, "App protection test");
+    label(SIDE + 48, y + 46, UI_MUTED, "Opens an app that misbehaves on purpose, to show AXIOM stopping it");
+    label(SIDE + 48, y + 64, UI_MUTED, "without affecting anything else. Each button there crashes it.");
+    button(WW - 32 - 150, y + 14, 134, "Run the test", BTN_NORMAL, H_BTN + 40, false);
 }
 
 void draw(void) {
@@ -500,6 +505,7 @@ static void click(int id, int mx) {
     if (id == H_BTN + 3) sys_power(1);
     if (id == H_BTN + 4) sys_power(0);
     if (id >= H_DISK && id < H_DISK + 16) { confirm_disk = (id - H_DISK) / 2; confirm_mode = (id - H_DISK) % 2 ? INSTALL_UPDATE : INSTALL_ERASE; }
+    if (id == H_BTN + 40) sys_spawn("sandbox");
     if (id == H_BTN + 31) check_updates();
     if (id == H_BTN + 30 && ustate == U_AVAILABLE) install_update();
     if (id == H_BTN + 32) sys_power(1);

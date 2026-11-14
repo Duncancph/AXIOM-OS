@@ -106,7 +106,7 @@ static void idle(void *arg) {
 }
 
 void sched_init(void) {
-    idle_task = task_create_kernel("Idle", idle, 0);
+    idle_task = task_create_kernel("Idle (unused time)", idle, 0);
 }
 
 void sched_start(void) {

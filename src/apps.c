@@ -5,7 +5,7 @@
 
 #define MAX_APPS 24
 static struct app_entry apps[MAX_APPS];
-static int napps;
+static int napps, nhidden;
 
 static const char *builtin_icon(const char *id) {
     static const char *map[][2] = { {"files", "folder"}, {"terminal", "terminal"}, {"monitor", "monitor"}, {"bluetooth", "bluetooth"},
@@ -51,9 +51,17 @@ void apps_refresh(void) {
         strncpy0(a->version, f[2], sizeof a->version); strncpy0(a->icon, f[3], sizeof a->icon);
         a->installed = true;
     }
+    nhidden = 0;                                              /* apps not shown in the dock or menu go last */
+    for (int i = 0; i < napps - nhidden; i++)
+        if (!strcmp(apps[i].id, "sandbox")) {
+            struct app_entry t = apps[i];
+            for (int k = i; k + 1 < napps; k++) apps[k] = apps[k + 1];
+            apps[napps - 1] = t; nhidden++; i--;
+        }
 }
 
 int apps_count(void) { return napps; }
+int apps_visible(void) { return napps - nhidden; }
 const struct app_entry *apps_get(int i) { return i >= 0 && i < napps ? &apps[i] : 0; }
 const struct app_entry *apps_find(const char *id) {
     for (int i = 0; i < napps; i++) if (!strcmp(apps[i].id, id)) return &apps[i];
