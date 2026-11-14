@@ -5,3 +5,4 @@ duncos.iso
 iso/boot/bootx64.efi
 release/
 iso/boot/biosboot.img
+__pycache__/

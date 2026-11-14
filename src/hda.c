@@ -13,6 +13,8 @@ static uint32_t *corb; static uint64_t *rirb; static uint16_t rirb_rp;
 static int cad = -1, afg, sd_off;            /* codec address, audio function group, output stream registers */
 static uint8_t *buf; static uint64_t *bdl;
 static uint64_t play_until;
+static bool streaming, paused;
+static uint64_t last_write;            /* a stream nobody writes to for 10 s is stopped (its app may have quit) */
 static bool ready;
 static int dacs[8], ndacs;
 
@@ -169,7 +171,7 @@ void hda_init_all(void) {
 
 /* play 16-bit stereo 48 kHz samples (frames = sample pairs) */
 static int play(const int16_t *pcm, uint32_t frames) {
-    if (!ready) return -1;
+    if (!ready || streaming) return -1;                      /* music is playing: no chimes */
     if (frames > (uint32_t)RATE * MAX_SECONDS) frames = RATE * MAX_SECONDS;
     stream_stop();
     int vol = settings_int("sound.volume"); if (vol < 0) vol = 0; if (vol > 100) vol = 100;
@@ -182,7 +184,71 @@ static int play(const int16_t *pcm, uint32_t frames) {
     return 0;
 }
 
-void hda_tick(void) { if (play_until && uptime_ms() > play_until) { play_until = 0; stream_stop(); } }
+/* ---- streaming: the DMA buffer is a ring that the app keeps filling ahead of the sound chip ---- */
+static int srate = RATE;
+static uint64_t wtotal, rtotal; static uint32_t last_lpib;
+static void set_format(int rate) {
+    uint16_t fmt = rate == 44100 ? 0x4011 : 0x0011;          /* 44.1 or 48 kHz, 16 bits, 2 channels */
+    w16(sd_off + 0x12, fmt);
+    for (int i = 0; i < ndacs; i++) verb(dacs[i], 0x20000 | fmt);
+}
+static void update_read(void) {                              /* how far the chip has played, in bytes since the start */
+    uint32_t lp = r32(sd_off + 0x04) % BUF_BYTES;
+    rtotal += (lp + BUF_BYTES - last_lpib) % BUF_BYTES;
+    last_lpib = lp;
+}
+static void stream_fill_silence(void) {                      /* never let it play old samples again */
+    update_read();
+    uint64_t want = rtotal + BUF_BYTES / 4;
+    while (wtotal < want) {
+        uint32_t at = (uint32_t)(wtotal % BUF_BYTES), n = BUF_BYTES - at;
+        if (n > want - wtotal) n = (uint32_t)(want - wtotal);
+        memset(buf + at, 0, n); wtotal += n;
+    }
+}
+static int stream_start(int rate) {
+    if (!ready || (rate != 44100 && rate != 48000)) return -1;
+    play_until = 0;
+    stream_stop();
+    w8(sd_off, 1); for (int i = 0; i < 1000 && !(r8(sd_off) & 1); i++) udelay(10);    /* reset: position back to 0 */
+    w8(sd_off, 0); for (int i = 0; i < 1000 && (r8(sd_off) & 1); i++) udelay(10);
+    uint32_t piece = BUF_BYTES / NBDL;
+    for (int i = 0; i < NBDL; i++) { bdl[2 * i] = (uint64_t)(uintptr_t)(buf + i * piece); bdl[2 * i + 1] = piece; }
+    w32(sd_off + 0x18, (uint32_t)(uintptr_t)bdl); w32(sd_off + 0x1C, 0);
+    w32(sd_off + 0x08, BUF_BYTES); w16(sd_off + 0x0C, NBDL - 1);
+    w8(sd_off + 2, 1 << 4);
+    srate = rate; set_format(rate);
+    memset(buf, 0, BUF_BYTES);
+    wtotal = (uint64_t)rate * 4 / 10; rtotal = 0; last_lpib = 0;    /* start with 0.1 s of silence */
+    streaming = true; paused = false; last_write = uptime_ms();
+    w8(sd_off, r8(sd_off) | 2);
+    return 0;
+}
+static long stream_write(uint64_t ua, uint64_t n) {
+    if (!streaming || (n && !user_ok(current->pml4, (const void *)ua, n, false))) return -1;
+    update_read();
+    if (wtotal < rtotal) wtotal = rtotal;                  /* it ran dry: carry on from where it is */
+    uint64_t space = BUF_BYTES - (wtotal - rtotal) - 4096;
+    if ((int64_t)space <= 0) return 0;
+    if (n > space) n = space;
+    n &= ~3ull;
+    int vol = settings_int("sound.volume"); if (vol < 0) vol = 0; if (vol > 100) vol = 100;
+    int scale = vol * vol;
+    const int16_t *src = (const int16_t *)ua;
+    for (uint64_t i = 0; i < n / 2; i++) {
+        uint32_t at = (uint32_t)((wtotal + i * 2) % BUF_BYTES);
+        *(int16_t *)(buf + at) = (int16_t)((int32_t)src[i] * scale / 10000);
+    }
+    wtotal += n; last_write = uptime_ms();
+    return (long)n;
+}
+static void stream_end(void) { if (!streaming) return; streaming = false; stream_stop(); set_format(RATE); }
+
+void hda_tick(void) {
+    if (play_until && uptime_ms() > play_until) { play_until = 0; stream_stop(); }
+    if (streaming && !paused) stream_fill_silence();
+    if (streaming && !paused && uptime_ms() - last_write > 10000) stream_end();
+}
 
 /* a soft two-note chime; style 0 = test sound, 1 = notification */
 static int chime(int style) {
@@ -207,6 +273,15 @@ long sound_syscall(int op, uint64_t a, uint64_t b) {
     case SOUND_INFO: return ready ? 1 : 0;
     case SOUND_TEST: return chime(0);
     case SOUND_EVENT: return chime(1);
+    case SOUND_STREAM_START: return stream_start((int)a);
+    case SOUND_STREAM_WRITE: return stream_write(a, b);
+    case SOUND_STREAM_STATUS: if (!streaming) return -1; update_read(); return wtotal > rtotal ? (long)((wtotal - rtotal) * 1000 / ((uint64_t)srate * 4)) : 0;
+    case SOUND_STREAM_STOP: stream_end(); return 0;
+    case SOUND_STREAM_PAUSE:
+        if (!streaming) return -1;
+        paused = a != 0; last_write = uptime_ms();
+        if (paused) w8(sd_off, r8(sd_off) & ~2); else { w8(sd_off, r8(sd_off) | 2); }
+        return 0;
     case SOUND_PLAY_PCM: {
         if (!ready) return -1;
         if (b > (uint64_t)BUF_BYTES || (b && !user_ok(current->pml4, (const void *)a, b, false))) return -1;

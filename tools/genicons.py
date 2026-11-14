@@ -171,6 +171,14 @@ def g_calendar(d, S, u):
         for col in range(4):
             d.rectangle([u(.27 + col * .13), u(.45 + r * .11), u(.27 + col * .13) + u(.07), u(.45 + r * .11) + u(.07)], fill=(40, 40, 40, 255))
 
+def g_music(d, S, u):
+    d.ellipse([u(.22), u(.62), u(.42), u(.78)], fill=W)
+    d.ellipse([u(.56), u(.54), u(.76), u(.70)], fill=W)
+    w = u(.06)
+    d.rectangle([u(.36), u(.24), u(.36) + w, u(.70)], fill=W)
+    d.rectangle([u(.70), u(.16), u(.70) + w, u(.62)], fill=W)
+    d.polygon([(u(.36), u(.24)), (u(.76), u(.16)), (u(.76), u(.27)), (u(.36), u(.35))], fill=W)
+
 ICONS = [   # name, gradient top, bottom, glyph
     ("folder", "#2C2C2C", "#141414", g_folder),
     ("terminal", "#2C2C2C", "#141414", g_terminal),
@@ -187,6 +195,7 @@ ICONS = [   # name, gradient top, bottom, glyph
     ("globe", "#2C2C2C", "#141414", g_globe),
     ("note", "#2C2C2C", "#141414", g_note),
     ("calendar", "#2C2C2C", "#141414", g_calendar),
+    ("music", "#2C2C2C", "#141414", g_music),
     ("chat", "#2C2C2C", "#141414", g_chat),
 ]
 
