@@ -15,8 +15,9 @@ app_images:
     APP network, "Network", 0
     APP calc, "Calculator", 0
     APP sandbox, "Protection Test", 0
+    APP settings, "Settings", 0
     APP about, "About DuncOS", 0
-app_count: dd 8
+app_count: dd 9
 
 id_files: db "files", 0
 title_files: db "Files", 0
@@ -34,6 +35,8 @@ id_calc: db "calc", 0
 title_calc: db "Calculator", 0
 id_sandbox: db "sandbox", 0
 title_sandbox: db "Protection Test", 0
+id_settings: db "settings", 0
+title_settings: db "Settings", 0
 
 align 16
 bin_files: incbin "build/user/files.elf"
@@ -59,3 +62,6 @@ bin_calc_end:
 align 16
 bin_sandbox: incbin "build/user/sandbox.elf"
 bin_sandbox_end:
+align 16
+bin_settings: incbin "build/user/settings.elf"
+bin_settings_end:

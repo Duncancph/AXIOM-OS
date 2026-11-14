@@ -297,6 +297,8 @@ uint64_t syscall_dispatch(struct frame *f) {
         if (!copy_str(key, a, sizeof key) || !copy_str(val, b, sizeof val)) return (uint64_t)-1;
         return (uint64_t)(int64_t)settings_set(key, val);
     }
+    case SYS_SOUND: return (uint64_t)(int64_t)sound_syscall((int)a, b, c);
+    case SYS_LOCK: desktop_lock(); return 0;
     case SYS_DISK_INSTALL: return (uint64_t)(int64_t)disk_install((int)a, (int)b);
     case SYS_DISK_STATUS:
         if (!UOK(a, sizeof(struct dunc_install), true)) return (uint64_t)-1;

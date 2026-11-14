@@ -827,3 +827,4 @@ void desktop_thread(void *arg) {
         task_sleep(8);
     }
 }
+void desktop_lock(void) {}

@@ -15,7 +15,7 @@ enum {
     SYS_FS_LIST, SYS_FS_READ, SYS_FS_WRITE, SYS_FS_MKDIR, SYS_FS_DELETE, SYS_FS_RENAME, SYS_FS_STAT,
     SYS_FS_VOLUMES, SYS_GETARG, SYS_WIN_RESIZE, SYS_APPS, SYS_FS_COPY,
     SYS_RANDOM, SYS_FS_APPEND, SYS_NET_INFO, SYS_NET_CONFIG, SYS_NET_PING, SYS_NET_RESOLVE, SYS_TCP_CONNECT, SYS_TCP_SEND, SYS_TCP_RECV, SYS_TCP_CLOSE,
-    SYS_DISK_LIST, SYS_DISK_INSTALL, SYS_DISK_STATUS, SYS_MEM_GROW, SYS_SETTING_GET, SYS_SETTING_SET,
+    SYS_DISK_LIST, SYS_DISK_INSTALL, SYS_DISK_STATUS, SYS_MEM_GROW, SYS_SETTING_GET, SYS_SETTING_SET, SYS_SOUND, SYS_LOCK,
     SYS_COUNT
 };
 
@@ -58,6 +58,9 @@ struct dunc_dirent { char name[64]; int is_dir; uint64_t size; };
 struct dunc_stat { int is_dir, volume; uint64_t size; };
 struct dunc_volume { char path[16], label[32], kind[16]; uint64_t total, free; int writable; };
 /* ---- disks (SATA, NVMe, USB) and the installer ---- */
+/* SYS_SOUND operations */
+enum { SOUND_TEST, SOUND_PLAY_PCM, SOUND_INFO, SOUND_EVENT };
+
 enum { DISK_SATA = 1, DISK_NVME, DISK_USB };
 struct dunc_disk {
     int id, kind, nparts;
