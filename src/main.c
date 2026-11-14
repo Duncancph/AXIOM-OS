@@ -72,6 +72,7 @@ void kmain(uint32_t magic, uint64_t mbi) {
             bootinfo.bootloader[0] ? bootinfo.bootloader : "multiboot2");
 
     timer_init();
+    random_init();
     LOG_OK("CPU clock %lu MHz\n", tsc_hz() / 1000000);
     LOG_OK("Memory %lu MiB usable\n", mem_total() >> 20);
     char buf[96]; console_info(buf, sizeof buf);

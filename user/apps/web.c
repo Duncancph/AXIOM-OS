@@ -1,6 +1,6 @@
-/* Web 0.1 - a simple web browser for DuncOS (installed with: clan install web).
- * Fetches pages over HTTP and lays out the text: headings, paragraphs, bold, links,
- * lists and preformatted text. No images, styles, scripts or HTTPS yet. */
+/* Web 0.2 - a simple web browser for DuncOS (installed with: clan install web).
+ * Fetches pages over HTTP and HTTPS (TLS 1.3 with certificate checks) and lays out the text:
+ * headings, paragraphs, bold, links, lists and preformatted text. No images, styles or scripts. */
 #include "../lib/dunc.h"
 
 static int WW = 860, WH = 620;
@@ -14,6 +14,7 @@ static char url[600] = "about:home", title[96] = "Web", status_text[160], ctype[
 static char addr[600]; static int alen; static bool addr_focus;
 static char hist[32][600]; static int nhist;
 static int scroll, doc_h, hover_link = -1, hover_btn = -1;
+static struct http_security sec;
 
 /* laid-out document */
 enum { ST_TEXT, ST_BOLD, ST_H1, ST_H2, ST_H3, ST_MONO, ST_SMALL };
@@ -40,17 +41,19 @@ static bool pre_ci(const char *s, const char *p) { for (; *p; s++, p++) { char x
 static void resolve_url(const char *base, const char *href, char *out, int n) {
     while (*href == ' ') href++;
     if (pre_ci(href, "http://") || pre_ci(href, "https://") || pre_ci(href, "about:")) { strncpy0(out, href, n); return; }
-    const char *h = base; if (pre_ci(h, "http://")) h += 7;
+    if (pre_ci(href, "mailto:") || pre_ci(href, "javascript:")) { strncpy0(out, "about:unsupported", n); return; }
+    const char *scheme = pre_ci(base, "https://") ? "https" : "http";
+    const char *h = base; if (pre_ci(h, "http://")) h += 7; else if (pre_ci(h, "https://")) h += 8;
     char origin[300]; int k = 0;
     while (*h && *h != '/' && k < 299) origin[k++] = *h++;
     origin[k] = 0;
-    if (href[0] == '/' && href[1] == '/') { ksnprintf(out, n, "http:%s", href); return; }
-    if (href[0] == '/') { ksnprintf(out, n, "http://%s%s", origin, href); return; }
+    if (href[0] == '/' && href[1] == '/') { ksnprintf(out, n, "%s:%s", scheme, href); return; }
+    if (href[0] == '/') { ksnprintf(out, n, "%s://%s%s", scheme, origin, href); return; }
     if (href[0] == '#') { strncpy0(out, base, n); return; }
     char dir[400]; strncpy0(dir, *h ? h : "/", sizeof dir);
     char *q = dir; while (*q && *q != '?' && *q != '#') q++; *q = 0;
     char *sl = dir + strlen(dir); while (sl > dir && sl[-1] != '/') sl--; *sl = 0;
-    ksnprintf(out, n, "http://%s%s%s", origin, dir[0] ? dir : "/", href);
+    ksnprintf(out, n, "%s://%s%s%s", scheme, origin, dir[0] ? dir : "/", href);
 }
 
 /* ---------------- layout ---------------- */
@@ -231,10 +234,17 @@ static void draw(void) {
     int ax = 98, aw = WW - ax - 12 - 64;
     gfx_rrect(c, ax, 10, aw, 32, 8, HL_TERM_BG, 255);
     gfx_rrect_outline(c, ax, 10, aw, 32, 8, addr_focus ? HL_ACCENT : HL_WIN_BORDER, 255);
-    gfx_clip(c, ax + 8, 10, aw - 16, 32);
+    int tx = ax + 12;
+    if (!addr_focus && sec.secure) {                       /* padlock */
+        gfx_rrect_outline(c, ax + 12, 17, 10, 10, 4, HL_GREEN, 255);
+        gfx_fill(c, ax + 11, 22, 12, 9, HL_GREEN);
+        gfx_fill(c, ax + 16, 25, 2, 3, HL_TERM_BG);
+        tx = ax + 32;
+    }
+    gfx_clip(c, tx - 4, 10, aw - (tx - ax) - 4, 32);
     int vis = (aw - 24) / 8, start = addr_focus && alen > vis ? alen - vis : 0;
-    gfx_mono_text(c, ax + 12, 18, (addr_focus ? addr : url) + (addr_focus ? start : 0), addr_focus ? HL_TEXT : HL_TEXT_DIM);
-    if (addr_focus) gfx_fill(c, ax + 12 + (alen - start) * 8, 18, 2, 16, HL_ACCENT);
+    gfx_mono_text(c, tx, 18, (addr_focus ? addr : url) + (addr_focus ? start : 0), addr_focus ? HL_TEXT : HL_TEXT_DIM);
+    if (addr_focus) gfx_fill(c, tx + (alen - start) * 8, 18, 2, 16, HL_ACCENT);
     gfx_noclip(c);
     ui_button(c, WW - 12 - 56, 10, 56, 32, "Go", BTN_PRIMARY, hover_btn == 2, false);
     /* status bar */
@@ -261,16 +271,20 @@ static void load(const char *u, bool push) {
     if (push && strcmp(u, url) && nhist < 32) strncpy0(hist[nhist++], url, 600);
     strncpy0(url, u, sizeof url);
     scroll = 0; hover_link = -1; addr_focus = false;
-    if (pre_ci(url, "about:")) {
+    memset(&sec, 0, sizeof sec);
+    if (pre_ci(url, "about:unsupported")) {
+        message_page("Not supported", "That kind of link (email or script) doesn't work in Web.");
+        strncpy0(status_text, "Not supported", sizeof status_text);
+    } else if (pre_ci(url, "about:")) {
         set_page("<title>Start page</title><h1>Web</h1><p>A simple browser for <b>DuncOS</b>, running on the Thane kernel's own TCP/IP stack."
-                 " It shows the text and links of pages served over plain <b>http://</b>.</p>"
-                 "<h2>Try these</h2><ul>"
-                 "<li><a href=\"http://info.cern.ch/\">http://info.cern.ch</a> - the world's first website (1991)</li>"
-                 "<li><a href=\"http://info.cern.ch/hypertext/WWW/TheProject.html\">The WorldWideWeb project page</a></li>"
-                 "<li><a href=\"http://neverssl.com/\">http://neverssl.com</a> - a site that stays on plain HTTP</li>"
-                 "<li><a href=\"http://example.com/\">http://example.com</a></li></ul>"
-                 "<h2>Not yet</h2><p>Secure <b>https://</b> sites need TLS encryption, which is the next networking project."
-                 " Images, styles and JavaScript aren't shown.</p>");
+                 " Secure <b>https://</b> sites use TLS 1.3, and every site's certificate is checked against the trusted authorities.</p>"
+                 "<h2>Sites that read well as text</h2><ul>"
+                 "<li><a href=\"https://text.npr.org/\">text.npr.org</a> - news in plain text</li>"
+                 "<li><a href=\"https://lite.duckduckgo.com/lite/\">lite.duckduckgo.com</a> - web search, lite edition</li>"
+                 "<li><a href=\"https://news.ycombinator.com/\">news.ycombinator.com</a> - Hacker News</li>"
+                 "<li><a href=\"https://en.wikipedia.org/wiki/Operating_system\">Wikipedia: Operating system</a></li>"
+                 "<li><a href=\"http://info.cern.ch/\">info.cern.ch</a> - the world's first website (1991)</li></ul>"
+                 "<h2>Not shown</h2><p>Images, styles and JavaScript. Sites that only allow TLS 1.2 or older can't be opened yet.</p>");
         strncpy0(status_text, "Start page", sizeof status_text);
     } else {
         strncpy0(status_text, "Loading...", sizeof status_text);
@@ -279,12 +293,19 @@ static void load(const char *u, bool push) {
         ctype[0] = 0;
         long n = http_get(url, page, MAXPAGE - 1, &status, ctype, sizeof ctype, final, sizeof final);
         strncpy0(status_text, url, sizeof status_text);
-        if (n == HTTP_EHTTPS) message_page("Secure site", "This is an <b>https://</b> address. DuncOS can't open secure sites yet: that needs TLS encryption, which is coming in a later version.");
-        else if (n < 0) { char m[200]; ksnprintf(m, sizeof m, "Couldn't open %s: %s.", url, http_strerror(n)); message_page("Can't reach this page", m); }
+        if (n <= -40 && n >= -68) {
+            char m[400];
+            ksnprintf(m, sizeof m, "DuncOS couldn't set up a secure connection to <b>%s</b>: %s.</p><p>This protects you from impostor sites."
+                      " If the computer's clock is wrong, fix it and try again.", url, http_strerror(n) + 26);
+            message_page("Connection isn't secure", m);
+        }
+        else if (n < 0) { char m[260]; ksnprintf(m, sizeof m, "Couldn't open %s: %s.", url, http_strerror(n)); message_page("Can't reach this page", m); }
         else {
+            sec = http_sec;
             page_len = n; page[n] = 0;
             strncpy0(url, final, sizeof url);
-            ksnprintf(status_text, sizeof status_text, "HTTP %d - %ld bytes - %s", status, n, ctype[0] ? ctype : "unknown type");
+            if (sec.secure) ksnprintf(status_text, sizeof status_text, "Secure: %s - certificate for %s, from %s", sec.cipher, sec.subject, sec.issuer);
+            else ksnprintf(status_text, sizeof status_text, "Not secure (http) - HTTP %d - %ld bytes", status, n);
             if (ctype[0] && !pre_ci(ctype, "text/")) message_page("Can't show this file", "This page isn't text (it might be an image or a download). Use <b>wget</b> in the terminal to save it.");
         }
     }
@@ -347,7 +368,7 @@ int main(void) {
         if (e.type == EV_KEY) {
             int k = e.key;
             if (addr_focus) {
-                if (k == '\n') { if (alen) { char u[600]; if (!strncmp(addr, "http", 4) || !strncmp(addr, "about:", 6)) strncpy0(u, addr, 600); else ksnprintf(u, 600, "http://%s", addr); load(u, true); } }
+                if (k == '\n') { if (alen) { char u[600]; if (!strncmp(addr, "http", 4) || !strncmp(addr, "about:", 6)) strncpy0(u, addr, 600); else ksnprintf(u, 600, "https://%s", addr); load(u, true); } }
                 else if (k == 27) addr_focus = false;
                 else if (k == '\b') { if (alen) addr[--alen] = 0; }
                 else if (k >= 32 && k < 127 && alen < 590) { addr[alen++] = k; addr[alen] = 0; }

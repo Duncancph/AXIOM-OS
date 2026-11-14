@@ -58,6 +58,12 @@ long http_get(const char *url, char *body, long max, int *status, char *ctype, i
 typedef bool (*http_sink)(const char *data, long len, void *ctx);
 long http_fetch(const char *url, http_sink sink, void *ctx, int *status, long *total, char *ctype, int ctlen, char *final_url, int fulen);
 const char *http_strerror(long e);
+/* security of the last http_fetch/http_get: secure = 1 for a verified https:// connection */
+struct http_security { int secure; char cipher[48], subject[96], issuer[96]; };
+extern struct http_security http_sec;
+int http_trusted_roots(void);
+int http_trust_pem(const char *pem, long n);   /* trust these CA certificates in this program too */
+static inline void sys_random(void *b, long n) { sys_call(SYS_RANDOM, (long)b, n, 0, 0, 0); }
 /* join a directory and a name / resolve a user path (supports ~, ., ..) into out */
 void path_resolve(const char *cwd, const char *in, char *out, int n);
 static inline int sys_procs(struct procinfo *p, int max) { return sys_call(SYS_PROCS, (long)p, max, 0, 0, 0); }

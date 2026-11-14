@@ -588,6 +588,7 @@ void net_task_exit(struct task *task) {
 /* ---------------- receive path ---------------- */
 void net_rx(struct netif *n, const uint8_t *f, int len) {
     if (len < 14) return;
+    random_event(len ^ ((uint64_t)f[len - 1] << 16));     /* packet timing as an entropy source */
     uint16_t type = g16(f + 12);
     const uint8_t *p = f + 14; len -= 14;
     if (type == 0x0806) { arp_input(p, len); return; }

@@ -1,5 +1,49 @@
 /* Network helpers and an HTTP/1.1 client for DuncOS apps. */
 #include "dunc.h"
+#include "crypto/tls.h"
+
+struct http_security http_sec;
+
+/* ---------------- TLS plumbing ---------------- */
+static struct tls tls_conn;
+static bool roots_loaded;
+static long t_send(void *c, const void *b, size_t n) { return tcp_write(*(int *)c, b, (uint32_t)n); }
+static long t_recv(void *c, void *b, size_t n, long to) { return tcp_read(*(int *)c, b, (uint32_t)n, to); }
+static void t_rand(void *b, size_t n) { sys_call(SYS_RANDOM, (long)b, (long)n, 0, 0, 0); }
+
+static int64_t unix_now(void) {
+    struct rtc_time t; sys_rtc(&t);
+    int64_t y = t.year - (t.mon <= 2);
+    int64_t era = (y >= 0 ? y : y - 399) / 400;
+    unsigned yoe = (unsigned)(y - era * 400), m = t.mon;
+    unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + t.day - 1;
+    unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return (era * 146097 + (int64_t)doe - 719468) * 86400 + t.hour * 3600 + t.min * 60 + t.sec;
+}
+
+static void load_roots(void) {
+    if (roots_loaded) return;
+    roots_loaded = true;
+    static char pem[420000];
+    long n = fs_read("/system/certs/ca-bundle.crt", pem, 0, sizeof pem);
+    if (n > 0) x509_add_roots_pem(pem, n);
+    static struct dunc_dirent d[32];
+    int k = fs_list("/system/certs/user", d, 32);
+    for (int i = 0; i < k; i++) {
+        char p[128]; ksnprintf(p, sizeof p, "/system/certs/user/%s", d[i].name);
+        n = fs_read(p, pem, 0, sizeof pem);
+        if (n > 0) x509_add_roots_pem(pem, n);
+    }
+}
+
+int http_trusted_roots(void) { load_roots(); return x509_root_count(); }
+int http_trust_pem(const char *pem, long n) { load_roots(); return x509_add_roots_pem(pem, n); }
+
+/* a connection: plain TCP or TLS on top of it */
+struct conn { int h; bool tls; };
+static long c_write(struct conn *c, const void *b, uint32_t n) { return c->tls ? tls_write(&tls_conn, b, n) : tcp_write(c->h, b, n); }
+static long c_read(struct conn *c, void *b, uint32_t n, long to) { return c->tls ? tls_read(&tls_conn, b, n, to) : tcp_read(c->h, b, n, to); }
+static void c_close(struct conn *c) { if (c->tls) tls_close(&tls_conn); tcp_shut(c->h); }
 
 const char *net_strerror(int e) {
     switch (e) {
@@ -17,7 +61,11 @@ const char *net_strerror(int e) {
 }
 
 const char *http_strerror(long e) {
-    if (e == HTTP_EHTTPS) return "Secure (https://) sites need TLS, which DuncOS doesn't have yet";
+    if (e <= -40 && e >= -68) {   /* TLS and certificate errors */
+        static char m[220];
+        ksnprintf(m, sizeof m, "Secure connection failed: %s", tls_strerror(&tls_conn, (int)e));
+        return m;
+    }
     if (e == HTTP_EURL) return "That address doesn't look right";
     if (e == HTTP_EBAD) return "The server sent something DuncOS couldn't understand";
     return net_strerror((int)e);
@@ -41,16 +89,17 @@ bool ip_parse(const char *s, uint32_t *out) {
 static int lower(int c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 static bool starts_ci(const char *s, const char *p) { for (; *p; s++, p++) if (lower(*s) != lower(*p)) return false; return true; }
 
-struct url { char host[128], path[512]; int port; };
+struct url { char host[128], path[512]; int port; bool https; };
 static long parse_url(const char *u, struct url *o) {
     while (*u == ' ') u++;
-    if (starts_ci(u, "https://")) return HTTP_EHTTPS;
-    if (starts_ci(u, "http://")) u += 7;
+    o->https = false;
+    if (starts_ci(u, "https://")) { u += 8; o->https = true; }
+    else if (starts_ci(u, "http://")) u += 7;
     int k = 0;
     while (*u && *u != '/' && *u != ':' && *u != '?' && *u != '#' && k < 127) o->host[k++] = *u++;
     o->host[k] = 0;
     if (!k) return HTTP_EURL;
-    o->port = 80;
+    o->port = o->https ? 443 : 80;
     if (*u == ':') { u++; o->port = 0; while (*u >= '0' && *u <= '9') o->port = o->port * 10 + (*u++ - '0'); if (!o->port || o->port > 65535) return HTTP_EURL; }
     k = 0;
     if (*u != '/') o->path[k++] = '/';
@@ -89,26 +138,40 @@ long http_fetch(const char *url_in, http_sink sink, void *ctx, int *status, long
         struct url u;
         long e = parse_url(url, &u);
         if (e) return e;
+        const char *scheme = u.https ? "https" : "http";
+        bool default_port = u.port == (u.https ? 443 : 80);
         if (final_url) {
-            if (u.port != 80) ksnprintf(final_url, fulen, "http://%s:%d%s", u.host, u.port, u.path);
-            else ksnprintf(final_url, fulen, "http://%s%s", u.host, u.path);
+            if (!default_port) ksnprintf(final_url, fulen, "%s://%s:%d%s", scheme, u.host, u.port, u.path);
+            else ksnprintf(final_url, fulen, "%s://%s%s", scheme, u.host, u.path);
         }
         uint32_t ip;
         int r = sys_resolve(u.host, &ip);
         if (r) return r;
-        int h = tcp_open(ip, u.port);
-        if (h < 0) return h;
-        char req[900];
-        int rl = ksnprintf(req, sizeof req, "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: DuncOS/0.1 (Thane kernel)\r\nAccept: */*\r\nConnection: close\r\n\r\n", u.path, u.host);
-        if (tcp_write(h, req, rl) < 0) { tcp_shut(h); return NET_ERESET; }
+        struct conn c = { tcp_open(ip, u.port), u.https };
+        if (c.h < 0) return c.h;
+        memset(&http_sec, 0, sizeof http_sec);
+        if (u.https) {
+            load_roots();
+            struct tls_io io = { &c.h, t_send, t_recv, t_rand, unix_now() };
+            int tr = tls_connect(&tls_conn, &io, u.host);
+            if (tr) { tcp_shut(c.h); return tr; }
+            http_sec.secure = 1;
+            strncpy0(http_sec.cipher, tls_conn.cipher, sizeof http_sec.cipher);
+            strncpy0(http_sec.subject, tls_conn.peer, sizeof http_sec.subject);
+            strncpy0(http_sec.issuer, tls_conn.issuer, sizeof http_sec.issuer);
+        }
+        char req[900], hosth[160];
+        if (default_port) strncpy0(hosth, u.host, sizeof hosth); else ksnprintf(hosth, sizeof hosth, "%s:%d", u.host, u.port);
+        int rl = ksnprintf(req, sizeof req, "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: DuncOS/0.1 (Thane kernel)\r\nAccept: */*\r\nConnection: close\r\n\r\n", u.path, hosth);
+        if (c_write(&c, req, rl) < 0) { c_close(&c); return NET_ERESET; }
         long hl = 0, hend = -1;
         while (hend < 0 && hl < (long)sizeof hdr - 1) {
-            long n = tcp_read(h, hdr + hl, sizeof hdr - 1 - hl, 15000);
-            if (n <= 0) { tcp_shut(h); return n == 0 ? HTTP_EBAD : n; }
+            long n = c_read(&c, hdr + hl, sizeof hdr - 1 - hl, 15000);
+            if (n <= 0) { c_close(&c); return n == 0 ? HTTP_EBAD : n; }
             hl += n; hdr[hl] = 0;
             for (long i = 3; i < hl; i++) if (hdr[i - 3] == '\r' && hdr[i - 2] == '\n' && hdr[i - 1] == '\r' && hdr[i] == '\n') { hend = i + 1; break; }
         }
-        if (hend < 0 || !starts_ci(hdr, "HTTP/1.")) { tcp_shut(h); return HTTP_EBAD; }
+        if (hend < 0 || !starts_ci(hdr, "HTTP/1.")) { c_close(&c); return HTTP_EBAD; }
         int code = 0; { const char *s = hdr + 8; while (*s == ' ') s++; while (*s >= '0' && *s <= '9') code = code * 10 + (*s++ - '0'); }
         long clen = -1; bool chunked = false; char loc[600] = "";
         if (ctype && ctlen) ctype[0] = 0;
@@ -124,13 +187,14 @@ long http_fetch(const char *url_in, http_sink sink, void *ctx, int *status, long
             *nl = save; line = nl + 1;
         }
         if (code >= 300 && code < 400 && loc[0]) {
-            tcp_shut(h);
+            c_close(&c);
             if (starts_ci(loc, "http://") || starts_ci(loc, "https://")) strncpy0(url, loc, sizeof url);
-            else if (loc[0] == '/') ksnprintf(url, sizeof url, "http://%s:%d%s", u.host, u.port, loc);
+            else if (loc[0] == '/' && loc[1] == '/') ksnprintf(url, sizeof url, "%s:%s", scheme, loc);
+            else if (loc[0] == '/') ksnprintf(url, sizeof url, "%s://%s:%d%s", scheme, u.host, u.port, loc);
             else {
                 char base[512]; strncpy0(base, u.path, sizeof base);
                 char *sl = base + strlen(base); while (sl > base && sl[-1] != '/') sl--; *sl = 0;
-                ksnprintf(url, sizeof url, "http://%s:%d%s%s", u.host, u.port, base, loc);
+                ksnprintf(url, sizeof url, "%s://%s:%d%s%s", scheme, u.host, u.port, base, loc);
             }
             continue;
         }
@@ -146,12 +210,12 @@ long http_fetch(const char *url_in, http_sink sink, void *ctx, int *status, long
             else { long k = clen >= 0 && have > clen ? clen : have; if (!sink(hdr + hend, k, ctx)) stop = true; got += k; }
         }
         while (!stop && (chunked ? dc.state != 3 : (clen < 0 || got < clen))) {
-            long n = tcp_read(h, buf, sizeof buf, 15000);
+            long n = c_read(&c, buf, sizeof buf, 15000);
             if (n <= 0) break;
             if (chunked) got += dechunk_feed(&dc, buf, n, sink, ctx, &stop);
             else { if (clen >= 0 && got + n > clen) n = clen - got; if (!sink(buf, n, ctx)) stop = true; got += n; }
         }
-        tcp_shut(h);
+        c_close(&c);
         return got;
     }
     return HTTP_EBAD;

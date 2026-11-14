@@ -10,9 +10,11 @@ LIBGCC  := $(shell $(CC) -print-libgcc-file-name)
 
 APPS    := files about terminal monitor bluetooth network calc sandbox
 REPO_APPS := editor clock web
-K_SRCS  := $(filter-out src/desktop_highland.c,$(wildcard src/*.c)) common/gfx.c common/str.c
+K_SRCS  := $(filter-out src/desktop_highland.c,$(wildcard src/*.c)) common/gfx.c common/str.c user/lib/crypto/sha2.c user/lib/crypto/aead.c
 K_OBJS  := $(patsubst %.c,build/k/%.o,$(K_SRCS)) build/k/boot.o build/k/isr.o build/k/apps.o
-U_LIB   := build/u/crt0.o build/u/libdunc.o build/u/http.o build/u/gfx.o build/u/str.o
+U_LIB   := build/u/crt0.o build/u/libdunc.o build/u/gfx.o build/u/str.o
+CRYPTO  := sha2 aead x25519 bn rsa ecc x509 tls
+NETLIB  := build/u/libnet.a
 U_ELFS  := $(patsubst %,build/user/%.elf,$(APPS))
 HDRS    := $(wildcard src/*.h common/*.h user/lib/*.h)
 
@@ -36,24 +38,30 @@ build/u/crt0.o: user/lib/crt0.asm
 build/u/libdunc.o: user/lib/libdunc.c $(HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(UCFLAGS) -c $< -o $@
-build/u/http.o: user/lib/http.c $(HDRS)
+build/u/http.o: user/lib/http.c $(HDRS) $(wildcard user/lib/crypto/*.h)
 	@mkdir -p $(dir $@)
 	$(CC) $(UCFLAGS) -c $< -o $@
+build/u/c_%.o: user/lib/crypto/%.c $(wildcard user/lib/crypto/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(UCFLAGS) -c $< -o $@
+$(NETLIB): build/u/http.o $(patsubst %,build/u/c_%.o,$(CRYPTO))
+	rm -f $@ && ar rcs $@ $^
 build/u/%.o: common/%.c $(HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(UCFLAGS) -c $< -o $@
 build/u/app_%.o: user/apps/%.c $(HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(UCFLAGS) -c $< -o $@
-build/user/%.elf: build/u/app_%.o $(U_LIB) user/user.ld
+build/user/%.elf: build/u/app_%.o $(U_LIB) $(NETLIB) user/user.ld
 	@mkdir -p $(dir $@)
-	$(LD) -n -T user/user.ld -nostdlib -z max-page-size=0x1000 -z noexecstack --no-warn-rwx-segments -o $@ $(U_LIB) $< $(LIBGCC)
+	$(LD) -n -T user/user.ld -nostdlib -z max-page-size=0x1000 -z noexecstack --no-warn-rwx-segments -o $@ $(U_LIB) $< $(NETLIB) $(LIBGCC)
 
 build/thane.elf: $(K_OBJS) src/linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(K_OBJS)
 
 # Initial files: home folder, the OS source in ~/Projects/thane, and the clan package repository
 REPO_PKGS := $(patsubst %,build/user/%.elf,$(REPO_APPS))
+CA_BUNDLE := /etc/ssl/certs/ca-certificates.crt
 build/initrd.tar: $(shell find rootfs -type f) $(REPO_PKGS) repo/index.txt $(K_SRCS) README.md
 	rm -rf build/rootfs && mkdir -p build/rootfs && cp -r rootfs/. build/rootfs/
 	mkdir -p build/rootfs/home/Projects/thane/kernel build/rootfs/home/Projects/thane/drivers \
@@ -66,6 +74,7 @@ build/initrd.tar: $(shell find rootfs -type f) $(REPO_PKGS) repo/index.txt $(K_S
 	cp src/font8x16.h tools/genunifont.py common/theme_highland.h build/rootfs/home/Projects/thane/fonts/
 	cp README.md build/rootfs/home/Projects/thane/docs/
 	cp repo/index.txt $(REPO_PKGS) build/rootfs/system/repo/ 2>/dev/null || true
+	mkdir -p build/rootfs/system/certs/user && cp $(CA_BUNDLE) build/rootfs/system/certs/ca-bundle.crt
 	tar --format=ustar --owner=0 --group=0 -cf $@ -C build/rootfs .
 
 duncos.iso: build/thane.elf build/initrd.tar iso/boot/grub/grub.cfg
@@ -90,3 +99,9 @@ test:
 	printf 'written by mtools on Linux\n' > build/test/hello.txt && MTOOLS_SKIP_CHECK=1 mcopy -i build/test/fat.img build/test/hello.txt "::/Hello From Linux.txt"
 	build/test/test_fat build/test/fat.img
 	fsck.fat -n build/test/fat.img && echo "fsck.fat: clean"
+	gcc -std=gnu17 -O2 -w -fno-builtin -o build/test/test_crypto tests/test_crypto.c $(addprefix user/lib/crypto/,sha2.c aead.c x25519.c bn.c rsa.c ecc.c) common/str.c
+	python3 tests/test_crypto.py build/test/test_crypto
+	gcc -std=gnu17 -O2 -w -DX509_TESTING -fno-builtin -o build/test/test_roots tests/test_roots.c $(addprefix user/lib/crypto/,x509.c sha2.c bn.c rsa.c ecc.c) common/str.c
+	build/test/test_roots $(CA_BUNDLE) | tail -3
+	gcc -std=gnu17 -O2 -w -D_GNU_SOURCE -fno-builtin -o build/test/test_tls tests/test_tls.c $(addprefix user/lib/crypto/,tls.c x509.c sha2.c aead.c x25519.c bn.c rsa.c ecc.c) common/str.c
+	tests/tls/matrix.sh build/test/test_tls build/test/tls

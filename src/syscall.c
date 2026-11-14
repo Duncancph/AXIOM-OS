@@ -148,6 +148,10 @@ uint64_t syscall_dispatch(struct frame *f) {
         if (f->rax == SYS_FS_WRITE || f->rax == SYS_FS_DELETE || f->rax == SYS_FS_RENAME) apps_refresh();
         return (uint64_t)r;
     }
+    case SYS_RANDOM:
+        if (!b || b > 65536 || !UOK(a, b, true)) return (uint64_t)-1;
+        random_bytes((void *)a, b);
+        return 0;
     case SYS_NET_INFO:
         if (!UOK(a, sizeof(struct dunc_netinfo), true)) return (uint64_t)-1;
         net_get_info((struct dunc_netinfo *)a);

@@ -682,6 +682,7 @@ static void click(int button) {
 }
 
 static void handle_mouse(int dx, int dy, int b, int wheel) {
+    random_event((uint64_t)(dx & 0xFFFF) | (uint64_t)(dy & 0xFFFF) << 16 | (uint64_t)b << 32);
     int ox = mx, oy = my;
     if (dx > 5 || dx < -5) dx *= 2;
     if (dy > 5 || dy < -5) dy *= 2;
@@ -733,6 +734,7 @@ static void handle_mouse(int dx, int dy, int b, int wheel) {
 }
 
 static void handle_key(int k) {
+    random_event(k);
     if (k == KEY_SUPER) { toggle_menu(!menu_open); return; }
     if (menu_open && k == 27) { toggle_menu(false); return; }
     int t = top_window();

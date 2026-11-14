@@ -216,6 +216,7 @@ static void cmd_get(const char *arg, bool save) {
         for (long i = 0; i < n; i++) { char c = body[i]; if (c == '\n' || c == '\t' || (c >= 32 && c < 127)) putch(c); }
         if (cx) putch('\n');
         print("-- HTTP %d, %ld bytes%s\n", status, n, n == (long)sizeof body ? " (cut short; use wget to save it)" : "");
+        if (http_sec.secure) { puts_c("-- secure: ", C_GREEN); print("%s; certificate for %s, from %s\n", http_sec.cipher, http_sec.subject, http_sec.issuer); }
         return;
     }
     if (*arg) strncpy0(file, arg, sizeof file);
@@ -234,7 +235,7 @@ static void cmd_get(const char *arg, bool save) {
     if (x.err) { puts_c(fs_strerror(x.err), C_RED); putch('\n'); return; }
     if (x.first) fs_write(x.path, "", 0);
     uint64_t ms = sys_time() - t0; if (!ms) ms = 1;
-    print("HTTP %d - saved %ld bytes to %s (%lu KB/s)\n", status, x.got, file, (uint64_t)x.got * 1000 / 1024 / ms);
+    print("HTTP %d - saved %ld bytes to %s (%lu KB/s)%s\n", status, x.got, file, (uint64_t)x.got * 1000 / 1024 / ms, http_sec.secure ? " - secure" : "");
     if (x.total > 0 && x.got < x.total) puts_c("Warning: the download stopped early.\n", C_GOLD);
 }
 
@@ -254,7 +255,7 @@ static void cmd_help(void) {
         {"cp <a> <b>", "copy"}, {"touch <file>", "create an empty file"}, {"echo hi > f", "write text to a file"},
         {"edit <file>", "open a file in Editor"}, {"df", "drives and free space"},
         {"ip", "network status"}, {"ping <host>", "test a connection"}, {"host <name>", "look up an address"},
-        {"wget <url> [f]", "download a web page or file"}, {"curl <url>", "show a web page"}, {"dns <ip|auto>", "choose a DNS server"},
+        {"wget <url> [f]", "download (http:// or https://)"}, {"trust [file]", "list or add trusted authorities"}, {"curl <url>", "show a web page"}, {"dns <ip|auto>", "choose a DNS server"},
         {"apps", "list installed apps"}, {"open <app>", "start an app, e.g. 'open calc'"},
         {"ps", "list running processes"}, {"kill <pid>", "stop a process"},
         {"date", "show the date and time"}, {"fetch", "system summary"}, {"clear", "clear the screen"}, {"exit", "close this terminal"} };
@@ -311,6 +312,33 @@ static void run(char *line) {
     else if (!strcmp(line, "host") || !strcmp(line, "nslookup")) cmd_host(arg);
     else if (!strcmp(line, "wget")) cmd_get(arg, true);
     else if (!strcmp(line, "curl")) cmd_get(arg, false);
+    else if (!strcmp(line, "trust")) {
+        if (!*arg) {
+            print("%d trusted certificate authorities. Ones you added:\n", http_trusted_roots());
+            static struct dunc_dirent d[32]; int n = fs_list("/system/certs/user", d, 32);
+            if (n <= 0) puts_c("  (none)\n", C_DIM);
+            for (int i = 0; i < n; i++) print("  %s\n", d[i].name);
+            puts_c("To add one: trust <file.pem>\n", C_DIM);
+        } else {
+            char p[256], to[256]; path_resolve(cwd, arg, p, sizeof p);
+            static char pem[65536];
+            long n = fs_read(p, pem, 0, sizeof pem - 1);
+            if (n < 0) { puts_c(fs_strerror((int)n), C_RED); putch('\n'); }
+            else {
+                pem[n] = 0;
+                bool ok = false; for (long i = 0; i + 27 < n; i++) if (!strncmp(pem + i, "-----BEGIN CERTIFICATE-----", 27)) ok = true;
+                const char *b = p; for (const char *s = p; *s; s++) if (*s == '/') b = s + 1;
+                ksnprintf(to, sizeof to, "/system/certs/user/%s", b);
+                if (!ok) puts_c("That file doesn't contain a PEM certificate.\n", C_RED);
+                else if (fs_write(to, pem, n) < 0) puts_c("Couldn't save it.\n", C_RED);
+                else {
+                    int k = http_trust_pem(pem, n);
+                    print("Added %s (%d certificate%s) as a trusted authority until restart.\n", b, k, k == 1 ? "" : "s");
+                    puts_c("Only add authorities you know and trust. Apps already open pick it up when reopened.\n", C_GOLD);
+                }
+            }
+        }
+    }
     else if (!strcmp(line, "dns")) {
         uint32_t ip;
         if (!strcmp(arg, "auto")) { sys_set_dns(0); puts_c("DNS server: from the network (DHCP)\n", C_TEXT); }

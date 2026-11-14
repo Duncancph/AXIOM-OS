@@ -226,6 +226,11 @@ extern const int app_count;
 void *kmalloc(size_t n);
 void kfree(void *p);
 
+/* ---- random.c ---- */
+void random_init(void);
+void random_bytes(void *out, size_t n);
+void random_event(uint64_t x);
+
 /* ---- syscall.c ---- */
 uint64_t syscall_dispatch(struct frame *f);
 
