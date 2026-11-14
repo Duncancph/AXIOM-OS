@@ -158,6 +158,19 @@ def g_chat(d, S, u):
     d.polygon([(cx, cy - r), (cx + r // 4, cy - r // 4), (cx + r, cy), (cx + r // 4, cy + r // 4),
                (cx, cy + r), (cx - r // 4, cy + r // 4), (cx - r, cy), (cx - r // 4, cy - r // 4)], fill=c)
 
+def g_note(d, S, u):
+    d.rounded_rectangle([u(.24), u(.18), u(.76), u(.82)], radius=u(.06), fill=W)
+    for i, y in enumerate((.36, .48, .60, .72)):
+        d.line([(u(.33), u(y)), (u(.67 if i < 3 else .55), u(y))], fill=(40, 40, 40, 255), width=u(.035))
+
+def g_calendar(d, S, u):
+    d.rounded_rectangle([u(.20), u(.24), u(.80), u(.80)], radius=u(.07), fill=W)
+    d.rectangle([u(.20), u(.24), u(.80), u(.38)], fill=(150, 150, 140, 255))
+    for x in (.34, .66): d.rounded_rectangle([u(x) - u(.03), u(.16), u(x) + u(.03), u(.30)], radius=u(.02), fill=W)
+    for r in range(3):
+        for col in range(4):
+            d.rectangle([u(.27 + col * .13), u(.45 + r * .11), u(.27 + col * .13) + u(.07), u(.45 + r * .11) + u(.07)], fill=(40, 40, 40, 255))
+
 ICONS = [   # name, gradient top, bottom, glyph
     ("folder", "#2C2C2C", "#141414", g_folder),
     ("terminal", "#2C2C2C", "#141414", g_terminal),
@@ -172,6 +185,8 @@ ICONS = [   # name, gradient top, bottom, glyph
     ("code", "#2C2C2C", "#141414", g_code),
     ("clock", "#2C2C2C", "#141414", g_clock),
     ("globe", "#2C2C2C", "#141414", g_globe),
+    ("note", "#2C2C2C", "#141414", g_note),
+    ("calendar", "#2C2C2C", "#141414", g_calendar),
     ("chat", "#2C2C2C", "#141414", g_chat),
 ]
 
