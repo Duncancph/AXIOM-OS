@@ -78,7 +78,8 @@ static void draw(void) {
     kv(40, 152, "MAC address", b);
     ksnprintf(b, sizeof b, "%s / %s", ip, m);
     kv(40, 176, "IPv4 address", ni.configured ? b : "-");
-    ksnprintf(b, sizeof b, "%s  (lease %u min)", g, ni.lease_s / 60);
+    if (ni.lease_s == 0xFFFFFFFFu) ksnprintf(b, sizeof b, "%s  (permanent lease)", g);
+    else ksnprintf(b, sizeof b, "%s  (lease %u min)", g, ni.lease_s / 60);
     kv(40, 200, "IPv4 gateway", ni.configured ? b : "-");
     int g6 = -1;                                    /* the global IPv6 address to show (a ready one first) */
     for (int i = 1; i < ni.v6_count; i++) if (g6 < 0 || (ni.v6_state[i] == V6_PREFERRED && ni.v6_state[g6] != V6_PREFERRED)) g6 = i;

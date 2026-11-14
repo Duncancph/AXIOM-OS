@@ -173,7 +173,8 @@ static void cmd_ip(void) {
     print("  MAC      %02x:%02x:%02x:%02x:%02x:%02x\n", n.mac[0], n.mac[1], n.mac[2], n.mac[3], n.mac[4], n.mac[5]);
     if (n.configured) {
         ip_str(n.ip, a); ip_str(n.mask, m); ip_str(n.gw, g);
-        print("  IPv4     %s / %s, gateway %s, lease %u min\n", a, m, g, n.lease_s / 60);
+        if (n.lease_s == 0xFFFFFFFFu) print("  IPv4     %s / %s, gateway %s, permanent lease\n", a, m, g);
+        else print("  IPv4     %s / %s, gateway %s, lease %u min\n", a, m, g, n.lease_s / 60);
     } else if (n.link) puts_c("  IPv4     no address (no DHCP server answered yet)\n", C_DIM);
     for (int i = 0; i < n.v6_count; i++) {
         ip_format(&n.v6[i], a);
