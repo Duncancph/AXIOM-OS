@@ -713,7 +713,6 @@ static bool sel_match(const struct csel *c, const struct node *e) {
 }
 
 /* ---------------- computing styles ---------------- */
-struct mrule { const struct rule *r; };
 #define MAXM 600
 static const struct rule *matched[MAXM]; static int nm;
 static struct doc *DOC;
@@ -920,14 +919,11 @@ static const char *subst_vars(struct style *st, const char *v, int *vl, int dept
     return out;
 }
 
-static void set_initial(struct style *st, int i, bool isbg);
 static void apply(struct style *st, const struct style *ps, const char *prop, const char *v, int vl) {
     int pl = strlen(prop);
     if (!vl) return;
-    const char *pv = v; int pvl = vl;
     v = subst_vars(st, v, &vl, 0);
     if (!v) return;
-    (void)pv; (void)pvl;
     while (vl && sp(*v)) { v++; vl--; }
     while (vl && sp(v[vl - 1])) vl--;
     if (!vl) return;
@@ -1188,10 +1184,8 @@ static void apply(struct style *st, const struct style *ps, const char *prop, co
         else if (l.t == L_PX && (st->h.t != L_PX || st->h.v < l.v)) st->h = l;    /* min-height: as a height */
         return;
     }
-    (void)set_initial;
 #undef P
 }
-static void set_initial(struct style *st, int i, bool isbg) { (void)st; (void)i; (void)isbg; }
 
 static struct decl inl[128];
 
@@ -1221,7 +1215,6 @@ static int hints(const struct node *e, char *buf, int max) {
     if (e->tag == T_TABLE && !DOC->standards) ADD("text-align:left;");       /* quirks mode: tables don't inherit it */
     if (e->tag == T_BODY) {
         if ((v = node_attr(e, "text"))) ADD("color:%s;", v);
-        if ((v = node_attr(e, "link"))) (void)v;
     }
     if ((v = node_attr(e, "align"))) {
         if (e->tag == T_TABLE) { if (!strcmp(v, "center")) ADD("margin-left:auto;margin-right:auto;"); else if (!strcmp(v, "right") || !strcmp(v, "left")) ADD("float:%s;", v); }
@@ -1268,8 +1261,6 @@ static int hints(const struct node *e, char *buf, int max) {
 #undef ADD
     return n;
 }
-
-static struct node *const_cast(const struct node *n) { return (struct node *)n; }
 
 static int cascade_depth;
 static void style_elem(struct node *e, const struct style *ps) {
@@ -1385,5 +1376,4 @@ void css_cascade(struct doc *d, int vw) {
     init.w.t = L_AUTO; init.h.t = L_AUTO; init.maxw.t = L_NONE;
     cascade_depth = 0;
     cascade_rec(d->root, &init);
-    (void)const_cast;
 }

@@ -47,7 +47,7 @@ static inline int tcp_shut(int h) { return sys_call(SYS_TCP_CLOSE, h, 0, 0, 0, 0
 const char *net_strerror(int e);
 void ip_str(uint32_t ip, char *out);          /* out: at least 16 bytes */
 
-/* HTTP (http:// only for now). Returns the body length (truncated to max), or a negative error.
+/* HTTP and HTTPS. Returns the body length (truncated to max), or a negative error.
  * Follows redirects. status/ctype/final_url may be NULL. */
 #define HTTP_EHTTPS -20
 #define HTTP_EURL -21

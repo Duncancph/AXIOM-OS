@@ -60,7 +60,6 @@ struct doc {
     int nnodes;
     char charset[32];
     bool standards;                   /* had a <!doctype html> (else quirks mode) */
-    struct node *forms;               /* unused (forms are found through node->form) */
 };
 /* parse HTML (already Windows-1252) into a new tree in d->ar */
 void html_parse(struct doc *d, const char *s, long n);
