@@ -1,8 +1,8 @@
 /* Realtek RTL8111/8168/8169/810x Ethernet (very common on desktop motherboards).
- * C+ mode descriptors, polled. Note: written from the datasheet; not yet tested on hardware. */
+ * C+ mode descriptors, polled. Being tested on real hardware (an RTL8168G); see the steps for the G family. */
 #include "net.h"
 
-#define NRX 64
+#define NRX 256
 #define NTX 64
 struct desc { volatile uint32_t opts1, opts2; volatile uint64_t addr; };
 #define OWN (1u << 31)
@@ -16,6 +16,10 @@ struct rtl {
     struct desc *rx, *tx;
     uint8_t *rxbuf[NRX], *txbuf[NTX];
     uint32_t rx_cur, tx_cur;
+    bool gen_g;
+    uint16_t isr_seen;                   /* status bits seen since the last packet */
+    uint64_t last_rx;
+    int restarts;
 };
 
 static uint8_t r8(struct rtl *t, int o) { return *(volatile uint8_t *)(t->r + o); }
@@ -29,6 +33,14 @@ static uint32_t r32(struct rtl *t, int o) { return *(volatile uint32_t *)(t->r +
 static uint16_t mac_ocp_r(struct rtl *t, uint32_t reg) { w32(t, 0xB0, reg << 15); return r32(t, 0xB0) & 0xFFFF; }
 static void mac_ocp_w(struct rtl *t, uint32_t reg, uint16_t v) { w32(t, 0xB0, 1u << 31 | reg << 15 | v); }
 static void wait_ll_ready(struct rtl *t) { for (int i = 0; i < 1000 && !(r8(t, 0xD3) & 2); i++) udelay(100); }   /* MCU: LINK_LIST_RDY */
+
+/* "ERI" registers (extended GMAC), RTL8168C and later */
+static void eri_w(struct rtl *t, int addr, uint32_t v) {
+    w32(t, 0x70, v); w32(t, 0x74, 1u << 31 | 0xFu << 12 | addr);
+    for (int i = 0; i < 100 && (r32(t, 0x74) & (1u << 31)); i++) udelay(10);
+}
+
+static void start_hw(struct rtl *t);
 
 static int r_send(struct netif *n, const void *frame, int len) {
     struct rtl *t = n->priv;
@@ -54,12 +66,15 @@ static int r_send(struct netif *n, const void *frame, int len) {
 
 static void r_poll(struct netif *n) {
     struct rtl *t = n->priv;
+    uint16_t isr = r16(t, 0x3E);
+    t->isr_seen |= isr;
     for (int budget = 0; budget < NRX; budget++) {
         struct desc *d = &t->rx[t->rx_cur];
         uint32_t o = d->opts1;
         if (o & OWN) break;
         mb();
         int len = (o & 0x3FFF) - 4;
+        t->last_rx = uptime_ms(); t->isr_seen = 0;
         if ((o & FS) && (o & LS) && !(o & (1u << 21)) && len >= 14) {
             n->rx_packets++; n->rx_bytes += len;
             net_rx(n, t->rxbuf[t->rx_cur], len);
@@ -69,10 +84,53 @@ static void r_poll(struct netif *n) {
         d->opts1 = OWN | (t->rx_cur == NRX - 1 ? EOR : 0) | 2048;
         t->rx_cur = (t->rx_cur + 1) % NRX;
     }
-    w16(t, 0x3E, 0xFFFF);                /* acknowledge status */
+    if (isr) w16(t, 0x3E, isr);          /* acknowledge status */
+    /* Receiving stopped although the card reports it ran out of buffers or its FIFO overflowed:
+     * some chips don't carry on by themselves, so restart the card (the link stays up). */
+    uint64_t now = uptime_ms();
+    /* (Also if nothing at all has arrived for 15 s: a network always has some broadcasts.) */
+    if (r8(t, 0x6C) & 2 && ((t->isr_seen & 0x50 && now - t->last_rx > 2000) || now - t->last_rx > 15000)) {
+        if (t->restarts++ < 5) LOG_WARN("rtl8168: receiving stopped after %lu packets (status %04x); restarting the card\n", n->rx_packets, t->isr_seen);
+        start_hw(t);
+    }
 }
 
 static bool r_link(struct netif *n) { return r8(n->priv, 0x6C) & 2; }
+
+/* reset the MAC, give it fresh descriptor rings and start receiving and sending */
+static void start_hw(struct rtl *t) {
+    bool gen_g = t->gen_g;
+    if (gen_g) w32(t, 0xF0, r32(t, 0xF0) | (1u << 19));   /* MISC: RXDV gate on while resetting */
+    w8(t, 0x37, 0x10);                   /* reset */
+    for (int i = 0; i < 1000 && (r8(t, 0x37) & 0x10); i++) udelay(1000);
+    for (int i = 0; i < NRX; i++) {
+        t->rx[i].addr = (uint64_t)t->rxbuf[i]; t->rx[i].opts2 = 0;
+        t->rx[i].opts1 = OWN | (i == NRX - 1 ? EOR : 0) | 2048;
+    }
+    for (int i = 0; i < NTX; i++) { t->tx[i].opts1 = i == NTX - 1 ? EOR : 0; t->tx[i].opts2 = 0; t->tx[i].addr = 0; }
+    t->rx_cur = t->tx_cur = 0;
+    mb();
+    w8(t, 0x50, 0xC0);                   /* unlock config registers */
+    w16(t, 0xE0, r16(t, 0xE0) | (1 << 3));   /* C+ command: PCI multiple read/write */
+    w16(t, 0xDA, 2047);                  /* max RX packet size */
+    w8(t, 0xEC, 0x3F);                   /* max TX packet size */
+    if (gen_g) {                         /* FIFO sizes and thresholds, as Linux sets them for these chips */
+        eri_w(t, 0xC8, 0x00080010);
+        eri_w(t, 0xE8, 0x00020006);
+    }
+    w32(t, 0x20, (uint32_t)(uint64_t)t->tx); w32(t, 0x24, (uint64_t)t->tx >> 32);
+    w32(t, 0xE4, (uint32_t)(uint64_t)t->rx); w32(t, 0xE8, (uint64_t)t->rx >> 32);
+    w8(t, 0x37, 0x0C);                   /* enable RX + TX */
+    w32(t, 0x40, 0x03000700 | (gen_g ? 1u << 7 : 0));   /* TX config: standard IFG, unlimited DMA burst (+ auto FIFO on G and later) */
+    /* RX config: broadcast + multicast + my MAC, unlimited DMA burst; on G and later also multiple descriptor
+     * fetch, 128-descriptor interrupt and early receive off (as Linux), else no FIFO threshold */
+    w32(t, 0x44, gen_g ? 0x0000CF0E : 0x0000E70E);
+    w32(t, 0x08, 0xFFFFFFFF); w32(t, 0x0C, 0xFFFFFFFF);   /* multicast filter: accept all */
+    if (gen_g) w32(t, 0xF0, r32(t, 0xF0) & ~(1u << 19));   /* MISC: open the receive gate */
+    w8(t, 0x50, 0x00);                   /* lock */
+    w16(t, 0x3E, 0xFFFF);
+    t->isr_seen = 0; t->last_rx = uptime_ms();
+}
 
 struct netif *rtl8168_probe(struct pci_dev *p) {
     if (p->vendor != 0x10EC) return 0;
@@ -87,6 +145,7 @@ struct netif *rtl8168_probe(struct pci_dev *p) {
     if (!base) return 0;
     struct rtl *t = kmalloc(sizeof *t);
     if (!t) return 0;
+    memset(t, 0, sizeof *t);
     t->r = map_mmio(base, 0x1000);
     uint16_t cmd = pci_read16(p->bus, p->dev, p->fn, 4);
     pci_write16(p->bus, p->dev, p->fn, 4, (cmd | 0x6) & ~0x400);
@@ -106,33 +165,13 @@ struct netif *rtl8168_probe(struct pci_dev *p) {
         mac_ocp_w(t, 0xE8DE, mac_ocp_r(t, 0xE8DE) | (1u << 15));
         wait_ll_ready(t);
     }
-    w8(t, 0x37, 0x10);                   /* reset */
-    for (int i = 0; i < 1000 && (r8(t, 0x37) & 0x10); i++) sleep_ms(1);
     for (int i = 0; i < 6; i++) t->nif.mac[i] = r8(t, i);
-
     t->rx = page_alloc(1); t->tx = page_alloc(1);
     for (int i = 0; i < NRX; i += 2) { uint8_t *pg = page_alloc(1); t->rxbuf[i] = pg; t->rxbuf[i + 1] = pg + 2048; }
     for (int i = 0; i < NTX; i += 2) { uint8_t *pg = page_alloc(1); t->txbuf[i] = pg; t->txbuf[i + 1] = pg + 2048; }
-    for (int i = 0; i < NRX; i++) {
-        t->rx[i].addr = (uint64_t)t->rxbuf[i]; t->rx[i].opts2 = 0;
-        t->rx[i].opts1 = OWN | (i == NRX - 1 ? EOR : 0) | 2048;
-    }
-    for (int i = 0; i < NTX; i++) { t->tx[i].opts1 = i == NTX - 1 ? EOR : 0; t->tx[i].opts2 = 0; t->tx[i].addr = 0; }
-
-    w8(t, 0x50, 0xC0);                   /* unlock config registers */
-    w16(t, 0xE0, r16(t, 0xE0) | (1 << 3));   /* C+ command: PCI multiple read/write */
-    w16(t, 0xDA, 2047);                  /* max RX packet size */
-    w8(t, 0xEC, 0x3F);                   /* max TX packet size */
-    w32(t, 0x20, (uint32_t)(uint64_t)t->tx); w32(t, 0x24, (uint64_t)t->tx >> 32);
-    w32(t, 0xE4, (uint32_t)(uint64_t)t->rx); w32(t, 0xE8, (uint64_t)t->rx >> 32);
-    w8(t, 0x37, 0x0C);                   /* enable RX + TX */
-    w32(t, 0x40, 0x03000700 | (gen_g ? 1u << 7 : 0));   /* TX config: standard IFG, unlimited DMA burst (+ auto FIFO on G and later) */
-    w32(t, 0x44, 0x0000E70E);            /* RX config: broadcast + multicast + my MAC, unlimited burst */
-    w32(t, 0x08, 0xFFFFFFFF); w32(t, 0x0C, 0xFFFFFFFF);   /* multicast filter: accept all */
-    if (gen_g) w32(t, 0xF0, r32(t, 0xF0) & ~(1u << 19));   /* MISC: open the receive gate */
-    w8(t, 0x50, 0x00);                   /* lock */
-    LOG_INFO("rtl8168: chip %08x%s, MCU %02x, MISC %08x\n", xid, gen_g ? " (G or later)" : "", r8(t, 0xD3), r32(t, 0xF0));
-    w16(t, 0x3E, 0xFFFF);
+    t->gen_g = gen_g;
+    start_hw(t);
+    LOG_INFO("rtl8168: chip %08x%s, MCU %02x, MISC %08x, RxConfig %08x\n", xid, gen_g ? " (G or later)" : "", r8(t, 0xD3), r32(t, 0xF0), r32(t, 0x44));
 
     ksnprintf(t->nif.adapter, sizeof t->nif.adapter, "Realtek RTL%04x", id);
     strncpy0(t->nif.driver, "rtl8168", sizeof t->nif.driver);
