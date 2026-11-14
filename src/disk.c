@@ -227,7 +227,7 @@ static const char *GRUBCFG_FMT =
     "# DuncOS boot menu. Settings > Display changes the screen size here.\n"
     "set timeout=2\nset default=0\ninsmod all_video\ninsmod gfxterm\n"
     "menuentry \"DuncOS\" {\n"
-    "    set gfxpayload=%s1280x800x32,1366x768x32,1280x720x32,1024x768x32,auto\n"
+    "    set gfxpayload=%s1920x1080x32,1920x1200x32,1680x1050x32,1600x900x32,1440x900x32,1366x768x32,1280x800x32,1280x720x32,1024x768x32,auto\n"
     "    multiboot2 /duncos/thane.elf\n    module2 /duncos/initrd.tar initrd\n"
     "    module2 /duncos/thane.elf kernel\n    module2 /EFI/BOOT/BOOTX64.EFI bootx64\n    boot\n}\n"
     "menuentry \"DuncOS (safe graphics 1024x768)\" {\n"
