@@ -8,6 +8,7 @@ static uint64_t reset_reg_addr;
 static uint16_t slp_typa, slp_typb;
 static bool have_s5;
 
+void *acpi_table(const char *sig);
 static struct sdt *find_table(const char *sig) {
     uint8_t *r = bootinfo.rsdp_copy;
     if (!bootinfo.rsdp) return 0;
@@ -91,3 +92,5 @@ void acpi_reboot(void) {
     struct { uint16_t l; uint64_t b; } __attribute__((packed)) z = { 0, 0 };
     __asm__ volatile("lidt %0; int3" ::"m"(z));           /* triple fault */
 }
+
+void *acpi_table(const char *sig) { return find_table(sig); }

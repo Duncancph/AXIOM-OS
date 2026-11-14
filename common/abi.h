@@ -45,6 +45,7 @@ struct sysinfo {
     int fb_w, fb_h, nprocs, uefi;
     char cpu[64];
     char kernel[32];
+    int ncpus_found, ncpus_on;          /* processor cores: found, in use */
 };
 
 enum { BT_INFO, BT_SCAN, BT_RESULTS, BT_PAIR, BT_PAIR_STATUS, BT_PAIR_CONFIRM, BT_PAIRED, BT_FORGET };

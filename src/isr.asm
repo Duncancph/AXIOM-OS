@@ -3,6 +3,7 @@ bits 64
 section .text
 extern isr_dispatch
 extern task_exit
+extern bkl_unlock
 
 %macro STUB 1
 isr%1:
@@ -22,6 +23,10 @@ STUB i
 %endrep
 
 isr_common:
+    test byte [rsp + 24], 3     ; from an app? switch %gs to this core's data
+    jz .k_in
+    swapgs
+.k_in:
     push rax
     push rbx
     push rcx
@@ -56,6 +61,10 @@ isr_common:
     pop rbx
     pop rax
     add rsp, 16
+    test byte [rsp + 8], 3      ; back to an app: give it its %gs back
+    jz .k_out
+    swapgs
+.k_out:
     iretq
 
 ; void switch_to(uint64_t *save_rsp, uint64_t new_rsp)
@@ -91,6 +100,8 @@ thread_entry:
 ; First run of a user process: the stack holds an iretq frame into ring 3
 global user_entry
 user_entry:
+    call bkl_unlock         ; leaving the kernel for the app's first instruction
+    swapgs
     xor eax, eax
     xor ebx, ebx
     xor ecx, ecx

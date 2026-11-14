@@ -12,6 +12,10 @@ with true multitasking and memory protection between apps.
 - 64-bit x86 kernel in C and assembly, booted by GRUB (Multiboot2)
 - **Preemptive multitasking**: the local APIC timer switches between programs 250 times a second,
   so a frozen or busy app can't lock up the computer
+- **Multi-core** (Settings > About > Use all processor cores; off by default): the other cores are started
+  from the ACPI core list and run apps side by side. One core at a time runs kernel code (a big kernel
+  lock); kernel threads stay on the first core. If a start with all cores doesn't finish, the next start
+  goes back to one core by itself.
 - **Memory protection**: every app runs in user mode (ring 3) in its own address space.
   The kernel is mapped supervisor-only, and apps can't see each other's memory or touch hardware ports.
   An app that misbehaves is stopped, the rest of the system carries on, and a notification explains what happened
@@ -212,6 +216,7 @@ src/             Thane kernel
   cpu.c            GDT/TSS (privilege levels), local APIC timer, write-combining video memory
   isr.asm idt.c    interrupt entry, context switch, exception handling (stops faulting apps)
   sched.c          tasks, preemptive scheduler, process spawn/exit/kill
+  smp.c ap_tramp.asm  starting the other cores, the kernel lock
   vm.c             per-process page tables, ELF loader
   vfs.c kmalloc.c  file system layer (memory disk + mounted drives), kernel heap
   apps.c           app registry and the clan package manager
@@ -249,4 +254,4 @@ rootfs/          files copied onto the system disk at start-up
 2. Bluetooth profiles (keyboards and mice first), Intel/MediaTek Bluetooth firmware loading
 3. Wi-Fi; an ACPI interpreter (battery, sleep, I2C-HID touchpads)
 4. TLS 1.2 fallback, revocation checks; JavaScript in Web
-5. Multi-core scheduling, USB audio, network time
+5. Finer-grained kernel locking (kernel work on several cores), USB audio, network time

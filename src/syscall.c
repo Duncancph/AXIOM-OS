@@ -285,6 +285,7 @@ uint64_t syscall_dispatch(struct frame *f) {
             strncpy0(s->cpu, bp, sizeof s->cpu);
         }
         ksnprintf(s->kernel, sizeof s->kernel, "%s %s", KERNEL_NAME, OS_VERSION);
+        s->ncpus_found = ncpus_found; s->ncpus_on = ncpus_on;
         return 0;
     }
     case SYS_DISK_LIST: {

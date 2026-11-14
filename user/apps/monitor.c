@@ -4,27 +4,41 @@
 static int WW = 680, WH = 520;
 #define HIST 60
 static struct app a;
-static struct procinfo procs[32], prev[32];
-static int nprocs, nprev, sel_pid = -1, hover_btn, hover_row = -1;
+static struct procinfo procs[48], raw[48], prev[48];   /* raw: as the kernel lists them (prev: the last sample) */
+static int nprocs, nraw, nprev, sel_pid = -1, hover_btn, hover_row = -1;
 static uint64_t prev_ticks, last_sample;
-static int cpu_hist[HIST], mem_hist[HIST], cpu_now, proc_cpu[32];
+static int cpu_hist[HIST], mem_hist[HIST], cpu_now, proc_cpu[48];
 static struct sysinfo si;
 
 static void sample(void) {
     sys_sysinfo(&si);
-    memcpy(prev, procs, sizeof procs); nprev = nprocs;
-    nprocs = sys_procs(procs, 32);
+    memcpy(prev, raw, sizeof raw); nprev = nraw;
+    nraw = nprocs = sys_procs(raw, 48);
+    memcpy(procs, raw, sizeof raw);
     uint64_t dt = si.cpu_clock_us - prev_ticks;
     prev_ticks = si.cpu_clock_us;
-    int idle_pct = 0;
+    /* with several cores, percentages are of the whole machine (all cores together) */
+    int ncores = si.ncpus_on > 0 ? si.ncpus_on : 1;
+    uint64_t idle_us = 0;
     for (int i = 0; i < nprocs; i++) {
         uint64_t before = 0;
         for (int j = 0; j < nprev; j++) if (prev[j].pid == procs[i].pid) before = prev[j].cpu_us;
-        proc_cpu[i] = dt ? (int)((procs[i].cpu_us - before) * 100 / dt) : 0;
+        uint64_t used = procs[i].cpu_us - before;
+        proc_cpu[i] = dt ? (int)(used * 100 / (dt * ncores)) : 0;
         if (proc_cpu[i] > 100) proc_cpu[i] = 100;
-        if (!strncmp(procs[i].name, "Idle", 4)) idle_pct = proc_cpu[i];
+        if (!strncmp(procs[i].name, "Idle", 4)) idle_us += used;
     }
+    int idle_pct = dt ? (int)(idle_us * 100 / (dt * ncores)) : 0;
+    if (idle_pct > 100) idle_pct = 100;
     cpu_now = dt ? 100 - idle_pct : 0;
+    /* one "Idle" row for all cores together; the per-core ones are left out of the list */
+    int k = 0;
+    for (int i = 0; i < nprocs; i++) {
+        if (!strncmp(procs[i].name, "Idle (core", 10)) continue;
+        if (!strncmp(procs[i].name, "Idle", 4)) proc_cpu[i] = idle_pct;
+        procs[k] = procs[i]; proc_cpu[k] = proc_cpu[i]; k++;
+    }
+    nprocs = k;
     memmove(cpu_hist, cpu_hist + 1, sizeof(int) * (HIST - 1)); cpu_hist[HIST - 1] = cpu_now;
     memmove(mem_hist, mem_hist + 1, sizeof(int) * (HIST - 1));
     mem_hist[HIST - 1] = si.mem_total ? (int)(si.mem_used * 100 / si.mem_total) : 0;

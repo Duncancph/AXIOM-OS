@@ -11,7 +11,7 @@ LIBGCC  := $(shell $(CC) -print-libgcc-file-name)
 APPS    := files about terminal monitor bluetooth network calc sandbox settings viewer web notes calendar music
 REPO_APPS := editor clock
 K_SRCS  := $(filter-out src/desktop_highland.c,$(wildcard src/*.c)) common/gfx.c common/str.c common/inet.c user/lib/crypto/sha2.c user/lib/crypto/aead.c user/lib/crypto/bn.c user/lib/crypto/ecc.c user/lib/img/pngenc.c user/lib/img/inflate.c
-K_OBJS  := $(patsubst %.c,build/k/%.o,$(K_SRCS)) build/k/boot.o build/k/isr.o build/k/apps.o
+K_OBJS  := $(patsubst %.c,build/k/%.o,$(K_SRCS)) build/k/boot.o build/k/isr.o build/k/apps.o build/k/ap_blob.o
 U_LIB   := build/u/crt0.o build/u/libdunc.o build/u/malloc.o build/u/gfx.o build/u/str.o build/u/inet.o build/u/json.o
 CRYPTO  := sha2 aead x25519 bn rsa ecc x509 tls
 NETLIB  := build/u/libnet.a
@@ -43,6 +43,11 @@ build/k/boot.o: src/boot.asm
 	@mkdir -p $(dir $@)
 	$(NASM) -f elf64 $< -o $@
 build/k/isr.o: src/isr.asm
+	$(NASM) -f elf64 $< -o $@
+build/k/ap_tramp.bin: src/ap_tramp.asm
+	@mkdir -p $(dir $@)
+	$(NASM) -f bin $< -o $@
+build/k/ap_blob.o: src/ap_blob.asm build/k/ap_tramp.bin
 	$(NASM) -f elf64 $< -o $@
 build/k/apps.o: src/apps.asm $(U_ELFS)
 	$(NASM) -f elf64 $< -o $@
@@ -163,9 +168,9 @@ clean:
 
 test:
 	@mkdir -p build/test
-	gcc -std=gnu17 -O1 -w -fno-builtin -DBT_TEST -o build/test/test_bt tests/test_bt.c src/bt.c common/str.c && build/test/test_bt | tail -8
+	gcc -std=gnu17 -O1 -w -fno-builtin -DBT_TEST -DHOST_TEST -o build/test/test_bt tests/test_bt.c src/bt.c common/str.c && build/test/test_bt | tail -8
 	@if command -v ffmpeg >/dev/null && python3 -c 'import numpy' 2>/dev/null; then python3 tests/mp3/run.py --quick > build/test/mp3.log 2>&1; r=$$?; tail -3 build/test/mp3.log; [ $$r = 0 ] || exit 1; else echo 'mp3: skipped (needs ffmpeg and numpy)'; fi
-	gcc -std=gnu17 -O1 -w -fno-builtin -Isrc -o build/test/test_fat tests/test_fat.c src/fat.c common/str.c
+	gcc -std=gnu17 -O1 -w -fno-builtin -DHOST_TEST -Isrc -o build/test/test_fat tests/test_fat.c src/fat.c common/str.c
 	rm -f build/test/fat.img && truncate -s 64M build/test/fat.img && mkfs.fat -F 32 -n DUNCTEST build/test/fat.img >/dev/null
 	printf 'written by mtools on Linux\n' > build/test/hello.txt && MTOOLS_SKIP_CHECK=1 mcopy -i build/test/fat.img build/test/hello.txt "::/Hello From Linux.txt"
 	build/test/test_fat build/test/fat.img

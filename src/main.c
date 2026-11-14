@@ -78,11 +78,14 @@ static void log_thread(void *arg) {
 }
 
 /* Watches for USB devices being plugged in or removed. */
+static void settle_thread(void *arg) { task_sleep(20000); smp_settled(); task_exit(0); }
+
 static void usb_thread(void *arg) {
     for (;;) { xhci_service(); task_sleep(100); }
 }
 
 void kmain(uint32_t magic, uint64_t mbi) {
+    gdt_init();                                          /* first: %gs points at this core's data */
     serial_init();
     if (magic != 0x36D76289) {
         kprintf("AXIOM must be started by a Multiboot2 loader (GRUB).\n");
@@ -91,7 +94,6 @@ void kmain(uint32_t magic, uint64_t mbi) {
     parse_multiboot(mbi);
     mem_init();
     vm_init();
-    gdt_init();
     idt_init();
     console_init();
     bool gui = desktop_available();
@@ -138,10 +140,12 @@ void kmain(uint32_t magic, uint64_t mbi) {
     desktop_init();
     boot_progress(92);
     sched_init();
+    smp_init();
     task_create_kernel("Desktop", desktop_thread, 0);
     task_create_kernel("USB", usb_thread, 0);
     task_create_kernel("Network", net_thread, 0);
     task_create_kernel("Log", log_thread, 0);
+    task_create_kernel("Start-up check", settle_thread, 0);
     boot_progress(100);
     sleep_ms(400);
     LOG_OK("Starting desktop\n");

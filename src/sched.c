@@ -6,7 +6,6 @@
 void kfree(void *p);
 
 struct task tasks[MAX_TASKS];
-struct task *current;
 volatile uint64_t sched_ticks;
 bool sched_running;
 static struct task *idle_task;
@@ -104,8 +103,32 @@ int task_spawn_arg(const char *app, const char *arg) {
     return t->pid;
 }
 
+/* A core with nothing to do: let go of the kernel lock and sleep until the next interrupt. */
 static void idle(void *arg) {
-    for (;;) { __asm__ volatile("sti; hlt; cli"); schedule(); }
+    for (;;) {
+        __asm__ volatile("cli");
+        bkl_unlock();
+        __asm__ volatile("sti; hlt; cli");
+        bkl_lock();
+        schedule();
+    }
+}
+struct task *sched_make_idle(const char *name) {
+    struct task *t = task_create_kernel(name, idle, 0);
+    if (t) t->idle = true;
+    return t;
+}
+
+/* another core joins (smp.c): it runs its idle task, which takes work from the shared task list */
+void sched_ap_enter(struct cpu *c) {
+    static uint64_t dummy;
+    bkl_lock();
+    c->last_switch_tsc = rdtsc();
+    current = c->idle;
+    current->state = PS_RUNNING;
+    tss_set_rsp0(current->kstack_top);
+    switch_to(&dummy, current->rsp);
+    for (;;) __asm__ volatile("hlt");
 }
 
 /* Apps may use floating point (SSE): the kernel itself never does (-mgeneral-regs-only), so the registers
@@ -124,13 +147,15 @@ static void fpu_init(void) {
 
 void sched_init(void) {
     fpu_init();
-    idle_task = task_create_kernel("Idle (unused time)", idle, 0);
+    idle_task = sched_make_idle("Idle (unused time)");
+    cpus[0].idle = idle_task;
 }
 
 void sched_start(void) {
     static uint64_t boot_rsp;
-    sched_running = true;
+    bkl_lock();
     lapic_timer_start(250);
+    sched_running = true;
     current = idle_task;
     current->state = PS_RUNNING;
     tss_set_rsp0(current->kstack_top);
@@ -138,11 +163,11 @@ void sched_start(void) {
     for (;;) __asm__ volatile("hlt");
 }
 
-static uint64_t last_switch_tsc;
 static void account(void) {
+    struct cpu *c = cpu_self();
     uint64_t now = rdtsc();
-    if (last_switch_tsc && current) current->ticks += (now - last_switch_tsc) / (tsc_hz() / 1000000);
-    last_switch_tsc = now;
+    if (c->last_switch_tsc && c->cur) c->cur->ticks += (now - c->last_switch_tsc) / (tsc_hz() / 1000000);
+    c->last_switch_tsc = now;
 }
 uint64_t cpu_time_us(void) { account(); return uptime_us(); }
 
@@ -151,8 +176,9 @@ static bool stall_reported;
 
 void schedule(void) {
     __asm__ volatile("cli");
+    struct cpu *me = cpu_self();
     uint64_t now = uptime_ms();
-    last_sched_ms = now; stall_reported = false;
+    if (me->id == 0) { last_sched_ms = now; stall_reported = false; }
     for (int i = 0; i < MAX_TASKS; i++) {
         struct task *t = &tasks[i];
         if ((t->state == PS_SLEEPING || t->state == PS_BLOCKED) && t->wake_at && now >= t->wake_at) {
@@ -163,16 +189,18 @@ void schedule(void) {
     struct task *next = 0;
     for (int i = 1; i <= MAX_TASKS; i++) {
         struct task *t = &tasks[(cur + i) % MAX_TASKS];
-        if (t != idle_task && (t->state == PS_READY || (t == current && t->state == PS_RUNNING))) { next = t; break; }
+        if (t->idle || (me->id && !t->user)) continue;      /* kernel threads stay on core 0 */
+        if (t->state == PS_READY || (t == current && t->state == PS_RUNNING)) { next = t; break; }
     }
-    if (!next) next = idle_task;
+    if (!next) next = me->idle;
+    account();
     if (next == current) { current->state = PS_RUNNING; if (!current->user) __asm__ volatile("sti"); return; }
     struct task *prev = current;
     if (prev->user && prev->state != PS_ZOMBIE) __asm__ volatile("fxsave64 %0" : "=m"(prev->fx) :: "memory");
     if (next->user) __asm__ volatile("fxrstor64 %0" :: "m"(next->fx) : "memory");
-    account();
     if (prev->state == PS_RUNNING) prev->state = PS_READY;
     next->state = PS_RUNNING;
+    next->cpu = me->id;
     current = next;
     tss_set_rsp0(next->kstack_top);
     if (read_cr3() != (uint64_t)next->pml4) write_cr3((uint64_t)next->pml4);
@@ -181,7 +209,21 @@ void schedule(void) {
 }
 
 void task_yield(void) { schedule(); }
-void kyield(void) { if (sched_running) schedule(); else cpu_relax(); }
+/* Waiting inside the kernel for something (often for a kernel thread, e.g. network data). On core 0
+ * that means letting the other tasks run. On another core the kernel threads can't run here, so it lets
+ * go of the kernel lock for a moment and wakes core 0, which runs them. */
+void kyield(void) {
+    if (!sched_running) { cpu_relax(); return; }
+    if (cpu_self()->id != 0) {
+        bkl_unlock();
+        if (cpus[0].cur && cpus[0].cur->idle) lapic_ipi(cpus[0].apic_id, 0xF0);   /* wake it if it sleeps */
+        __asm__ volatile("sti");
+        for (int i = 0; i < 300; i++) cpu_relax();
+        __asm__ volatile("cli");
+        bkl_lock();
+    }
+    schedule();
+}
 
 void task_sleep(uint64_t ms) {
     if (!sched_running) { sleep_ms(ms); return; }
@@ -206,7 +248,7 @@ bool task_kill(int pid) {
         if (!t->state || t->state == PS_ZOMBIE || t->pid != pid) continue;
         if (!t->user) return false;            /* kernel threads can't be killed */
         if (t == current) task_exit(-1);
-        if (t->busy) { t->killed = true; return true; }
+        if (t->busy || t->state == PS_RUNNING) { t->killed = true; return true; }   /* running on another core: it stops at its next tick */
         kprintf("[sched] killed '%s' (pid %d)\n", t->name, t->pid);
         wm_task_exit(t);
         net_task_exit(t);
@@ -256,9 +298,10 @@ static void report_stall(struct frame *f) {
 }
 
 void sched_tick(struct frame *f) {
-    sched_ticks++;
+    bool core0 = cpu_self()->id == 0;
+    if (core0) sched_ticks++;
     lapic_eoi();
-    if ((f->cs & 3) == 0 && last_sched_ms && !stall_reported && uptime_ms() - last_sched_ms > 5000) { stall_reported = true; report_stall(f); }
+    if (core0 && (f->cs & 3) == 0 && last_sched_ms && !stall_reported && uptime_ms() - last_sched_ms > 5000) { stall_reported = true; report_stall(f); }
     if ((f->cs & 3) == 3) {
         schedule();
         if (current->killed) task_exit(-1);

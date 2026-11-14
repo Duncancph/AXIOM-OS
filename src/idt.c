@@ -10,6 +10,7 @@ static const char *names[] = {"Divide error","Debug","NMI","Breakpoint","Overflo
     "Device not available","Double fault","Coprocessor","Invalid TSS","Segment not present","Stack fault",
     "General protection fault","Page fault","Reserved","x87 FP error","Alignment check","Machine check","SIMD FP error"};
 
+static void kernel_panic(struct frame *f);
 static void user_fault(struct frame *f) {
     uint64_t cr2; __asm__ volatile("mov %%cr2,%0" : "=r"(cr2));
     char msg[160];
@@ -33,7 +34,7 @@ static void user_fault(struct frame *f) {
     task_exit(-1);
 }
 
-void isr_dispatch(struct frame *f) {
+static void dispatch(struct frame *f) {
     uint64_t v = f->vec;
     if (v == 32) { sched_tick(f); return; }
     if (v == 0x80) {
@@ -41,8 +42,24 @@ void isr_dispatch(struct frame *f) {
         if (current->killed) task_exit(-1);
         return;
     }
+    if (v == 0xF0) { lapic_eoi(); return; }    /* another core woke this one */
     if (v >= 32) return;                       /* spurious / stray legacy IRQs */
     if ((f->cs & 3) == 3) { user_fault(f); return; }
+    kernel_panic(f);
+}
+
+/* Every way into the kernel: take the kernel lock unless this core already holds it (it was in the
+ * kernel); give it back on the way out. The task may come back on another core: whichever core it is,
+ * it holds the lock while in the kernel, and returning to the app is where it lets go. */
+void isr_dispatch(struct frame *f) {
+    bool took = !cpu_self()->bkl_held;
+    if (took) bkl_lock();
+    dispatch(f);
+    if (took) bkl_unlock();
+}
+
+static void kernel_panic(struct frame *f) {
+    uint64_t v = f->vec;
 
     uint64_t cr2; __asm__ volatile("mov %%cr2,%0" : "=r"(cr2));
     console_set_color(C_LRED);
@@ -59,6 +76,11 @@ void isr_dispatch(struct frame *f) {
     const char *l[4] = { a, b, c, "Please photograph this for Claude. Press the power button to restart." };
     desktop_emergency(l, 4);
     for (;;) __asm__ volatile("cli; hlt");
+}
+
+void idt_load(void) {
+    struct { uint16_t lim; uint64_t base; } __attribute__((packed)) p = { sizeof idt - 1, (uint64_t)idt };
+    __asm__ volatile("lidt %0" ::"m"(p));
 }
 
 void idt_init(void) {

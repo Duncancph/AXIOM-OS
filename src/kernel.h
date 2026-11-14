@@ -181,7 +181,12 @@ void shell_execute(char *line);
 /* ---- cpu.c ---- */
 void gdt_init(void);
 void tss_set_rsp0(uint64_t rsp);
+void idt_load(void);
+void lapic_ap_init(void);
+uint32_t lapic_id(void);
+void lapic_ipi(uint32_t apic_id, uint32_t icr_low);
 void lapic_timer_start(uint32_t hz);
+void lapic_init(uint32_t hz);
 void lapic_eoi(void);
 void fb_write_combining(uint64_t addr, uint64_t size);
 
@@ -200,7 +205,7 @@ void vm_unmap(uint64_t *pml4, uint64_t va, uint64_t pages);
 long elf_load(uint64_t *pml4, const uint8_t *img, uint64_t size, uint64_t *entry);
 
 /* ---- sched.c ---- */
-#define MAX_TASKS 32
+#define MAX_TASKS 48
 #define EVQ_SIZE 64
 struct task {
     int pid, state;            /* state: 0 = free slot, else PS_* */
@@ -219,13 +224,43 @@ struct task {
     char *capture; size_t cap_len, cap_max;
     char arg[256];             /* start-up argument (e.g. a file to open) */
     char appid[24];
+    bool idle;                 /* a core's idle task */
+    int cpu;                   /* the core it last ran on */
 };
 struct frame {
     uint64_t r15, r14, r13, r12, r11, r10, r9, r8, rbp, rdi, rsi, rdx, rcx, rbx, rax;
     uint64_t vec, err, rip, cs, rflags, rsp, ss;
 };
 extern struct task tasks[MAX_TASKS];
+/* ---- cores (smp.c) ----
+ * One core runs kernel code at a time (the "big kernel lock", taken on every way into the kernel and
+ * dropped on the way back to an app); apps run on every core at once. Kernel threads stay on core 0. */
+#define MAX_CPUS 16
+struct tss64 { uint32_t r0; uint64_t rsp0, rsp1, rsp2, r1; uint64_t ist[7]; uint64_t r2; uint16_t r3, iomap; } __attribute__((packed));
+struct cpu {
+    struct cpu *self;                  /* %gs:0 */
+    struct task *cur;                  /* %gs:8 */
+    struct task *idle;
+    int id; uint32_t apic_id;
+    volatile bool bkl_held, started;
+    uint64_t last_switch_tsc;
+    uint64_t gdt[7] __attribute__((aligned(16)));
+    struct tss64 tss;
+    uint8_t *df_stack;
+};
+extern struct cpu cpus[MAX_CPUS];
+extern int ncpus_on, ncpus_found;
+static inline struct cpu *cpu_self(void) { struct cpu *c; __asm__ volatile("mov %%gs:0, %0" : "=r"(c)); return c; }
+#ifdef HOST_TEST
 extern struct task *current;
+#else
+#define current (cpu_self()->cur)
+#endif
+void bkl_lock(void);
+void bkl_unlock(void);
+void smp_init(void);
+void smp_settled(void);                /* start-up went fine: forget the safety marker */                   /* find the cores; start them if the setting says so */
+void cpu_setup(struct cpu *c);         /* GDT, TSS and %gs for a core */
 extern volatile uint64_t sched_ticks;
 extern bool sched_running;
 void sched_init(void);

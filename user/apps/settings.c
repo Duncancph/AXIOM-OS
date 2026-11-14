@@ -19,9 +19,9 @@ enum { H_SECT = 0, H_LIST = 100, H_TOGGLE = 300, H_BTN = 400, H_FIELD = 500, H_D
 
 static char sv[16][112];                       /* cached setting values */
 static const char *keys[16] = { "keyboard.layout", "time.zone", "time.rtc_local", "time.24h", "display.mode", "display.current",
-                                "sound.volume", "lock.password", "lock.idle_min", "screen.off_min", "mouse.speed", "mouse.natural", "mouse.left" };
-static const char *get(const char *k) { for (int i = 0; i < 13; i++) if (!strcmp(keys[i], k)) return sv[i]; return ""; }
-static void reload(void) { for (int i = 0; i < 13; i++) sys_setting_get(keys[i], sv[i], sizeof sv[i]); }
+                                "sound.volume", "lock.password", "lock.idle_min", "screen.off_min", "mouse.speed", "mouse.natural", "mouse.left", "system.cores" };
+static const char *get(const char *k) { for (int i = 0; i < 14; i++) if (!strcmp(keys[i], k)) return sv[i]; return ""; }
+static void reload(void) { for (int i = 0; i < 14; i++) sys_setting_get(keys[i], sv[i], sizeof sv[i]); }
 static void set(const char *k, const char *v) { sys_setting_set(k, v); reload(); }
 
 /* "id=Name;id=Name" lists from the kernel */
@@ -481,13 +481,23 @@ static void draw_about(void) {
     ksnprintf(b, sizeof b, "Processor: %s", s.cpu); label(SIDE + 32, y, UI_TEXT, b); y += 26;
     ksnprintf(b, sizeof b, "Memory: %lu MB, %lu MB in use", s.mem_total >> 20, s.mem_used >> 20); label(SIDE + 32, y, UI_TEXT, b); y += 26;
     ksnprintf(b, sizeof b, "Display: %s", get("display.current")); label(SIDE + 32, y, UI_TEXT, b); y += 26;
-    ksnprintf(b, sizeof b, "Up for %lu minutes", s.uptime_ms / 60000); label(SIDE + 32, y, UI_TEXT, b); y += 40;
+    ksnprintf(b, sizeof b, "Up for %lu minutes", s.uptime_ms / 60000); label(SIDE + 32, y, UI_TEXT, b); y += 34;
+    /* processor cores */
+    bool all = !strcmp(get("system.cores"), "all");
+    ui_card(&a.c, SIDE + 32, y, WW - SIDE - 64, 92);
+    gfx_text(&a.c, &font_ui_bold, SIDE + 48, y + 26, UI_TEXT, "Use all processor cores");
+    ksnprintf(b, sizeof b, "This computer has %d core%s; AXIOM is using %d.%s", s.ncpus_found, s.ncpus_found == 1 ? "" : "s", s.ncpus_on,
+              (all && s.ncpus_on < s.ncpus_found) || (!all && s.ncpus_on > 1) ? " Restart to apply." : "");
+    label(SIDE + 48, y + 46, UI_MUTED, b);
+    label(SIDE + 48, y + 64, UI_MUTED, "Apps run side by side on all of them. New: turn off if anything misbehaves.");
+    toggle(WW - 32 - 64, y + 30, "", all, H_TOGGLE + 40);
+    y += 106;
     label(SIDE + 32, y, UI_MUTED, "Fonts: GNU Unifont (GPLv2+ with font exception), Inter (SIL OFL 1.1)."); y += 22;
-    label(SIDE + 32, y, UI_MUTED, "Trusted certificate authorities: Mozilla CA list (MPL 2.0)."); y += 40;
+    label(SIDE + 32, y, UI_MUTED, "Trusted certificate authorities: Mozilla CA list (MPL 2.0)."); y += 34;
     ui_card(&a.c, SIDE + 32, y, WW - SIDE - 64, 92);
     gfx_text(&a.c, &font_ui_bold, SIDE + 48, y + 26, UI_TEXT, "App protection test");
-    label(SIDE + 48, y + 46, UI_MUTED, "Opens an app that misbehaves on purpose, to show AXIOM stopping it");
-    label(SIDE + 48, y + 64, UI_MUTED, "without affecting anything else. Each button there crashes it.");
+    label(SIDE + 48, y + 46, UI_MUTED, "Opens an app that misbehaves on purpose, to show");
+    label(SIDE + 48, y + 64, UI_MUTED, "AXIOM stopping it without affecting anything else.");
     button(WW - 32 - 150, y + 14, 134, "Run the test", BTN_NORMAL, H_BTN + 40, false);
 }
 
@@ -593,6 +603,7 @@ static void click(int id, int mx) {
     if (id == H_BTN + 4) sys_power(0);
     if (id >= H_DISK && id < H_DISK + 16) { confirm_disk = (id - H_DISK) / 2; confirm_mode = (id - H_DISK) % 2 ? INSTALL_UPDATE : INSTALL_ERASE; }
     if (id == H_BTN + 40) sys_spawn("sandbox");
+    if (id == H_TOGGLE + 40) set("system.cores", !strcmp(get("system.cores"), "all") ? "one" : "all");
     if (id == H_BTN + 50) {
         int k = 0; char nm[41];                                   /* letters, digits, - and _ only, lower case */
         for (int i = 0; fields[3].s[i] && k < 32; i++) { char c = fields[3].s[i]; if (c >= 'A' && c <= 'Z') c += 32; if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_') nm[k++] = c; }
