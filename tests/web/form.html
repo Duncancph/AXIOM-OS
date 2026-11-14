@@ -1,0 +1,25 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Forms test</title><link rel="stylesheet" href="style.css">
+<style> label { display: inline-block; width: 120px; } .field { margin: 6px 0; } fieldset { margin: 14px 0; } </style></head>
+<body><div class="container">
+<h1>Forms</h1>
+<form action="/echo" method="get">
+<div class="field"><input type="search" name="q" value="café crème" size="30"> <input type="submit" value="Search"></div>
+</form>
+<form action="/echo" method="post">
+<fieldset><legend>Sign up (POST)</legend>
+<div class="field"><label>Name</label><input type="text" name="name" value="Ada Lovelace"></div>
+<div class="field"><label>Email</label><input type="email" name="email" placeholder="you@example.com"></div>
+<div class="field"><label>Password</label><input type="password" name="pw" value="secret"></div>
+<div class="field"><label>Age</label><input type="number" name="age" value="36" size="5"></div>
+<div class="field"><label>Website</label><input type="url" name="site" value="https://example.com/?a=1&b=2"></div>
+<div class="field"><label>Country</label><select name="country"><option value="uk">United Kingdom</option><option value="fr" selected>France</option><option value="de">Deutschland</option><option>Österreich</option></select></div>
+<div class="field"><label>Newsletter</label><input type="checkbox" name="news" checked> weekly <input type="checkbox" name="offers" value="yes"> offers</div>
+<div class="field"><label>Plan</label><input type="radio" name="plan" value="free" checked> Free <input type="radio" name="plan" value="pro"> Pro</div>
+<div class="field"><label>Comments</label><textarea name="comments" rows="3" cols="40">Hello!
+Second line with € and ü.</textarea></div>
+<input type="hidden" name="token" value="abc 123">
+<button type="submit" name="action" value="go">Send the form</button> <input type="reset" value="Reset">
+</fieldset>
+</form>
+</div></body></html>

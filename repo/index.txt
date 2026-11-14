@@ -1,4 +1,4 @@
 # clan repository: id|Name|version|icon|description
 editor|Editor|0.4|code|A text editor with line numbers
 clock|Clock|1.0|clock|An analog and digital clock
-web|Web|0.2|globe|A simple web browser for http:// and https:// sites
+web|Web|0.3|globe|A web browser with styles, pictures, forms and cookies, for http:// and https:// sites

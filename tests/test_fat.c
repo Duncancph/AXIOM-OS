@@ -11,6 +11,8 @@ struct task *current;
 void *kmalloc(size_t n) { return calloc(1, n ? n : 1); }
 void kfree(void *p) { free(p); }
 void rtc_read(struct rtc_time *t) { t->year = 2026; t->mon = 11; t->day = 14; t->hour = 9; t->min = 41; t->sec = 30; }
+void rtc_read_local(struct rtc_time *t) { rtc_read(t); }
+void random_bytes(void *out, size_t n) { for (size_t i = 0; i < n; i++) ((unsigned char *)out)[i] = (unsigned char)rand(); }
 void kprintf(const char *f, ...) { va_list a; va_start(a, f); vprintf(f, a); va_end(a); }
 
 static FILE *img; static long reads, writes;

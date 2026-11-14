@@ -1,0 +1,24 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Images test</title><link rel="stylesheet" href="style.css">
+<style>
+  .frame { border: 1px solid #A0AEC0; padding: 4px; background: #fff; }
+  .row img { vertical-align: middle; margin-right: 8px; }
+  img.fluid { max-width: 100%; height: auto; }
+  .checker { background: #CBD5E0; padding: 10px; }
+  .banner { background: #1B2945 url(shapes.gif) repeat-x; color: #fff; height: 60px; padding: 0 12px; margin: 12px 0; }
+  .banner b { background: #1B2945; padding: 2px 6px; }
+</style></head>
+<body><div class="container">
+<h1>Images</h1>
+<p>A JPEG photo, 1600&times;1000, scaled down to fit (max-width: 100%):</p>
+<p><img class="fluid" src="photo.jpg" alt="A landscape"></p>
+<p class="row">Inline in text: <img src="icon.bmp" width="32" height="32" alt="BMP icon"> a BMP, <img src="shapes.gif" alt="GIF shapes"> a GIF, and
+<img src="gray.png" width="128" height="20" alt="gray gradient"> a grey PNG.</p>
+<div class="checker">PNG with transparency on a grey background: <img src="logo.png" alt="logo"></div>
+<p>Width given only (height follows the picture): <img src="progressive.jpg" width="200" alt="progressive JPEG"> (a progressive JPEG).</p>
+<p>A linked image (click to open it on its own): <a href="logo.png"><img class="frame" src="logo.png" width="110" height="40" alt="small logo"></a></p>
+<p>Missing images show their alt text: <img src="nope.png" alt="This picture is missing"> and with a size:
+<img src="nope2.jpg" width="160" height="60" alt="Sized but missing"></p>
+<div class="banner"><b>A CSS background picture, repeated across (background: url(shapes.gif) repeat-x)</b></div>
+<p>A data: URI: <img src="data:image/gif;base64,R0lGODlhCgAKAPAAAP8AAAAAACH5BAAAAAAALAAAAAAKAAoAAAIIhI+py+0PYysAOw==" width="20" height="20" alt="red square"></p>
+</div></body></html>

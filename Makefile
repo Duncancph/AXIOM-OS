@@ -15,6 +15,11 @@ K_OBJS  := $(patsubst %.c,build/k/%.o,$(K_SRCS)) build/k/boot.o build/k/isr.o bu
 U_LIB   := build/u/crt0.o build/u/libdunc.o build/u/malloc.o build/u/gfx.o build/u/str.o build/u/inet.o
 CRYPTO  := sha2 aead x25519 bn rsa ecc x509 tls
 NETLIB  := build/u/libnet.a
+IMGLIB  := build/u/libimg.a
+IMGCODECS := img png jpeg gif bmp inflate pngenc
+WEB_SRCS := $(wildcard user/apps/web/*.c)
+WEB_OBJS := $(patsubst user/apps/web/%.c,build/u/web_%.o,$(WEB_SRCS))
+WEB_ENGINE := user/apps/web/html.c user/apps/web/css.c user/apps/web/layout.c
 U_ELFS  := $(patsubst %,build/user/%.elf,$(APPS))
 HDRS    := $(wildcard src/*.h common/*.h user/lib/*.h)
 
@@ -41,7 +46,7 @@ build/u/libdunc.o: user/lib/libdunc.c $(HDRS)
 build/u/malloc.o: user/lib/malloc.c $(HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(UCFLAGS) -c $< -o $@
-build/u/http.o: user/lib/http.c $(HDRS) $(wildcard user/lib/crypto/*.h)
+build/u/http.o: user/lib/http.c $(HDRS) $(wildcard user/lib/crypto/*.h) user/lib/img/img.h
 	@mkdir -p $(dir $@)
 	$(CC) $(UCFLAGS) -c $< -o $@
 build/u/c_%.o: user/lib/crypto/%.c $(wildcard user/lib/crypto/*.h)
@@ -49,15 +54,28 @@ build/u/c_%.o: user/lib/crypto/%.c $(wildcard user/lib/crypto/*.h)
 	$(CC) $(UCFLAGS) -c $< -o $@
 $(NETLIB): build/u/http.o $(patsubst %,build/u/c_%.o,$(CRYPTO))
 	rm -f $@ && ar rcs $@ $^
+build/u/i_%.o: user/lib/img/%.c $(wildcard user/lib/img/*.h) common/str.h
+	@mkdir -p $(dir $@)
+	$(CC) $(UCFLAGS) -c $< -o $@
+$(IMGLIB): $(patsubst %,build/u/i_%.o,$(IMGCODECS))
+	rm -f $@ && ar rcs $@ $^
+build/u/web_%.o: user/apps/web/%.c user/apps/web/web.h common/webfont_data.h $(HDRS) user/lib/img/img.h
+	@mkdir -p $(dir $@)
+	$(CC) $(UCFLAGS) -c $< -o $@
 build/u/%.o: common/%.c $(HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(UCFLAGS) -c $< -o $@
 build/u/app_%.o: user/apps/%.c $(HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(UCFLAGS) -c $< -o $@
-build/user/%.elf: build/u/app_%.o $(U_LIB) $(NETLIB) user/user.ld
+build/user/%.elf: build/u/app_%.o $(U_LIB) $(NETLIB) $(IMGLIB) user/user.ld
 	@mkdir -p $(dir $@)
-	$(LD) -n -T user/user.ld -nostdlib -z max-page-size=0x1000 -z noexecstack --no-warn-rwx-segments -o $@ $(U_LIB) $< $(NETLIB) $(LIBGCC)
+	$(LD) -n -T user/user.ld -nostdlib -z max-page-size=0x1000 -z noexecstack --no-warn-rwx-segments -o $@ $(U_LIB) $< $(NETLIB) $(IMGLIB) $(LIBGCC)
+# Web is built from several files (user/apps/web.c and user/apps/web/*.c)
+build/user/web.elf: build/u/app_web.o $(WEB_OBJS) $(U_LIB) $(NETLIB) $(IMGLIB) user/user.ld
+	@mkdir -p $(dir $@)
+	$(LD) -n -T user/user.ld -nostdlib -z max-page-size=0x1000 -z noexecstack --no-warn-rwx-segments -o $@ $(U_LIB) $< $(WEB_OBJS) $(NETLIB) $(IMGLIB) $(LIBGCC)
+build/u/app_web.o: user/apps/web/web.h
 
 build/thane.elf: $(K_OBJS) src/linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(K_OBJS)
@@ -120,3 +138,7 @@ test:
 	build/test/test_roots $(CA_BUNDLE) | tail -3
 	gcc -std=gnu17 -O2 -w -D_GNU_SOURCE -fno-builtin -o build/test/test_tls tests/test_tls.c $(addprefix user/lib/crypto/,tls.c x509.c sha2.c aead.c x25519.c bn.c rsa.c ecc.c) common/str.c common/inet.c
 	tests/tls/matrix.sh build/test/test_tls build/test/tls
+	gcc -std=gnu17 -O1 -g -w -fno-builtin -fsanitize=address,undefined -o build/test/test_web tests/test_web.c $(WEB_ENGINE) common/str.c
+	build/test/test_web tests/web/*.html | tail -4
+	gcc -std=gnu17 -O2 -w -fno-builtin -mgeneral-regs-only -o build/test/test_web_stack tests/test_web.c $(WEB_ENGINE) common/str.c
+	sh -c 'ulimit -s 160 && build/test/test_web_stack tests/web/*.html' | tail -1
