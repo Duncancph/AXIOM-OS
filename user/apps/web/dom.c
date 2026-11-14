@@ -34,9 +34,24 @@ static uint64_t h_now(void *c) { struct rtc_time t; sys_rtc(&t);
     if (t.mon > 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0)) days++;
     return (uint64_t)((days * 86400 + t.hour * 3600 + t.min * 60 + t.sec) * 1000 + sys_time() % 1000); }
 static uint64_t h_mono(void *c) { return sys_time(); }
-static uint64_t run_start;
+static uint64_t run_start, page_deadline, last_look;
+static bool skip_said;
+static void scripts_off(const char *why) { con_add("[stopped] ", why); page_on = false; }
+/* Called often while a script runs: stops scripts that run too long, and keeps the window answering
+ * (the close button quits, Esc stops the page's scripts). */
 static _Bool h_interrupt(void *c) {
-    if (sys_time() - run_start > 8000) { con_add("[stopped] ", "a script ran for more than 8 seconds"); return true; }
+    uint64_t now = sys_time();
+    if (!page_on) return true;
+    if (now - run_start > 4000) { scripts_off("a script ran for more than 4 seconds; this page's scripts were turned off"); return true; }
+    if (now - last_look > 100) {
+        last_look = now;
+        struct dunc_event e;
+        while (sys_event(&e, 0) > 0) {
+            if (e.type == EV_CLOSE) sys_exit(0);
+            if (e.type == EV_KEY && e.key == 27) { scripts_off("stopped with Esc"); return true; }
+            if (e.type == EV_RESIZE) web_requeue_event(&e);
+        }
+    }
     return false;
 }
 static void h_console(void *c, int level, const char *s) {
@@ -618,11 +633,16 @@ static void run_script_node(struct node *s) {
     if (node_attr(s, "data-axiom-ran")) return;
     set_attr(s, "data-axiom-ran", "1", 1);
     const char *src = node_attr(s, "src");
+    if (sys_time() > page_deadline) {
+        if (!skip_said) { skip_said = true; con_add("[skipped] ", "the page's scripts took too long (over 15 seconds); the rest were skipped"); }
+        return;
+    }
     if (src && src[0]) {
         char u[600]; resolve_url(D->base, src, u, sizeof u);
         char *t = 0, ct[96], fin[600]; int st = 0;           /* scripts are run as sent (UTF-8), not converted like page text */
         long n = web_http("GET", u, 0, 0, 0, &t, &st, ct, sizeof ct, fin, sizeof fin);
-        if (n >= 0 && t && st < 400) { run_code(t, n, u); free(t); }
+        if (n > 1500000) { char m[700]; ksnprintf(m, sizeof m, "%s is too big to run here (%ld KB)", u, n / 1024); con_add("[skipped] ", m); free(t); }
+        else if (n >= 0 && t && st < 400) { run_code(t, n, u); free(t); }
         else { char m[700]; ksnprintf(m, sizeof m, "couldn't load %s", u); con_add("[error] ", m); }
         return;
     }
@@ -695,6 +715,7 @@ void js_page_start(struct doc *d) {
     }
     js_define(rt, g, "__d", dd, false);
     js_unroot(rt, &dd);
+    page_deadline = sys_time() + 15000; skip_said = false;
     run_code(dom_prelude, sizeof dom_prelude - 1, "web prelude");
     call_api("start", 0, 0);
     for (int i = 0; i < ns && page_on; i++) run_script_node(list[i]);
