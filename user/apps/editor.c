@@ -1,4 +1,4 @@
-/* Editor 0.3 - a text editor for DuncOS (installed with: clan install editor). */
+/* Editor 0.4 - a text editor for DuncOS (installed with: clan install editor). */
 #include "../lib/dunc.h"
 
 static int WW = 720, WH = 500;
@@ -9,6 +9,8 @@ static int WW = 720, WH = 500;
 
 static struct app a;
 static char text[MAXTEXT]; static int len, cur, scroll_line, want_col = -1;
+static int sel = -1;                 /* selection anchor (-1: none); the selection is between sel and cur */
+static bool dragging, as_utf8 = true;   /* save as UTF-8 (new files, and files that were UTF-8) */
 static char path[256]; static bool modified;
 static int dialog;   /* 1 save-as, 2 unsaved changes on close */
 static char input[200]; static int ilen;
@@ -40,12 +42,23 @@ static void load_file(void) {
     if (n == FS_ENOENT) { len = 0; flash("New file - it will be created when you save."); return; }
     if (n < 0) { flash(fs_strerror((int)n)); len = 0; return; }
     len = (int)n;
+    bool high = false; for (int i = 0; i < len; i++) if ((unsigned char)text[i] >= 0x80) high = true;
+    long conv = utf8_to_cp1252(text, len);
+    as_utf8 = !high || conv != len;                            /* plain ASCII or UTF-8: keep UTF-8; else it was Windows-1252 */
+    len = (int)conv;
     for (int i = 0; i < len; i++) if (text[i] == '\r') { memmove(text + i, text + i + 1, len - i - 1); len--; i--; }
 }
 
 static bool save(void) {
     if (!path[0]) { dialog = 1; strncpy0(input, "~/Documents/untitled.txt", sizeof input); ilen = strlen(input); return false; }
-    long r = fs_write(path, text, len);
+    long r;
+    if (as_utf8) {
+        char *u = malloc(len * 3 + 1);
+        if (!u) { flash("Not enough memory to save."); return false; }
+        long ul = cp1252_to_utf8(text, len, u, len * 3 + 1);
+        r = fs_write(path, u, ul);
+        free(u);
+    } else r = fs_write(path, text, len);
     if (r < 0) { flash(fs_strerror((int)r)); return false; }
     modified = false;
     flash("Saved.");
@@ -72,6 +85,11 @@ static void draw(void) {
         char num[12]; ksnprintf(num, sizeof num, "%4d", ln + 1);
         gfx_mono_text(c, 6, y, num, ln == cl ? HL_GOLD : HL_TEXT_FAINT);
         int e = line_end(p), col = 0;
+        if (sel >= 0 && sel != cur) {                            /* selection background */
+            int s0 = sel < cur ? sel : cur, s1 = sel < cur ? cur : sel;
+            int a0 = s0 > p ? s0 : p, a1 = s1 < e + 1 ? s1 : e + 1;
+            if (a0 < a1) gfx_fill(c, GUTTER + 8 + (a0 - p) * 8, y, (a1 - a0) * 8, 16, 0x1E4A6E);
+        }
         for (int i = p; i < e && col < cols(); i++, col++) {
             char ch = text[i] == '\t' ? ' ' : text[i];
             gfx_mono(c, GUTTER + 8 + col * 8, y, ch, HL_TEXT);
@@ -87,7 +105,7 @@ static void draw(void) {
     gfx_fill(c, 0, WH - STATUS_H, WW, STATUS_H, gfx_mix(HL_WIN_BG, 0x000000, 30));
     char st[200];
     if (sys_time() < msg_until) strncpy0(st, msg, sizeof st);
-    else ksnprintf(st, sizeof st, "Line %d, Col %d  -  %s  -  Ctrl+S save", cl + 1, cur - line_start(cur) + 1, modified ? "modified" : "saved");
+    else ksnprintf(st, sizeof st, "Line %d, Col %d  -  %s  -  Ctrl+S save, Ctrl+C/X/V copy/cut/paste", cl + 1, cur - line_start(cur) + 1, modified ? "modified" : "saved");
     gfx_mono_text(c, 10, WH - STATUS_H + 5, st, sys_time() < msg_until ? HL_GOLD : HL_TEXT_FAINT);
     if (dialog) {
         gfx_blend(c, 0, 0, WW, WH, 0x000000, 90);
@@ -111,6 +129,35 @@ static void draw(void) {
         }
     }
     app_flush(&a);
+}
+
+static void insert(const char *s, int n);
+static bool del_selection(void) {
+    if (sel < 0 || sel == cur) { sel = -1; return false; }
+    int s0 = sel < cur ? sel : cur, s1 = sel < cur ? cur : sel;
+    memmove(text + s0, text + s1, len - s1);
+    len -= s1 - s0; cur = s0; sel = -1; modified = true;
+    return true;
+}
+static void copy_selection(void) {
+    if (sel < 0 || sel == cur) return;
+    int s0 = sel < cur ? sel : cur, s1 = sel < cur ? cur : sel;
+    char *u = malloc((s1 - s0) * 3 + 1);                       /* the clipboard holds UTF-8 */
+    if (!u) return;
+    long n = cp1252_to_utf8(text + s0, s1 - s0, u, (s1 - s0) * 3 + 1);
+    clip_set(u, n); free(u);
+}
+static void paste(void) {
+    long n = clip_get(0, 0);
+    if (n <= 0) return;
+    char *b = malloc(n);
+    if (!b) return;
+    n = clip_get(b, n);
+    n = utf8_to_cp1252(b, n);
+    long o = 0; for (long i = 0; i < n; i++) if (b[i] != '\r') b[o++] = b[i];
+    del_selection();
+    insert(b, (int)o);
+    free(b);
 }
 
 static void insert(const char *s, int n) {
@@ -180,20 +227,36 @@ int main(void) {
             continue;
         }
         if (e.type == EV_WHEEL) { scroll_line += e.key * 3; if (scroll_line > nlines() - 1) scroll_line = nlines() - 1; if (scroll_line < 0) scroll_line = 0; draw(); continue; }
-        if (e.type == EV_MOUSE_DOWN && e.button == 1 && e.y < WH - STATUS_H) {
+        if (e.type == EV_MOUSE_UP) { dragging = false; continue; }
+        if ((e.type == EV_MOUSE_DOWN && e.button == 1 && e.y < WH - STATUS_H) || (e.type == EV_MOUSE_MOVE && dragging)) {
+            if (e.type == EV_MOUSE_DOWN) dragging = true;
             int l = scroll_line + (e.y - TOP - 6) / 16;
+            if (l < 0) l = 0;
             if (l >= nlines()) l = nlines() - 1;
             int s = pos_of_line(l), en = line_end(s), col = (e.x - GUTTER - 8 + 4) / 8;
             if (col < 0) col = 0;
+            int was = cur;
             cur = s + col < en ? s + col : en;
+            if (e.type == EV_MOUSE_DOWN) sel = cur;               /* anchor; dragging extends from here */
             want_col = -1;
-            draw();
+            if (e.type == EV_MOUSE_DOWN || cur != was) { keep_visible(); draw(); }
             continue;
         }
         if (e.type != EV_KEY) continue;
         int k = e.key;
         bool vert = false;
-        if (k == 19) save();                                   /* Ctrl+S */
+        int code = KEY_CODE(k);
+        bool shift = k & KEYMOD_SHIFT, moving = code == KEY_LEFT || code == KEY_RIGHT || code == KEY_UP || code == KEY_DOWN ||
+                     code == KEY_PGUP || code == KEY_PGDN || code == KEY_HOME || code == KEY_END;
+        if (moving) {                                          /* Shift+movement selects */
+            if (shift) { if (sel < 0) sel = cur; } else sel = -1;
+            k = code;
+        }
+        if (k == 1) { sel = 0; cur = len; }                    /* Ctrl+A */
+        else if (k == 3) copy_selection();                     /* Ctrl+C */
+        else if (k == 24) { copy_selection(); del_selection(); }   /* Ctrl+X */
+        else if (k == 22) paste();                             /* Ctrl+V */
+        else if (k == 19) save();                                   /* Ctrl+S */
         else if (k == KEY_LEFT) { if (cur > 0) cur--; }
         else if (k == KEY_RIGHT) { if (cur < len) cur++; }
         else if (k == KEY_UP) { move_vert(-1); vert = true; }
@@ -202,16 +265,20 @@ int main(void) {
         else if (k == KEY_PGDN) { move_vert(rows()); vert = true; }
         else if (k == KEY_HOME) cur = line_start(cur);
         else if (k == KEY_END) cur = line_end(cur);
+        else if ((k == '\b' || k == KEY_DEL) && del_selection()) {}
         else if (k == '\b') { if (cur > 0) { memmove(text + cur - 1, text + cur, len - cur); len--; cur--; modified = true; } }
         else if (k == KEY_DEL) { if (cur < len) { memmove(text + cur, text + cur + 1, len - cur - 1); len--; modified = true; } }
-        else if (k == '\n') {   /* keep the indentation of the current line */
+        else if (k == '\n' || k == '\t' || key_is_char(k)) {
+            del_selection();
+            if (k == '\n') {   /* keep the indentation of the current line */
             char ind[64]; int n = 0, s = line_start(cur);
             ind[n++] = '\n';
             while (s + n - 1 < cur && n < 63 && (text[s + n - 1] == ' ' || text[s + n - 1] == '\t')) { ind[n] = text[s + n - 1]; n++; }
             insert(ind, n);
+            }
+            else if (k == '\t') insert("    ", 4);
+            else { char ch = (char)k; insert(&ch, 1); }
         }
-        else if (k == '\t') insert("    ", 4);
-        else if (key_is_char(k)) { char ch = (char)k; insert(&ch, 1); }
         if (!vert) want_col = -1;
         keep_visible();
         set_title();

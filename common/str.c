@@ -129,6 +129,20 @@ long utf8_to_cp1252(char *s, long n) {
     return o;
 }
 
+/* Windows-1252 to UTF-8; returns the output length */
+long cp1252_to_utf8(const char *in, long n, char *out, long max) {
+    long o = 0;
+    for (long i = 0; i < n; i++) {
+        unsigned c = (unsigned char)in[i];
+        unsigned u = c >= 0x80 && c < 0xA0 ? cp1252_hi[c - 0x80] : c;
+        if (!u) u = '?';
+        if (u < 0x80) { if (o + 1 > max) break; out[o++] = (char)u; }
+        else if (u < 0x800) { if (o + 2 > max) break; out[o++] = (char)(0xC0 | u >> 6); out[o++] = (char)(0x80 | (u & 0x3F)); }
+        else { if (o + 3 > max) break; out[o++] = (char)(0xE0 | u >> 12); out[o++] = (char)(0x80 | ((u >> 6) & 0x3F)); out[o++] = (char)(0x80 | (u & 0x3F)); }
+    }
+    return o;
+}
+
 int ksnprintf(char *buf, size_t n, const char *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     int r = kvsnprintf(buf, n, fmt, ap);

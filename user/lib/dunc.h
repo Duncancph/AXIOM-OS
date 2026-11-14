@@ -66,6 +66,11 @@ int http_trust_pem(const char *pem, long n);   /* trust these CA certificates in
 static inline void sys_random(void *b, long n) { sys_call(SYS_RANDOM, (long)b, n, 0, 0, 0); }
 static inline int sys_setting_get(const char *key, char *out, int n) { return sys_call(SYS_SETTING_GET, (long)key, (long)out, n, 0, 0); }
 static inline int sys_setting_set(const char *key, const char *val) { return sys_call(SYS_SETTING_SET, (long)key, (long)val, 0, 0, 0); }
+/* the shared clipboard: plain text */
+static inline void clip_set(const char *s, long n) { sys_call(SYS_CLIP_SET, (long)s, n, 0, 0, 0); }
+static inline long clip_get(char *buf, long max) { return sys_call(SYS_CLIP_GET, (long)buf, max, 0, 0, 0); }
+/* paste the clipboard's first line onto the end of a text field; returns how many characters were added */
+int clip_paste_line(char *buf, int *len, int max);
 static inline int sys_disks(struct dunc_disk *out, int max) { return sys_call(SYS_DISK_LIST, (long)out, max, 0, 0, 0); }
 static inline int sys_install(int disk_id, int mode) { return sys_call(SYS_DISK_INSTALL, disk_id, mode, 0, 0, 0); }
 static inline void sys_install_status(struct dunc_install *st) { sys_call(SYS_DISK_STATUS, (long)st, 0, 0, 0, 0); }

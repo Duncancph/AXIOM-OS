@@ -18,11 +18,15 @@ static char input[128]; static int ilen;
 static char hist[16][128]; static int nhist, hpos;
 static bool cursor_on = true;
 static int cur_col = 0;
+static int view;                                   /* lines scrolled back from the bottom */
+static int sel_l0 = -1, sel_c0, sel_l1, sel_c1;    /* selection (line, column), -1: none */
+static bool dragging;
 static const uint32_t pal[] = { HL_TEXT, HL_ACCENT, HL_GOLD, HL_GREEN, HL_RED, HL_TEXT_FAINT, HL_TEXT_DIM };
 enum { C_TEXT, C_CYAN, C_GOLD, C_GREEN, C_RED, C_DIM, C_WHITE };
 
 static void newline(void) {
     if (nlines == LINES) {
+        if (sel_l0 >= 0) { sel_l0--; sel_l1--; if (sel_l0 < 0 || sel_l1 < 0) sel_l0 = -1; }
         memmove(text[0], text[1], sizeof text[0] * (LINES - 1));
         memmove(color[0], color[1], sizeof color[0] * (LINES - 1));
         nlines--;
@@ -83,8 +87,16 @@ static void draw(void) {
     struct canvas *c = &a.c;
     gfx_fill(c, 0, 0, WW, WH, HL_TERM_BG);
     int first = nlines > ROWS ? nlines - ROWS : 0;
+    if (view > first) view = first;
+    first -= view;
+    int a0l = sel_l0, a0c = sel_c0, a1l = sel_l1, a1c = sel_c1;           /* selection in reading order */
+    if (a0l > a1l || (a0l == a1l && a0c > a1c)) { a0l = sel_l1; a0c = sel_c1; a1l = sel_l0; a1c = sel_c0; }
     for (int r = 0; r < ROWS && first + r < nlines; r++) {
         int ln = first + r;
+        if (sel_l0 >= 0 && ln >= a0l && ln <= a1l) {
+            int c0 = ln == a0l ? a0c : 0, c1 = ln == a1l ? a1c : COLS;
+            if (c1 > c0) gfx_fill(c, PAD + c0 * 8, PAD + r * 16, (c1 - c0) * 8, 16, 0x1E4A6E);
+        }
         for (int k = 0; k < COLS && text[ln][k]; k++)
             gfx_mono(c, PAD + k * 8, PAD + r * 16, text[ln][k], pal[color[ln][k]]);
     }
@@ -92,7 +104,13 @@ static void draw(void) {
         for (int r = 0; r < 12; r++)
             for (int k = 0; k < 16; k++)
                 if (CROWN[r][k] == '#') gfx_fill(c, PAD + 2 + k * 4, PAD + (fetch_line - first) * 16 + 2 + r * 4, 4, 4, HL_GOLD);
-    if (cursor_on) {
+    if (view) {                                         /* "scrolled back" hint */
+        const char *h = "Scrolled back - press any key or scroll down";
+        int w = (int)strlen(h) * 8 + 16;
+        gfx_rrect(c, WW - w - 10, 8, w, 22, 6, 0x1B2945, 235);
+        gfx_mono_text(c, WW - w - 2, 11, h, HL_GOLD);
+    }
+    if (cursor_on && !view) {
         int r = (nlines - 1) - first;
         gfx_fill(c, PAD + cx * 8, PAD + r * 16, 8, 16, HL_TEXT);
     }
@@ -294,7 +312,7 @@ static void cmd_help(void) {
         {"apps", "list installed apps"}, {"open <app>", "start an app, e.g. 'open calc'"},
         {"ps", "list running processes"}, {"kill <pid>", "stop a process"},
         {"date", "show the date and time"}, {"fetch", "system summary"}, {"clear", "clear the screen"}, {"exit", "close this terminal"} };
-    for (unsigned i = 0; i < sizeof h / sizeof h[0]; i++) { puts_c("  ", C_TEXT); print("%-14s", h[i][0]); puts_c(h[i][1], C_DIM); putch('\n'); }
+    for (unsigned i = 0; i < sizeof h / sizeof h[0]; i++) { puts_c("  ", C_TEXT); print("%-20s", h[i][0]); puts_c(h[i][1], C_DIM); putch('\n'); }
     puts_c("Kernel commands\n", C_GOLD);
     static const char *k[][2] = {
         {"sysinfo", "CPU, memory, display"}, {"pci", "hardware on the PCI bus"}, {"usb", "USB devices"},
@@ -498,6 +516,45 @@ static void run(char *line) {
     }
 }
 
+static void cell_at(int x, int y, int *l, int *c) {
+    int first = (nlines > ROWS ? nlines - ROWS : 0) - view;
+    if (first < 0) first = 0;
+    int r = (y - PAD) / 16; if (y < PAD) r = 0;
+    *l = first + r; if (*l >= nlines) *l = nlines - 1;
+    *c = (x - PAD + 4) / 8; if (*c < 0) *c = 0; if (*c > COLS) *c = COLS;
+}
+
+static void copy_sel(void) {
+    if (sel_l0 < 0) return;
+    int a0l = sel_l0, a0c = sel_c0, a1l = sel_l1, a1c = sel_c1;
+    if (a0l > a1l || (a0l == a1l && a0c > a1c)) { a0l = sel_l1; a0c = sel_c1; a1l = sel_l0; a1c = sel_c0; }
+    static char out[LINES * (MAXCOLS + 1)]; int n = 0;
+    for (int l = a0l; l <= a1l; l++) {
+        int c0 = l == a0l ? a0c : 0, c1 = l == a1l ? a1c : COLS, ll = (int)strlen(text[l]);
+        if (c1 > ll) c1 = ll;
+        int st = n;
+        for (int k = c0; k < c1; k++) out[n++] = text[l][k];
+        while (n > st && out[n - 1] == ' ') n--;            /* no trailing spaces */
+        if (l < a1l) out[n++] = '\n';
+    }
+    static char u[sizeof out * 3];
+    long ul = cp1252_to_utf8(out, n, u, sizeof u);
+    clip_set(u, ul);
+}
+
+static void paste(void) {
+    static char b[4096];
+    long n = clip_get(b, sizeof b);
+    if (n <= 0) return;
+    n = utf8_to_cp1252(b, n);
+    for (long i = 0; i < n && b[i] != '\n' && b[i] != '\r'; i++) {
+        int k = (unsigned char)b[i];
+        if (k == '\t') k = ' ';
+        if (key_is_char(k) && ilen < (int)sizeof input - 1 && prompt_len + ilen < COLS - 1) input[ilen++] = (char)k;
+    }
+    show_input();
+}
+
 int main(void) {
     if (!app_open_ex(&a, WW, WH, "castle - ~", WIN_RESIZABLE)) return 1;
     fetch();
@@ -508,6 +565,7 @@ int main(void) {
         struct dunc_event e;
         int r = sys_event(&e, 530);
         if (r == 0) {   /* blink: repaint only the cursor cell */
+            if (view) continue;                 /* scrolled back: the cursor isn't on screen */
             cursor_on = !cursor_on;
             int first = nlines > ROWS ? nlines - ROWS : 0, row = (nlines - 1) - first;
             int px = PAD + cx * 8, py = PAD + row * 16;
@@ -519,9 +577,22 @@ int main(void) {
         }
         if (e.type == EV_CLOSE) break;
         if (e.type == EV_RESIZE) { if (app_resize(&a, &e)) { WW = a.wi.w; WH = a.wi.h; draw(); } continue; }
+        if (e.type == EV_WHEEL) { view -= e.key * 3; if (view < 0) view = 0; draw(); continue; }
+        if (e.type == EV_MOUSE_DOWN && e.button == 1) { cell_at(e.x, e.y, &sel_l0, &sel_c0); sel_l1 = sel_l0; sel_c1 = sel_c0; dragging = true; draw(); continue; }
+        if (e.type == EV_MOUSE_MOVE && dragging) { cell_at(e.x, e.y, &sel_l1, &sel_c1); draw(); continue; }
+        if (e.type == EV_MOUSE_UP) { dragging = false; if (sel_l0 == sel_l1 && sel_c0 == sel_c1) sel_l0 = -1; draw(); continue; }
+        if (e.type == EV_MOUSE_DOWN && e.button == 2) { paste(); view = 0; draw(); continue; }   /* right click pastes */
         if (e.type != EV_KEY) continue;
         int k = e.key;
         cursor_on = true;
+        if (KEY_CODE(k) == KEY_PGUP || KEY_CODE(k) == KEY_PGDN) {
+            view += KEY_CODE(k) == KEY_PGUP ? ROWS - 1 : -(ROWS - 1); if (view < 0) view = 0;
+            draw(); continue;
+        }
+        if (k == (KEYMOD_CTRL | KEYMOD_SHIFT | 'c') || (k == 3 && sel_l0 >= 0)) { copy_sel(); sel_l0 = -1; draw(); continue; }
+        if (k == 22 || k == (KEYMOD_CTRL | KEYMOD_SHIFT | 'v')) { sel_l0 = -1; view = 0; paste(); draw(); continue; }
+        if (k == 3) { putch('^'); putch('C'); putch('\n'); ilen = 0; prompt(); draw(); continue; }   /* Ctrl+C: drop the line */
+        view = 0; sel_l0 = -1;
         if (k == '\n') {
             input[ilen] = 0;
             putch('\n');

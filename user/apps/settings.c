@@ -351,6 +351,7 @@ static void key(int k) {
     if (k == '\b') { if (f->len) f->s[--f->len] = 0; }
     else if (k == '\t' && sect == S_LOCK) focus = focus == 0 ? 1 : 0;
     else if (k == '\n' && sect == S_LOCK) click(H_BTN + 0, 0);
+    else if (k == 22 && !f->secret) clip_paste_line(f->s, &f->len, 41);
     else if (key_is_char(k) && f->len < 40) { f->s[f->len++] = (char)k; f->s[f->len] = 0; }
 }
 

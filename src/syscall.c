@@ -5,6 +5,8 @@
 #include "net.h"
 #include "disk.h"
 
+static char *clip; static uint64_t clip_len;          /* the shared clipboard */
+
 #define UOK(p, n, w) user_ok(current->pml4, (const void *)(p), (n), (w))
 
 static bool copy_str(char *dst, uint64_t src, size_t max) {
@@ -296,6 +298,21 @@ uint64_t syscall_dispatch(struct frame *f) {
         char key[32], val[112];
         if (!copy_str(key, a, sizeof key) || !copy_str(val, b, sizeof val)) return (uint64_t)-1;
         return (uint64_t)(int64_t)settings_set(key, val);
+    }
+    case SYS_CLIP_SET: {
+        if (b > (1u << 20) || (b && !UOK(a, b, false))) return (uint64_t)-1;
+        char *n = kmalloc(b ? b : 1);
+        if (!n) return (uint64_t)-1;
+        memcpy(n, (void *)a, b);
+        kfree(clip); clip = n; clip_len = b;
+        return 0;
+    }
+    case SYS_CLIP_GET: {
+        if (!a) return clip_len;
+        uint64_t n = clip_len < b ? clip_len : b;
+        if (n && !UOK(a, n, true)) return (uint64_t)-1;
+        if (n) memcpy((void *)a, clip, n);
+        return n;
     }
     case SYS_SOUND: return (uint64_t)(int64_t)sound_syscall((int)a, b, c);
     case SYS_LOCK: desktop_lock(); return 0;

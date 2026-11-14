@@ -373,6 +373,7 @@ int main(void) {
                 if (k == '\n') dialog_ok();
                 else if (k == 27) dialog = 0;
                 else if (k == '\b') { if (ilen) input[--ilen] = 0; }
+                else if (k == 22) clip_paste_line(input, &ilen, 41);
                 else if (key_is_char(k) && ilen < 40) { input[ilen++] = k; input[ilen] = 0; }
             } else if (dialog) {
                 if (k == '\n') dialog_ok(); else if (k == 27) dialog = 0;

@@ -79,3 +79,18 @@ void path_resolve(const char *cwd, const char *in, char *out, int n) {
     }
     out[k] = 0;
 }
+
+int clip_paste_line(char *buf, int *len, int max) {
+    static char b[2048];
+    long n = clip_get(b, sizeof b);
+    if (n <= 0) return 0;
+    n = utf8_to_cp1252(b, n);
+    int added = 0;
+    for (long i = 0; i < n && b[i] != '\n' && b[i] != '\r' && *len < max - 1; i++) {
+        int k = (unsigned char)b[i];
+        if (k == '\t') k = ' ';
+        if (key_is_char(k)) { buf[(*len)++] = (char)k; added++; }
+    }
+    buf[*len] = 0;
+    return added;
+}

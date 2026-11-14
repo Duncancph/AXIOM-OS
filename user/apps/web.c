@@ -371,6 +371,8 @@ int main(void) {
                 if (k == '\n') { if (alen) { char u[600]; if (!strncmp(addr, "http", 4) || !strncmp(addr, "about:", 6)) strncpy0(u, addr, 600); else ksnprintf(u, 600, "https://%s", addr); load(u, true); } }
                 else if (k == 27) addr_focus = false;
                 else if (k == '\b') { if (alen) addr[--alen] = 0; }
+                else if (k == 22) clip_paste_line(addr, &alen, 590);
+                else if (k == 3) clip_set(addr, alen);
                 else if (key_is_char(k) && alen < 590) { addr[alen++] = k; addr[alen] = 0; }
             } else {
                 if (k == KEY_DOWN) scroll_by(40); else if (k == KEY_UP) scroll_by(-40);
