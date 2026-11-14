@@ -27,6 +27,7 @@ static int table_depth, flex_depth;
 #define MAX_ITEMS 400000
 #define MAX_DEPTH 90
 static struct ditem dummy_item;
+static struct node *cur_src;           /* the element being laid out: recorded in each display item */
 
 static int push(int kind) {
     if (L->nit >= L->cap) {
@@ -38,7 +39,7 @@ static int push(int kind) {
     }
     struct ditem *d = &L->it[L->nit];
     memset(d, 0, sizeof *d);
-    d->kind = kind; d->link = -1;
+    d->kind = kind; d->link = -1; d->src = cur_src;
     return L->nit++;
 }
 static struct ditem *IT(int i) { return i >= 0 && i < L->nit ? &L->it[i] : &dummy_item; }
@@ -610,7 +611,14 @@ static void inline_element(struct fctx *c, struct node *n, struct ictx ic) {
 }
 
 static void block_level(struct fctx *c, struct node *n, struct ictx ic);
+static void flow_node_(struct fctx *c, struct node *n, struct ictx ic);
 static void flow_node(struct fctx *c, struct node *n, struct ictx ic) {
+    struct node *saved = cur_src;
+    if (n->type == N_ELEM) cur_src = n;
+    flow_node_(c, n, ic);
+    cur_src = saved;
+}
+static void flow_node_(struct fctx *c, struct node *n, struct ictx ic) {
     if (n->type == N_TEXT) { inline_text(c, n->text, n->tlen, &ic); return; }
     const struct style *st = n->st;
     if (!st || st->display == D_NONE) return;
@@ -1035,7 +1043,14 @@ __attribute__((noinline)) static void replaced_block(struct fctx *cc, struct nod
     n->st = keep;
 }
 
+static void layout_block_(struct fctx *c, struct node *n, struct ictx ic, int forced_w);
 static void layout_block(struct fctx *c, struct node *n, struct ictx ic, int forced_w) {
+    struct node *saved = cur_src;
+    if (n->type == N_ELEM) cur_src = n;
+    layout_block_(c, n, ic, forced_w);
+    cur_src = saved;
+}
+static void layout_block_(struct fctx *c, struct node *n, struct ictx ic, int forced_w) {
     const struct style *st = n->st;
     int cbw = c->width;
     if (st->display == D_TABLE && forced_w < 0) { layout_table(c, n, ic); return; }
@@ -1126,7 +1141,7 @@ void layout_doc(struct doc *d, struct layout *Lo, int width) {
     L = Lo; DOC = d;
     L->nit = 0; L->tlen = 0;
     ar_reset(&L->ar);
-    gen++; depth = 0; table_depth = 0; flex_depth = 0;
+    gen++; depth = 0; table_depth = 0; flex_depth = 0; cur_src = d->body ? d->body : d->root;
     L->canvas_bg = 0xFFFFFF;
     canvas_node = 0;
     if (d->root->st && d->root->st->bg) { L->canvas_bg = d->root->st->bg & 0xFFFFFF; canvas_node = d->root; }

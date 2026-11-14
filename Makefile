@@ -19,6 +19,8 @@ IMGLIB  := build/u/libimg.a
 IMGCODECS := img png jpeg gif bmp inflate pngenc
 WEB_SRCS := $(wildcard user/apps/web/*.c)
 WEB_OBJS := $(patsubst user/apps/web/%.c,build/u/web_%.o,$(WEB_SRCS))
+JS_SRCS  := $(wildcard user/apps/web/js/*.c)
+JS_OBJS  := $(patsubst user/apps/web/js/%.c,build/u/js_%.o,$(JS_SRCS))
 WEB_ENGINE := user/apps/web/html.c user/apps/web/css.c user/apps/web/layout.c
 U_ELFS  := $(patsubst %,build/user/%.elf,$(APPS))
 HDRS    := $(wildcard src/*.h common/*.h user/lib/*.h)
@@ -76,6 +78,8 @@ build/u/web_%.o: user/apps/web/%.c user/apps/web/web.h common/webfont_data.h $(H
 build/u/%.o: common/%.c $(HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(UCFLAGS) -c $< -o $@
+# code that uses floating point (the JavaScript engine); the kernel saves each app's SSE registers
+UCFLAGS_FP := $(filter-out -mgeneral-regs-only,$(UCFLAGS)) -msse2 -mfpmath=sse
 build/u/app_%.o: user/apps/%.c $(HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(UCFLAGS) -c $< -o $@
@@ -83,9 +87,19 @@ build/user/%.elf: build/u/app_%.o $(U_LIB) $(NETLIB) $(IMGLIB) user/user.ld
 	@mkdir -p $(dir $@)
 	$(LD) -n -T user/user.ld -nostdlib -z max-page-size=0x1000 -z noexecstack --no-warn-rwx-segments -o $@ $(U_LIB) $< $(NETLIB) $(IMGLIB) $(LIBGCC)
 # Web is built from several files (user/apps/web.c and user/apps/web/*.c)
-build/user/web.elf: build/u/app_web.o $(WEB_OBJS) $(U_LIB) $(NETLIB) $(IMGLIB) user/user.ld
+# the JavaScript engine and its bridge to the page use floating point
+build/u/js_%.o: user/apps/web/js/%.c $(wildcard user/apps/web/js/*.h)
 	@mkdir -p $(dir $@)
-	$(LD) -n -T user/user.ld -nostdlib -z max-page-size=0x1000 -z noexecstack --no-warn-rwx-segments -o $@ $(U_LIB) $< $(WEB_OBJS) $(NETLIB) $(IMGLIB) $(LIBGCC)
+	$(CC) $(UCFLAGS_FP) -c $< -o $@
+build/gen/dom_prelude.h: user/apps/web/dom_prelude.js tools/embed.py
+	@mkdir -p $(dir $@)
+	python3 tools/embed.py $< $@ dom_prelude
+build/u/web_dom.o: user/apps/web/dom.c build/gen/dom_prelude.h user/apps/web/web.h user/apps/web/js/js.h $(HDRS)
+	@mkdir -p $(dir $@)
+	$(CC) $(UCFLAGS_FP) -Ibuild/gen -c $< -o $@
+build/user/web.elf: build/u/app_web.o $(WEB_OBJS) $(JS_OBJS) $(U_LIB) $(NETLIB) $(IMGLIB) user/user.ld
+	@mkdir -p $(dir $@)
+	$(LD) -n -T user/user.ld -nostdlib -z max-page-size=0x1000 -z noexecstack --no-warn-rwx-segments -o $@ $(U_LIB) $< $(WEB_OBJS) $(JS_OBJS) $(NETLIB) $(IMGLIB) $(LIBGCC)
 build/u/app_web.o: user/apps/web/web.h
 
 build/thane.elf: $(K_OBJS) src/linker.ld

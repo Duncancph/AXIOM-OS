@@ -214,6 +214,7 @@ struct task {
     uint64_t heap_top;         /* end of the app's heap (starts at USER_HEAP) */
     struct dunc_event evq[EVQ_SIZE]; int evh, evt;
     int nwin;
+    uint8_t fx[512] __attribute__((aligned(16)));   /* the app's floating-point / SSE registers (FXSAVE) */
     char *capture; size_t cap_len, cap_max;
     char arg[256];             /* start-up argument (e.g. a file to open) */
     char appid[24];

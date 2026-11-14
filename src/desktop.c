@@ -34,7 +34,7 @@ static int zorder[MAX_WIN], nz, next_wid = 1;
 static uint32_t *fb32, *bb, *wall;
 static int W, H, fb_stride;
 /* Scaling: when Settings > Display asks for a smaller size than the graphics card gave us (old firmware often
- * can't switch), the desktop is drawn at that size (W x H) and stretched to the screen (PW x PH), keeping its shape. */
+ * can't switch), the desktop is drawn at that size (W x H) and stretched to fill the screen (PW x PH). */
 static bool scaled;
 static int PW, PH, ox, oy, dw, dh;
 static uint16_t *sx_i, *sy_i; static uint8_t *sx_f, *sy_f;     /* for each screen column/row: source pixel and fraction */
@@ -944,7 +944,7 @@ void desktop_init(void) {
     for (const char *p = m; *p; p++) if (*p == 'x') { rh = (int)katoi(p + 1); break; }
     if (rw >= 800 && rh >= 600 && rw <= W && rh <= H && (rw != W || rh != H)) {
         PW = W; PH = H;
-        if ((long)PW * rh <= (long)PH * rw) { dw = PW; dh = (int)((long)PW * rh / rw); } else { dh = PH; dw = (int)((long)PH * rw / rh); }
+        dw = PW; dh = PH;                                /* fill the whole screen (no black bars, even if the shapes differ a little) */
         ox = (PW - dw) / 2; oy = (PH - dh) / 2;
         sx_i = kmalloc(dw * 2); sy_i = kmalloc(dh * 2); sx_f = kmalloc(dw); sy_f = kmalloc(dh);
         if (sx_i && sy_i && sx_f && sy_f) {

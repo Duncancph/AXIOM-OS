@@ -21,6 +21,8 @@ void user_entry(void);
 static inline uint64_t read_cr3(void) { uint64_t v; __asm__ volatile("mov %%cr3,%0" : "=r"(v)); return v; }
 static inline void write_cr3(uint64_t v) { __asm__ volatile("mov %0,%%cr3" ::"r"(v) : "memory"); }
 
+static uint8_t fx_init[512] __attribute__((aligned(16)));   /* a clean FPU/SSE state for new apps */
+
 static struct task *alloc_task(const char *name) {
     for (int i = 0; i < MAX_TASKS; i++)
         if (!tasks[i].state) {
@@ -72,6 +74,7 @@ int task_spawn_arg(const char *app, const char *arg) {
     struct task *t = alloc_task(ae->name);
     if (!t) { kfree(loaded); return -1; }
     t->user = true;
+    memcpy(t->fx, fx_init, sizeof t->fx);
     strncpy0(t->appid, ae->id, sizeof t->appid);
     t->app = t->appid;
     strncpy0(t->arg, arg ? arg : "", sizeof t->arg);
@@ -105,7 +108,22 @@ static void idle(void *arg) {
     for (;;) { __asm__ volatile("sti; hlt; cli"); schedule(); }
 }
 
+/* Apps may use floating point (SSE): the kernel itself never does (-mgeneral-regs-only), so the registers
+ * always hold the state of the last app that ran; it is saved and restored around each switch between apps. */
+static void fpu_init(void) {
+    uint64_t cr0, cr4;
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    cr0 &= ~(1ull << 2); cr0 |= 1ull << 1;                      /* EM off, MP on */
+    __asm__ volatile("mov %0, %%cr0" :: "r"(cr0));
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+    cr4 |= (1ull << 9) | (1ull << 10);                          /* OSFXSR, OSXMMEXCPT */
+    __asm__ volatile("mov %0, %%cr4" :: "r"(cr4));
+    uint32_t mxcsr = 0x1F80;
+    __asm__ volatile("fninit; ldmxcsr %0; fxsave64 %1" :: "m"(mxcsr), "m"(fx_init) : "memory");
+}
+
 void sched_init(void) {
+    fpu_init();
     idle_task = task_create_kernel("Idle", idle, 0);
 }
 
@@ -150,6 +168,8 @@ void schedule(void) {
     if (!next) next = idle_task;
     if (next == current) { current->state = PS_RUNNING; if (!current->user) __asm__ volatile("sti"); return; }
     struct task *prev = current;
+    if (prev->user && prev->state != PS_ZOMBIE) __asm__ volatile("fxsave64 %0" : "=m"(prev->fx) :: "memory");
+    if (next->user) __asm__ volatile("fxrstor64 %0" :: "m"(next->fx) : "memory");
     account();
     if (prev->state == PS_RUNNING) prev->state = PS_READY;
     next->state = PS_RUNNING;

@@ -1377,3 +1377,31 @@ void css_cascade(struct doc *d, int vw) {
     cascade_depth = 0;
     cascade_rec(d->root, &init);
 }
+
+/* For scripts (querySelector, matches): does element e match the selector list s? Parsed selectors are cached. */
+bool css_query_match(const char *s, int n, const struct node *e) {
+    static struct arena qa; static struct ruleset qset;
+    static char last[256]; static int last_n = -1;
+    static struct csel *sels[16]; static int nsel;
+    if (n < 0 || n >= (int)sizeof last) return false;
+    if (n != last_n || memcmp(last, s, n)) {
+        ar_reset(&qa); memset(&qset, 0, sizeof qset); qset.ar = &qa;
+        struct ruleset *saved = cur_set; cur_set = &qset;
+        nsel = 0;
+        int st = 0, depth = 0;
+        for (int i = 0; i <= n && nsel < 16; i++) {
+            if (i < n && (s[i] == '(' || s[i] == '[')) depth++;
+            else if (i < n && (s[i] == ')' || s[i] == ']')) depth--;
+            if (i == n || (s[i] == ',' && depth == 0)) {
+                int spec; struct csel *c = parse_selector(s + st, i - st, &spec);
+                if (!c) { nsel = -1; break; }
+                sels[nsel++] = c; st = i + 1;
+            }
+        }
+        cur_set = saved;
+        memcpy(last, s, n); last_n = n;
+    }
+    if (nsel < 0) return false;
+    for (int i = 0; i < nsel; i++) { match_budget = 100000; if (sel_match(sels[i], e)) return true; }
+    return false;
+}

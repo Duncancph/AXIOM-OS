@@ -50,6 +50,7 @@ struct node {
     int y;                            /* layout position (for #fragment scrolling) */
     int minw, maxw, iw_gen;           /* intrinsic widths, cached per layout */
     struct node *form;                /* the form a control belongs to */
+    int jsw;                          /* scripts: index+1 of this node's JavaScript object (0: none yet) */
 };
 
 struct doc {
@@ -132,6 +133,7 @@ struct ditem {
     struct node *n;                   /* DI_IMG, DI_CTRL: the element */
     struct imgent *img;               /* DI_BGIMG: the picture */
     int link;                         /* link index, -1 */
+    struct node *src;                 /* the element this item was drawn for (for scripts' events) */
 };
 struct layout {
     struct arena ar;
@@ -171,3 +173,27 @@ struct fctl {
 };
 void form_init_control(struct doc *d, struct node *n);
 void form_option_text(struct node *opt, char *out, int max);
+
+/* ---------------- scripts (web/dom.c) <-> the browser (web.c) ---------------- */
+bool css_query_match(const char *sel, int n, const struct node *e);   /* querySelector, matches() */
+/* web.c, for dom.c */
+extern struct doc *web_doc;
+void web_dom_changed(struct node *added);       /* the tree or styles changed (added: a new subtree to set up, or 0) */
+void web_navigate(const char *url);
+void web_page_url(char *out, int n);
+void web_set_title(const char *t);
+void web_viewport(int *w, int *h, int *scroll, int *doc_h);
+void web_scroll_to(int y);
+void web_message(const char *title, const char *msg);   /* alert() */
+bool web_node_rect(struct node *n, int *x, int *y, int *w, int *h);   /* where it is drawn (page coordinates) */
+long web_http(const char *method, const char *url, const char *body, long blen, const char *headers,
+              char **out, int *status, char *ctype, int ctlen, char *final, int fulen);
+/* dom.c, for web.c */
+void js_page_start(struct doc *d);              /* run the page's scripts (after it's shown) */
+void js_page_end(void);                         /* the page goes away */
+bool js_page_active(void);
+bool js_event(struct node *target, const char *type, int x, int y, int key);   /* returns true if a script cancelled the default */
+long js_timer_wait(void);                       /* ms until the next timer is due (-1: none) */
+void js_run_timers(void);
+void js_eval_url(const char *code);             /* a javascript: link */
+void js_console_lines(char *out, long max);     /* for about:console */

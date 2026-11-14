@@ -21,7 +21,8 @@ static struct http_security sec;
 static char page_status[220];
 static struct doc *doc;
 static struct layout lay;
-static bool need_layout, need_cascade, quit, loading, abort_fetch, styles_loading;
+static bool need_layout, need_cascade, need_draw, quit, loading, abort_fetch, styles_loading;
+struct doc *web_doc;
 static int fetch_depth;
 
 /* history: back and forward */
@@ -433,6 +434,7 @@ static void submit(struct node *form, struct node *submitter) {
     if (!doc) return;
     if (!form && submitter) form = submitter->form;
     if (!form) return;
+    if (js_event(form, "submit", 0, 0, 0)) return;          /* a script handles it */
     const char *action = submitter && node_attr(submitter, "formaction") ? node_attr(submitter, "formaction") : node_attr(form, "action");
     const char *method = submitter && node_attr(submitter, "formmethod") ? node_attr(submitter, "formmethod") : node_attr(form, "method");
     char target[600];
@@ -555,10 +557,7 @@ int add_link(const char *href, struct node *n) {
     return nlinks++;
 }
 
-static void walk_init(struct doc *d, struct node *e, int depth) {
-    if (depth > 200) return;
-    for (struct node *c = e->first; c; c = c->next) {
-        if (c->type != N_ELEM) continue;
+static void init_node(struct doc *d, struct node *c) {
         if ((c->tag == T_A || c->tag == T_AREA) && node_attr(c, "href")) {
             static char u[600]; resolve_url(d->base, node_attr(c, "href"), u, sizeof u);
             char *s = ar_strndup(&d->ar, u, strlen(u));
@@ -576,6 +575,12 @@ static void walk_init(struct doc *d, struct node *e, int depth) {
             }
             if (src && src[0]) { static char u[600]; resolve_url(d->base, src, u, sizeof u); c->img = img_get(u); }
         }
+}
+static void walk_init(struct doc *d, struct node *e, int depth) {
+    if (depth > 200) return;
+    for (struct node *c = e->first; c; c = c->next) {
+        if (c->type != N_ELEM) continue;
+        init_node(d, c);
         walk_init(d, c, depth + 1);
     }
 }
@@ -680,7 +685,8 @@ static void scroll_to_fragment(const char *f) {
 /* replace the shown document */
 static void show_doc(struct doc *d) {
     struct doc *old = doc;
-    doc = d;
+    js_page_end();                                         /* the old page's scripts stop */
+    doc = d; web_doc = d;
     free_doc(old);
     nlinks = 0; hover_link = -1; focus = 0; popup = 0;
     for (struct imgent *e = images; e; e = e->next) e->used = false;
@@ -689,6 +695,11 @@ static void show_doc(struct doc *d) {
     need_cascade = true;
     relayout();
     set_title();
+    if (d->root) {                                         /* then run its scripts (they may change it) */
+        need_draw = true;
+        js_page_start(d);
+        if (need_layout || need_cascade) relayout();
+    }
 }
 
 static struct doc *parse_page(char *s, long n, const char *ctype, const char *base) {
@@ -764,12 +775,20 @@ static void about_page(const char *u) {
         }
         ksnprintf(h + o, sizeof h - o, "</pre></div><p><a href=\"about:cookies?clear\">Delete all cookies</a> - <a href=\"about:home\">Start page</a></p>");
         strncpy0(status_text, "Cookies", sizeof status_text);
+    } else if (pre_ci(u, "about:console")) {
+        static char lines[16384]; js_console_lines(lines, sizeof lines);
+        int o = ksnprintf(h, sizeof h, "<title>Console</title>%s<h1>Console</h1><p>Messages and errors from the last page's scripts.</p><div class=card><pre>", PAGE_CSS);
+        for (char *q = lines; *q && o < (int)sizeof h - 200; q++) {
+            if (*q == '<') o += ksnprintf(h + o, sizeof h - o, "&lt;"); else if (*q == '&') o += ksnprintf(h + o, sizeof h - o, "&amp;"); else h[o++] = *q;
+        }
+        ksnprintf(h + o, sizeof h - o, "</pre></div>");
+        strncpy0(status_text, "Console", sizeof status_text);
     } else if (pre_ci(u, "about:blank")) {
         strncpy0(h, "<title>Blank</title>", sizeof h);
         status_text[0] = 0;
     } else {
         ksnprintf(h, sizeof h, "<title>Start page</title>%s"
-            "<h1>Web <span class=dim style=\"font-size:22px\">0.3</span></h1>"
+            "<h1>Web <span class=dim style=\"font-size:22px\">0.4</span></h1>"
             "<p>A browser for <b>AXIOM</b>, running on the Thane kernel's own TCP/IP stack. Secure <b>https://</b> sites use TLS 1.3, "
             "and every site's certificate is checked against the trusted authorities.</p>"
             "<div class=card><h2>Try</h2><ul>"
@@ -781,7 +800,7 @@ static void about_page(const char *u) {
             "<h2>What Web can show</h2><p>Text with style sheets (CSS), pictures (PNG, JPEG, GIF and BMP), tables, lists and forms. "
             "Sites can keep you signed in with cookies (<a href=\"about:cookies\">see cookies</a>). "
             "Open files on this computer with addresses like <code>file:///home/page.html</code>.</p>"
-            "<h2>Not shown</h2><p class=dim>JavaScript, web fonts, video and floating layouts. Sites that only allow TLS 1.2 or older can't be opened yet.</p>"
+            "<h2>Not shown</h2><p class=dim>Web fonts, video and floating layouts; JavaScript runs, but big web apps need more than Web has (see <a href=\"about:console\">the console</a> for script errors). Sites that only allow TLS 1.2 or older can't be opened yet.</p>"
             "<p class=dim>Keys: Ctrl+L address bar, Backspace or Alt+Left back, Alt+Right forward, F5 reload, Tab next form field, Esc stop.</p>", PAGE_CSS);
         strncpy0(status_text, "Start page", sizeof status_text);
     }
@@ -1330,6 +1349,58 @@ static void click_control(struct node *n, int mx, int my) {
     }
 }
 
+/* ---------------- for scripts (web/dom.c) ---------------- */
+void web_dom_changed(struct node *added) {
+    if (added && doc && added->type == N_ELEM) { init_node(doc, added); walk_init(doc, added, 0); }
+    need_cascade = true; need_layout = true;
+}
+void web_navigate(const char *u) {                         /* later, from the main loop: a script may still be running */
+    pend = true; strncpy0(pend_url, u, sizeof pend_url);
+    free(pend_body); pend_body = 0; pend_blen = 0; pend_post = false; pend_mode = 0; pend_scroll = 0;
+}
+void web_page_url(char *out, int n) { strncpy0(out, url, n); }
+void web_set_title(const char *t) { set_title(); }
+void web_viewport(int *w, int *h, int *s, int *dh) {
+    if (need_layout || need_cascade) relayout();
+    *w = page_w(); *h = view_h(); *s = scroll; *dh = lay.doc_h;
+}
+void web_scroll_to(int y) { scroll = y; scroll_by(0); need_draw = true; }
+void web_message(const char *title, const char *msg) {
+    char m[200]; strncpy0(m, msg, sizeof m);
+    sys_notify(title, m);
+    ksnprintf(status_text, sizeof status_text, "The page says: %s", m); need_draw = true;
+}
+bool web_node_rect(struct node *n, int *x, int *y, int *w, int *h) {
+    if (need_layout || need_cascade) relayout();
+    int x0 = 1 << 30, y0 = 1 << 30, x1 = -(1 << 30), y1 = -(1 << 30);
+    for (int i = 0; i < lay.nit; i++) {
+        struct node *s = lay.it[i].src; int k = 0;
+        while (s && s != n && k++ < 120) s = s->parent;
+        if (s != n) continue;
+        struct ditem *it = &lay.it[i];
+        if (it->x < x0) x0 = it->x;
+        if (it->y < y0) y0 = it->y;
+        if (it->x + it->w > x1) x1 = it->x + it->w;
+        if (it->y + it->h > y1) y1 = it->y + it->h;
+    }
+    if (x1 < x0) { *x = *y = *w = *h = 0; return false; }
+    *x = x0; *y = y0; *w = x1 - x0; *h = y1 - y0;
+    return true;
+}
+long web_http(const char *method, const char *u, const char *body, long blen, const char *headers,
+              char **out, int *status, char *ctype, int ctlen, char *final, int fulen) {
+    return fetch_any(u, 8l << 20, out, ctype, ctlen, status, final, fulen, method, body, blen);
+}
+/* the element under a point (for scripts' mouse events) */
+static struct node *elem_at(int x, int y) {
+    int dy = y - BAR_H + scroll;
+    for (int i = lay.nit - 1; i >= 0; i--) {
+        struct ditem *it = &lay.it[i];
+        if (x >= it->x && x < it->x + it->w && dy >= it->y && dy < it->y + it->h && it->src) return it->src;
+    }
+    return doc ? doc->body : 0;
+}
+
 static void handle_event(struct dunc_event *e) {
     if (e->type == EV_CLOSE) { quit = true; abort_fetch = true; return; }
     if (e->type == EV_RESIZE) {
@@ -1374,11 +1445,31 @@ static void handle_event(struct dunc_event *e) {
             scroll = (int)((long)(e->y - BAR_H) * (lay.doc_h - vh) / (vh > 0 ? vh : 1)); scroll_by(0);
         } else if (e->y > BAR_H && e->y < WH - STATUS_H && doc) {
             addr_focus = false;
+            if (js_page_active()) {                          /* scripts see the click first and may cancel what it would do */
+                struct node *t = elem_at(e->x, e->y);
+                int px = e->x, py = e->y - BAR_H + scroll;
+                js_event(t, "mousedown", px, py, 0);
+                js_event(t, "mouseup", px, py, 0);
+                if (js_event(t, "click", px, py, 0)) { draw(); return; }
+                if (doc != web_doc || pend) return;          /* a script went to another page */
+            }
             int i = item_at(e->x, e->y, false);
-            if (i >= 0 && lay.it[i].kind == DI_CTRL) click_control(lay.it[i].n, e->x, e->y);
-            else {
+            if (i >= 0 && lay.it[i].kind == DI_CTRL) {
+                struct node *cn = lay.it[i].n;
+                click_control(cn, e->x, e->y);
+                if (cn->fc && (cn->fc->type == FC_CHECKBOX || cn->fc->type == FC_RADIO)) { js_event(cn, "input", 0, 0, 0); js_event(cn, "change", 0, 0, 0); }
+            } else {
                 focus = 0;
-                if (i >= 0 && lay.it[i].link >= 0 && lay.it[i].link < nlinks) { char u[600]; strncpy0(u, links[lay.it[i].link].href, sizeof u); request_nav(u, false, 0, 0, 0, 0); return; }
+                if (i >= 0 && lay.it[i].link >= 0 && lay.it[i].link < nlinks) {
+                    char u[600]; strncpy0(u, links[lay.it[i].link].href, sizeof u);
+                    const char *raw = node_attr(links[lay.it[i].link].n, "href");
+                    if (raw && pre_ci(raw, "javascript:")) {          /* a script link */
+                        char code[2000]; int k = 0;
+                        for (const char *q = raw + 11; *q && k < 1999; q++) { int h; if (*q == '%' && q[1] && q[2] && (h = hex2(q + 1)) >= 0) { code[k++] = (char)h; q += 2; } else code[k++] = *q; }
+                        code[k] = 0; js_eval_url(code); draw(); return;
+                    }
+                    request_nav(u, false, 0, 0, 0, 0); return;
+                }
             }
         }
         draw();
@@ -1404,8 +1495,12 @@ static void handle_event(struct dunc_event *e) {
             else if (k == 3) clip_set(addr, alen);
             else if (key_is_char(k) && alen < 590) { addr[alen++] = k; addr[alen] = 0; }
             if (addr_focus) { draw_toolbar(&a.c); app_flush_rect(&a, 0, 0, WW, BAR_H); return; }
+        } else if (js_page_active() && doc && js_event(focus ? focus : doc->body, "keydown", 0, 0, k)) {
+            /* a script handled the key */
         } else if (focus && doc) {
+            struct node *was = focus; int len0 = focus->fc ? focus->fc->len : 0, sel0 = focus->fc ? focus->fc->sel : 0;
             control_key(k);
+            if (was->fc && (was->fc->len != len0 || (was->fc->type == FC_SELECT && was->fc->sel != sel0))) { js_event(was, "input", 0, 0, k); if (was->fc->type == FC_SELECT) js_event(was, "change", 0, 0, 0); }
             if (focus) ensure_visible(focus);
         } else {
             int vh = view_h();
@@ -1457,7 +1552,10 @@ int main(void) {
             draw();
             continue;
         }
-        if (sys_event(&e, -1) > 0) handle_event(&e);
+        if (need_draw) { need_draw = false; draw(); }
+        long wait = js_timer_wait();                    /* scripts' timers */
+        if (sys_event(&e, wait) > 0) handle_event(&e);
+        js_run_timers();
     }
     return 0;
 }
