@@ -59,7 +59,9 @@ typedef bool (*http_sink)(const char *data, long len, void *ctx);
 long http_fetch(const char *url, http_sink sink, void *ctx, int *status, long *total, char *ctype, int ctlen, char *final_url, int fulen);
 /* General request: method ("GET"/"POST"/...), optional body with its Content-Type. rq may be NULL (GET).
  * After a POST, 301/302/303 redirects continue as GET; 307/308 repeat the request. */
-struct http_req { const char *method; const char *body; long body_len; const char *content_type; const char *referer; };
+struct http_req { const char *method; const char *body; long body_len; const char *content_type; const char *referer;
+                  const char *extra_headers;   /* optional "Name: value\r\n" lines */
+                  long timeout_ms; };          /* optional: how long to wait for data (default 15 s) */
 long http_request(const char *url, const struct http_req *rq, http_sink sink, void *ctx, int *status, long *total,
                   char *ctype, int ctlen, char *final_url, int fulen);
 /* Options for this program (default 0): HTTP_OPT_COOKIES keeps a cookie jar (persistent cookies are saved in

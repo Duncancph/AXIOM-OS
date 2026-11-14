@@ -456,6 +456,7 @@ long http_request(const char *url_in, const struct http_req *rq, http_sink sink,
                            browser ? "text/html,application/xhtml+xml,text/css,image/png,image/jpeg,image/gif,*/*;q=0.5" : "*/*",
                            want_gz ? "Accept-Encoding: gzip\r\n" : "");
         if (rq && rq->referer && rq->referer[0]) rl += ksnprintf(req + rl, sizeof req - rl, "Referer: %s\r\n", rq->referer);
+        if (rq && rq->extra_headers) rl += ksnprintf(req + rl, sizeof req - rl, "%s", rq->extra_headers);
         if (cookies) rl += cookie_header(req + rl, sizeof req - rl - 200, u.host, u.path, u.https);
         if (body) rl += ksnprintf(req + rl, sizeof req - rl, "Content-Type: %s\r\nContent-Length: %ld\r\n",
                                   rq->content_type ? rq->content_type : "application/x-www-form-urlencoded", body_len);
@@ -463,7 +464,7 @@ long http_request(const char *url_in, const struct http_req *rq, http_sink sink,
         if (c_write(&c, req, rl) < 0 || (body_len && c_write(&c, body, body_len) < 0)) { c_close(&c); return NET_ERESET; }
         long hl = 0, hend = -1;
         while (hend < 0 && hl < (long)sizeof hdr - 1) {
-            long n = c_read(&c, hdr + hl, sizeof hdr - 1 - hl, 15000);
+            long n = c_read(&c, hdr + hl, sizeof hdr - 1 - hl, rq && rq->timeout_ms > 0 ? rq->timeout_ms : 15000);
             if (n <= 0) { c_close(&c); return n == 0 ? HTTP_EBAD : n; }
             hl += n; hdr[hl] = 0;
             for (long i = 3; i < hl; i++) if (hdr[i - 3] == '\r' && hdr[i - 2] == '\n' && hdr[i - 1] == '\r' && hdr[i] == '\n') { hend = i + 1; break; }
@@ -515,7 +516,7 @@ long http_request(const char *url_in, const struct http_req *rq, http_sink sink,
             else { long k = clen >= 0 && have > clen ? clen : have; if (!out(hdr + hend, k, octx)) stop = true; got += k; }
         }
         while (!stop && (chunked ? dc.state != 3 : (clen < 0 || got < clen))) {
-            long n = c_read(&c, buf, sizeof buf, 15000);
+            long n = c_read(&c, buf, sizeof buf, rq && rq->timeout_ms > 0 ? rq->timeout_ms : 15000);
             if (n <= 0) break;
             if (chunked) got += dechunk_feed(&dc, buf, n, out, octx, &stop);
             else { if (clen >= 0 && got + n > clen) n = clen - got; if (!out(buf, n, octx)) stop = true; got += n; }

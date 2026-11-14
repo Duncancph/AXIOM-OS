@@ -178,7 +178,7 @@ static long fetch_any(const char *u, long cap, char **out, char *ctype, int ctle
     if (!pre_ci(u, "http:") && !pre_ci(u, "https:")) return HTTP_EURL;
     struct fbuf f = { malloc(cap + 1), 0, cap, false };
     if (!f.b) return NET_ENOMEM;
-    struct http_req rq = { method, body, blen, "application/x-www-form-urlencoded", 0 };
+    struct http_req rq = { method, body, blen, "application/x-www-form-urlencoded", 0, 0, 0 };
     fetch_depth++;
     long r = http_request(u, &rq, fbuf_sink, &f, status, 0, ctype, ctlen, final, fulen);
     fetch_depth--;

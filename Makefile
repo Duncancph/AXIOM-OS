@@ -8,11 +8,11 @@ UCFLAGS := $(COMMON) -mcmodel=large
 LDFLAGS := -n -T src/linker.ld -nostdlib -z max-page-size=0x1000 --no-warn-rwx-segments -z noexecstack
 LIBGCC  := $(shell $(CC) -print-libgcc-file-name)
 
-APPS    := files about terminal monitor bluetooth network calc sandbox settings viewer web
+APPS    := files about terminal monitor bluetooth network calc sandbox settings viewer web claude
 REPO_APPS := editor clock
 K_SRCS  := $(filter-out src/desktop_highland.c,$(wildcard src/*.c)) common/gfx.c common/str.c common/inet.c user/lib/crypto/sha2.c user/lib/crypto/aead.c user/lib/img/pngenc.c user/lib/img/inflate.c
 K_OBJS  := $(patsubst %.c,build/k/%.o,$(K_SRCS)) build/k/boot.o build/k/isr.o build/k/apps.o
-U_LIB   := build/u/crt0.o build/u/libdunc.o build/u/malloc.o build/u/gfx.o build/u/str.o build/u/inet.o
+U_LIB   := build/u/crt0.o build/u/libdunc.o build/u/malloc.o build/u/gfx.o build/u/str.o build/u/inet.o build/u/json.o
 CRYPTO  := sha2 aead x25519 bn rsa ecc x509 tls
 NETLIB  := build/u/libnet.a
 IMGLIB  := build/u/libimg.a
@@ -41,6 +41,9 @@ build/u/crt0.o: user/lib/crt0.asm
 	@mkdir -p $(dir $@)
 	$(NASM) -f elf64 $< -o $@
 build/u/libdunc.o: user/lib/libdunc.c $(HDRS)
+	@mkdir -p $(dir $@)
+	$(CC) $(UCFLAGS) -c $< -o $@
+build/u/json.o: user/lib/json.c $(HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(UCFLAGS) -c $< -o $@
 build/u/malloc.o: user/lib/malloc.c $(HDRS)
@@ -132,6 +135,7 @@ test:
 	fsck.fat -n build/test/fmt.img && echo "fsck.fat after fat_format: clean"
 	gcc -std=gnu17 -O1 -w -fno-builtin -o build/test/test_inet tests/test_inet.c common/inet.c common/str.c
 	python3 tests/test_inet.py build/test/test_inet
+	gcc -std=gnu17 -O1 -g -fsanitize=address,undefined -DJSON_TEST -o build/test/test_json tests/test_json.c user/lib/json.c && python3 tests/test_json.py build/test/test_json
 	gcc -std=gnu17 -O1 -DTZ_TEST -o build/test/test_tz tests/test_tz.c src/tz.c && python3 tests/test_tz.py build/test/test_tz
 	gcc -std=gnu17 -O1 -g -fsanitize=address,undefined -DMALLOC_TEST -o build/test/test_malloc tests/test_malloc.c user/lib/malloc.c && build/test/test_malloc
 	gcc -std=gnu17 -O2 -w -fno-builtin -o build/test/test_crypto tests/test_crypto.c $(addprefix user/lib/crypto/,sha2.c aead.c x25519.c bn.c rsa.c ecc.c) common/str.c

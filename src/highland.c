@@ -99,6 +99,7 @@ static const struct named_icon ICONS[] = {
     { "globe",     ICON_GLOBE,     0x1E2A44u, 0x8BE3F2u },
     { "network",   ICON_NETWORK,   0x123326u, HL_GREEN  },
     { "photo",     ICON_PHOTO,     0x3A2A12u, HL_GOLD   },
+    { "chat",      ICON_CODE,      0x3A2016u, 0xF0A07Eu },
     { "gear",      ICON_GEAR,      0x1F2937u, 0xCBD5E1u },
 };
 

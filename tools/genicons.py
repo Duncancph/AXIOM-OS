@@ -141,6 +141,13 @@ def g_globe(d, S, u):
     d.arc([u(.24), u(.08), u(.76), u(.42)], 30, 150, fill=W, width=w)
     d.arc([u(.24), u(.58), u(.76), u(.92)], 210, 330, fill=W, width=w)
 
+def g_chat(d, S, u):
+    d.rounded_rectangle([u(.18), u(.22), u(.82), u(.70)], radius=u(.12), fill=W)
+    d.polygon([(u(.30), u(.66)), (u(.30), u(.84)), (u(.48), u(.68))], fill=W)
+    c = (217, 119, 87, 255); cx, cy, r = u(.50), u(.46), u(.15)       # a sparkle inside the bubble
+    d.polygon([(cx, cy - r), (cx + r // 4, cy - r // 4), (cx + r, cy), (cx + r // 4, cy + r // 4),
+               (cx, cy + r), (cx - r // 4, cy + r // 4), (cx - r, cy), (cx - r // 4, cy - r // 4)], fill=c)
+
 ICONS = [   # name, gradient top, bottom, glyph
     ("folder",    "#60A5FA", "#2563EB", g_folder),
     ("terminal",  "#475569", "#0F172A", g_terminal),
@@ -155,6 +162,7 @@ ICONS = [   # name, gradient top, bottom, glyph
     ("code",      "#818CF8", "#4338CA", g_code),
     ("clock",     "#334155", "#020617", g_clock),
     ("globe",     "#38BDF8", "#0369A1", g_globe),
+    ("chat",      "#F0A07E", "#C2552F", g_chat),
 ]
 
 def render(name, top, bottom, glyph, size):

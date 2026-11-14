@@ -18,8 +18,9 @@ app_images:
     APP settings, "Settings", 0
     APP viewer, "Viewer", 0
     APP web, "Web", 0
+    APP claude, "Claude", 0
     APP about, "About DuncOS", 0
-app_count: dd 11
+app_count: dd 12
 
 id_files: db "files", 0
 title_files: db "Files", 0
@@ -39,6 +40,8 @@ id_sandbox: db "sandbox", 0
 title_sandbox: db "Protection Test", 0
 id_settings: db "settings", 0
 title_settings: db "Settings", 0
+id_claude: db "claude", 0
+title_claude: db "Claude", 0
 id_viewer: db "viewer", 0
 title_viewer: db "Viewer", 0
 id_web: db "web", 0
@@ -72,6 +75,9 @@ align 16
 bin_settings: incbin "build/user/settings.elf"
 bin_settings_end:
 align 16
+bin_claude: incbin "build/user/claude.elf"
+bin_claude_end:
+
 bin_viewer: incbin "build/user/viewer.elf"
 bin_viewer_end:
 align 16
