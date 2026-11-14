@@ -224,8 +224,29 @@ static void draw_personal(void) {
     button(SIDE + 304, y + 12, 90, "Save", BTN_PRIMARY, H_BTN + 50, false);
 }
 
+static bool show_gfx;
+static void draw_gfx_details(void) {
+    heading("Graphics details", "How the firmware set up the screen, and what the monitor says about itself.");
+    static char rep[3000]; sys_setting_get("display.report", rep, sizeof rep);
+    int y = 106;
+    for (char *p = rep; *p && y < WH - 70;) {
+        char *e = p; while (*e && *e != '\n') e++;
+        char save = *e; *e = 0;
+        int maxc = (WW - SIDE - 48) / 8, len = strlen(p);
+        for (int o = 0; o < len && y < WH - 70; o += maxc) {   /* long lines wrap */
+            char line[200]; int n = len - o < maxc ? len - o : maxc; if (n > 199) n = 199;
+            memcpy(line, p + o, n); line[n] = 0;
+            gfx_mono_text(&a.c, SIDE + 24 + (o ? 16 : 0), y - 12, line, o ? HL_TEXT_DIM : UI_TEXT); y += 16;
+        }
+        *e = save; p = *e ? e + 1 : e;
+    }
+    if (!rep[0]) label(SIDE + 32, y, UI_MUTED, "No Intel graphics found.");
+    button(SIDE + 24, WH - 56, 120, "Back", BTN_NORMAL, H_BTN + 61, false);
+    label(SIDE + 160, WH - 34, UI_MUTED, "All of it: type  gfx  in the Terminal.");
+}
 static void draw_display(void) {
     char b[96];
+    if (show_gfx) { draw_gfx_details(); return; }
     heading("Display", 0);
     ksnprintf(b, sizeof b, "The screen is %s now.", get("display.current"));
     label(SIDE + 32, 74, UI_MUTED, b);
@@ -238,6 +259,15 @@ static void draw_display(void) {
     label(SIDE + 32, 336, UI_MUTED, "that size (common on older PCs), AXIOM draws the desktop at that size and");
     label(SIDE + 32, 356, UI_MUTED, "stretches it to fill the screen, so everything looks bigger. A size larger");
     label(SIDE + 32, 376, UI_MUTED, "than the screen can show is ignored.");
+    char gpu[160], mon[160]; sys_setting_get("display.gpu", gpu, sizeof gpu); sys_setting_get("display.monitor", mon, sizeof mon);
+    if (gpu[0]) {
+        ui_card(&a.c, SIDE + 32, 404, WW - SIDE - 64, 104);
+        gfx_text(&a.c, &font_ui_bold, SIDE + 48, 432, UI_TEXT, gpu);
+        button(WW - 32 - 130, 412, 114, "Details", BTN_NORMAL, H_BTN + 60, false);
+        char m[180]; ksnprintf(m, sizeof m, "Monitor: %s", mon[0] ? mon : "it didn't say what it is");
+        label(SIDE + 48, 470, UI_MUTED, m);
+        label(SIDE + 48, 490, UI_MUTED, "Using the monitor's own resolution is coming in a later update.");
+    }
 }
 
 static void draw_sound(void) {
@@ -603,6 +633,8 @@ static void click(int id, int mx) {
     if (id == H_BTN + 4) sys_power(0);
     if (id >= H_DISK && id < H_DISK + 16) { confirm_disk = (id - H_DISK) / 2; confirm_mode = (id - H_DISK) % 2 ? INSTALL_UPDATE : INSTALL_ERASE; }
     if (id == H_BTN + 40) sys_spawn("sandbox");
+    if (id == H_BTN + 60) { show_gfx = true; }
+    if (id == H_BTN + 61) { show_gfx = false; }
     if (id == H_TOGGLE + 40) set("system.cores", !strcmp(get("system.cores"), "all") ? "one" : "all");
     if (id == H_BTN + 50) {
         int k = 0; char nm[41];                                   /* letters, digits, - and _ only, lower case */

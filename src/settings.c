@@ -141,6 +141,9 @@ int settings_syscall_get(const char *key, char *out, int n) {
         if (sc) return ksnprintf(out, n, "%dx%d (stretched to the %ux%u screen)", w, h, bootinfo.fb_w, bootinfo.fb_h);
         return ksnprintf(out, n, "%dx%d", w, h);
     }
+    if (!strcmp(key, "display.gpu")) return ksnprintf(out, n, "%s", intelgfx_summary());
+    if (!strcmp(key, "display.monitor")) return ksnprintf(out, n, "%s", intelgfx_monitor());
+    if (!strcmp(key, "display.report")) return ksnprintf(out, n, "%s", intelgfx_report());
     if (!strcmp(key, "lock.password")) return ksnprintf(out, n, "%s", settings_get(key)[0] ? "set" : "");
     return ksnprintf(out, n, "%s", settings_get(key));
 }

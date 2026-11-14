@@ -148,6 +148,10 @@ struct pci_dev {
 extern struct pci_dev pci_devs[256];
 extern int pci_count;
 void pci_scan(void);
+void intelgfx_probe(void);
+const char *intelgfx_summary(void);
+const char *intelgfx_monitor(void);
+const char *intelgfx_report(void);
 uint32_t pci_read32(uint8_t b, uint8_t d, uint8_t f, uint8_t off);
 void pci_write32(uint8_t b, uint8_t d, uint8_t f, uint8_t off, uint32_t v);
 uint16_t pci_read16(uint8_t b, uint8_t d, uint8_t f, uint8_t off);

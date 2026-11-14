@@ -311,7 +311,7 @@ static void cmd_help(void) {
     for (unsigned i = 0; i < sizeof h / sizeof h[0]; i++) { puts_c("  ", C_TEXT); print("%-20s", h[i][0]); puts_c(h[i][1], C_DIM); putch('\n'); }
     puts_c("Kernel commands\n", C_GOLD);
     static const char *k[][2] = {
-        {"sysinfo", "CPU, memory, display"}, {"pci", "hardware on the PCI bus"}, {"usb", "USB devices"},
+        {"sysinfo", "CPU, memory, display"}, {"gfx", "graphics chip and monitor details"}, {"pci", "hardware on the PCI bus"}, {"usb", "USB devices"},
         {"bt", "Bluetooth adapter"}, {"bt scan [secs]", "find nearby Bluetooth devices"}, {"log", "kernel messages"},
         {"uptime", "time since boot"}, {"clan", "package manager (clan list / clan install)"},
         {"reboot / poweroff", "restart or shut down"} };
@@ -339,6 +339,7 @@ static void run(char *line) {
     else if (!strcmp(line, "clear") || !strcmp(line, "cls")) { nlines = 1; memset(text, 0, sizeof text); cx = 0; fetch_line = -100; return; }
     else if (!strcmp(line, "exit")) sys_exit(0);
     else if (!strcmp(line, "ps")) cmd_ps();
+    else if (!strcmp(line, "gfx")) { static char rep[3000]; sys_setting_get("display.report", rep, sizeof rep); print("%s", rep[0] ? rep : "No Intel graphics found.\n"); }
     else if (!strcmp(line, "apps")) {
         struct dunc_app ap[24]; int n = sys_apps(ap, 24);
         for (int i = 0; i < n; i++) { print("  %-10s ", ap[i].id); puts_c(ap[i].name, C_DIM); if (ap[i].installed) puts_c("  (clan)", C_GOLD); putch('\n'); }

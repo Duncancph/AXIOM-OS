@@ -153,6 +153,10 @@ private key must stay private, because whoever has it can make updates that AXIO
   keys and buttons, wheel); they reconnect by themselves when switched on. Headsets and Low Energy
   devices (most newer mice) don't work yet. Bluetooth is tested only against a simulated adapter and
   keyboard (`make test`), as there's no Bluetooth hardware in the test setup.
+- **Native screen resolution on Intel graphics** isn't done yet. AXIOM uses the screen mode the
+  firmware sets up (on some machines only 1024x768). Settings > Display (Details) and the terminal's
+  `gfx` command show how the firmware set up the screen and what the monitor reports (EDID), which is
+  the first step towards switching modes itself.
 - **Touchpads** work only if they appear as a PS/2 device; I2C touchpads (common on newer laptops) don't yet.
 - **HTTPS is TLS 1.3 only.** Most sites support it, but some older servers offer only TLS 1.2 and can't be
   reached (you get a clear message). Not supported yet: P-521 and Ed25519 certificates (rare), checking

@@ -122,6 +122,7 @@ void kmain(uint32_t magic, uint64_t mbi) {
     apps_refresh();
     pci_scan();
     LOG_OK("PCI: %d devices\n", pci_count);
+    intelgfx_probe();
     ahci_init_all();
     nvme_init_all();
     settings_load();
