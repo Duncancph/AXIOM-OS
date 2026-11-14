@@ -124,7 +124,7 @@ static void fpu_init(void) {
 
 void sched_init(void) {
     fpu_init();
-    idle_task = task_create_kernel("Idle", idle, 0);
+    idle_task = task_create_kernel("Idle (unused time)", idle, 0);
 }
 
 void sched_start(void) {

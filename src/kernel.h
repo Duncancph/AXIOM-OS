@@ -247,6 +247,7 @@ struct app_image { const char *id, *title; const uint8_t *start, *end; };
 struct app_entry { char id[24], name[32], icon[16], version[12]; const struct app_image *builtin; bool installed; };
 void apps_refresh(void);
 int apps_count(void);
+int apps_visible(void);                      /* the first ones: shown in the dock and menu (Protection Test isn't) */
 const struct app_entry *apps_get(int i);
 const struct app_entry *apps_find(const char *id);
 void clan_command(int argc, char **argv);

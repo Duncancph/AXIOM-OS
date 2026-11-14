@@ -56,7 +56,7 @@ struct toast { bool used; char title[64], msg[160]; uint64_t until; };
 static struct toast toasts[4];
 
 /* apps come from the registry (built-in + installed with clan) */
-static int napps_dock(void) { int n = apps_count(); return n > HL_MAX_DOCK ? HL_MAX_DOCK : n; }
+static int napps_dock(void) { int n = apps_visible(); return n > HL_MAX_DOCK ? HL_MAX_DOCK : n; }
 #define HL_NAPPS napps_dock()
 static const char *app_name(int i) { return apps_get(i)->name; }
 

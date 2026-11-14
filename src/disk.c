@@ -238,11 +238,16 @@ static const char *GRUBCFG_FMT =
 static char gfx_pref[32];
 
 static int write_grubcfg(const char *dir) {
-    char cfg[1200], first[40] = "", path[64];
+    char cfg[2400], first[40] = "", path[64];
     if (gfx_pref[0]) ksnprintf(first, sizeof first, "%s,", gfx_pref);
     struct dunc_stat st; char bp[64]; ksnprintf(bp, sizeof bp, "%s/biosboot.img", dir);
     const char *bios = vfs_stat(bp, &st) == FS_OK ? "    module2 /duncos/biosboot.img biosboot\n" : "";   /* only if it's there */
     int n = ksnprintf(cfg, sizeof cfg, GRUBCFG_FMT, first, bios, bios);
+    char pk[64]; ksnprintf(pk, sizeof pk, "%s/thane-prev.elf", dir);
+    if (vfs_stat(pk, &st) == FS_OK && n < (int)sizeof cfg - 400)       /* the version before the last update */
+        n += ksnprintf(cfg + n, sizeof cfg - n, "menuentry \"AXIOM (previous version)\" {\n    set gfxpayload=auto\n"
+                       "    multiboot2 /duncos/thane-prev.elf\n    module2 /duncos/initrd-prev.tar initrd\n"
+                       "    module2 /duncos/thane-prev.elf kernel\n    module2 /EFI/BOOT/BOOTX64.EFI bootx64\n    boot\n}\n");
     ksnprintf(path, sizeof path, "%s/grub.cfg", dir);
     long r = vfs_write(path, cfg, n);
     return r < 0 ? (int)r : FS_OK;
@@ -321,6 +326,14 @@ static void installer(void *arg) {
     progress(12, "Copying the boot loader");
     if ((r = put("/install/EFI/BOOT/BOOTX64.EFI", "bootx64"))) { strncpy0(why, "the boot loader isn't available (start AXIOM from its USB stick or disk)", sizeof why); goto unmount; }
     kyield();
+    if (inst_mode == INSTALL_UPDATE) {                    /* keep the version that works now, for the boot menu */
+        struct dunc_stat st;
+        if (vfs_stat("/install/duncos/thane.elf", &st) == FS_OK && vfs_stat("/install/duncos/initrd.tar", &st) == FS_OK) {
+            vfs_delete("/install/duncos/thane-prev.elf"); vfs_delete("/install/duncos/initrd-prev.tar");
+            vfs_rename("/install/duncos/thane.elf", "/install/duncos/thane-prev.elf");
+            vfs_rename("/install/duncos/initrd.tar", "/install/duncos/initrd-prev.tar");
+        }
+    }
     progress(25, "Copying the Thane kernel");
     if ((r = put("/install/duncos/thane.elf", "kernel"))) { strncpy0(why, "the kernel image isn't available", sizeof why); goto unmount; }
     kyield();
