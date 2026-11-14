@@ -418,7 +418,7 @@ static void lock_key(int k) {
 
 /* the area a window fills when dragged to the left/right edge or the top */
 static struct rect snap_rect(int z) {
-    int top = HL_BAR_H, h = dock_rect().y - 8 - top;
+    int top = HL_BAR_H, h = H - top;
     if (z == 1) return (struct rect){ 0, top, W / 2, h };
     if (z == 2) return (struct rect){ W / 2, top, W - W / 2, h };
     return (struct rect){ 0, top, W, h };
@@ -459,7 +459,14 @@ static void compose(struct rect r) {
         struct window *w = &wins[zorder[z]];
         if (!w->minimized && contains(content_rect(w), r)) { start = z; break; }
     }
-    if (start < 0) { gfx_blit(&cv, 0, 0, wall, W, H, W); start = 0; }
+    if (start < 0) {
+        gfx_blit(&cv, 0, 0, wall, W, H, W); start = 0;
+        if (overlap(r, dock_area())) {                     /* the dock sits on the desktop, under the windows */
+            int running[HL_MAX_DOCK]; const char *icons[HL_MAX_DOCK];
+            for (int i = 0; i < HL_NAPPS; i++) { running[i] = app_running(i); icons[i] = apps_get(i)->icon; }
+            hl_render_dock(&full, icons, running, HL_NAPPS);
+        }
+    }
     for (int z = start; z < nz; z++) {
         struct window *w = &wins[zorder[z]];
         if (w->minimized || !overlap(frame_area(w), r)) continue;
@@ -487,11 +494,6 @@ static void compose(struct rect r) {
             gfx_fill(&cv, nx, cy - 2, 1, 2, nc); gfx_fill(&cv, nx - 6, cy, 13, 1, nc);
             gfx_fill(&cv, nx - 6, cy, 1, 2, nc); gfx_fill(&cv, nx + 6, cy, 1, 2, nc);
         }
-    }
-    if (overlap(r, dock_area())) {
-        int running[HL_MAX_DOCK]; const char *icons[HL_MAX_DOCK];
-        for (int i = 0; i < HL_NAPPS; i++) { running[i] = app_running(i); icons[i] = apps_get(i)->icon; }
-        hl_render_dock(&full, icons, running, HL_NAPPS);
     }
     draw_dock_overlay();
     if (menu_open) draw_menu();
@@ -581,7 +583,7 @@ struct window *wm_create(struct task *t, int w, int h, const char *title, uint32
 int wm_id(struct window *w) { return w->id; }
 
 static int max_content_w(void) { return W - 2; }
-static int max_content_h(void) { return dock_rect().y - 8 - HL_BAR_H - TITLE - 1; }
+static int max_content_h(void) { return H - HL_BAR_H - TITLE - 1; }
 
 /* Ask the app to redraw at a new size (it answers with SYS_WIN_RESIZE). */
 static void request_size(struct window *w, int cw, int ch) {
@@ -731,9 +733,9 @@ static void update_hover(void) {
         for (int k = 0; k < 2; k++) if (in_rect(menu_btn(k), mx, my)) { set_hover(300 + k, menu_btn(k)); return; }
     }
     if (in_rect(crown_btn(), mx, my)) { set_hover(50, bar_rect()); return; }
-    for (int i = 0; i < HL_NAPPS; i++)
+    if (window_at(mx, my) < 0) for (int i = 0; i < HL_NAPPS; i++)
         if (in_rect(dock_item(i), mx, my)) { struct rect d = dock_item(i); set_hover(100 + i, (struct rect){ d.x - 110, d.y - 48, d.w + 220, d.h + 48 }); return; }
-    if (in_rect(dock_rect(), mx, my)) { set_hover(0, (struct rect){0, 0, 0, 0}); return; }
+    if (window_at(mx, my) < 0 && in_rect(dock_rect(), mx, my)) { set_hover(0, (struct rect){0, 0, 0, 0}); return; }
     int wi = window_at(mx, my);
     if (wi >= 0) {
         struct window *w = &wins[wi];
@@ -794,8 +796,9 @@ static void click(int button) {
         if (in_rect(crown_btn(), mx, my)) return;
     }
     if (in_rect(crown_btn(), mx, my)) { toggle_menu(true); return; }
-    for (int i = 0; i < HL_NAPPS; i++) if (in_rect(dock_item(i), mx, my)) { activate_app(i); return; }
-    if (in_rect(dock_rect(), mx, my) || my < HL_BAR_H) return;
+    bool on_win = window_at(mx, my) >= 0;                  /* windows cover the dock */
+    if (!on_win) for (int i = 0; i < HL_NAPPS; i++) if (in_rect(dock_item(i), mx, my)) { activate_app(i); return; }
+    if ((!on_win && in_rect(dock_rect(), mx, my)) || my < HL_BAR_H) return;
     int zw, zone = resize_zone(&zw);
     if (zone && button == 1) {
         if (zw != top_window()) raise(zw);

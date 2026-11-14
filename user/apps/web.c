@@ -697,7 +697,10 @@ static void show_doc(struct doc *d) {
     set_title();
     if (d->root) {                                         /* then run its scripts (they may change it) */
         need_draw = true;
+        strncpy0(status_text, "Running the page's scripts... (Esc stops them)", sizeof status_text);
+        draw();
         js_page_start(d);
+        status_text[0] = 0;
         if (need_layout || need_cascade) relayout();
     }
 }
@@ -1350,6 +1353,11 @@ static void click_control(struct node *n, int mx, int my) {
 }
 
 /* ---------------- for scripts (web/dom.c) ---------------- */
+static struct dunc_event requeued[8]; static int nrequeued;
+void web_requeue_event(const struct dunc_event *e) {
+    if (nrequeued && e->type == EV_RESIZE && requeued[nrequeued - 1].type == EV_RESIZE) { requeued[nrequeued - 1] = *e; return; }
+    if (nrequeued < 8) requeued[nrequeued++] = *e;
+}
 void web_dom_changed(struct node *added) {
     if (added && doc && added->type == N_ELEM) { init_node(doc, added); walk_init(doc, added, 0); }
     need_cascade = true; need_layout = true;
@@ -1563,6 +1571,7 @@ int main(void) {
             continue;
         }
         if (need_draw) { need_draw = false; draw(); }
+        if (nrequeued) { struct dunc_event q = requeued[0]; for (int i = 1; i < nrequeued; i++) requeued[i - 1] = requeued[i]; nrequeued--; handle_event(&q); continue; }
         long wait = js_timer_wait();                    /* scripts' timers */
         if (sys_event(&e, wait) > 0) handle_event(&e);
         js_run_timers();

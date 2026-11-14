@@ -142,7 +142,6 @@ void kmain(uint32_t magic, uint64_t mbi) {
     task_create_kernel("USB", usb_thread, 0);
     task_create_kernel("Network", net_thread, 0);
     task_create_kernel("Log", log_thread, 0);
-    task_spawn("about");
     boot_progress(100);
     sleep_ms(400);
     LOG_OK("Starting desktop\n");
