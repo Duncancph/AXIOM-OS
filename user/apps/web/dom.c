@@ -51,6 +51,7 @@ static void script_begin(void) { run_start = sys_time(); cyc_begin = cyc(); }
 static void script_end(void) { if (cyc_begin) page_cycles += cyc() - cyc_begin; cyc_begin = 0; }
 static uint64_t page_cpu_ms(void) { return (page_cycles + (cyc_begin ? cyc() - cyc_begin : 0)) / cycles_per_ms(); }
 static bool skip_said;
+static struct node *squeue[512]; static int nsq, sqpos; static bool sq_active;
 static void scripts_off(const char *why) { con_add("[stopped] ", why); page_on = false; }
 /* Called often while a script runs: stops scripts that run too long, and keeps the window answering
  * (the close button quits, Esc stops the page's scripts). */
@@ -735,12 +736,31 @@ void js_page_start(struct doc *d) {
     page_deadline = sys_time() + 15000; skip_said = false; page_cycles = 0; cyc_begin = 0;
     run_code(dom_prelude, sizeof dom_prelude - 1, "web prelude");
     call_api("start", 0, 0);
-    for (int i = 0; i < ns && page_on; i++) run_script_node(list[i]);
-    call_api("loaded", 0, 0);                             /* DOMContentLoaded, then load */
-    after_task();
+    /* the page's scripts run one at a time from Web's main loop (js_page_step), so the window keeps
+     * answering - scrolling, clicks, Esc, closing - while a big site downloads and runs dozens of them */
+    for (int i = 0; i < ns; i++) squeue[i] = list[i];
+    nsq = ns; sqpos = 0; sq_active = true;
+}
+
+bool js_scripts_pending(void) { return sq_active; }
+void js_stop_scripts(void) { if (sq_active && page_on) scripts_off("stopped with Esc"); }
+/* run the next of the page's scripts; false when there are none left (then "loaded" fires) */
+bool js_page_step(char *status, int n) {
+    if (!sq_active) return false;
+    if (page_on && sqpos < nsq) {
+        struct node *s = squeue[sqpos++];
+        const char *src = node_attr(s, "src");
+        ksnprintf(status, n, "Running the page's scripts: %d of %d%s%s  (Esc stops them)", sqpos, nsq, src ? " - " : "", src ? src : "");
+        run_script_node(s);
+        return true;
+    }
+    sq_active = false;
+    if (page_on) { call_api("loaded", 0, 0); after_task(); }  /* DOMContentLoaded, then load */
+    return false;
 }
 
 void js_page_end(void) {
+    sq_active = false; nsq = sqpos = 0;
     if (!rt) { page_on = false; return; }
     page_on = false;
     for (int i = 0; i < MAXT; i++) { js_unroot(rt, &timers[i].fn); timers[i].used = false; }

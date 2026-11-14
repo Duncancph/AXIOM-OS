@@ -697,10 +697,7 @@ static void show_doc(struct doc *d) {
     set_title();
     if (d->root) {                                         /* then run its scripts (they may change it) */
         need_draw = true;
-        strncpy0(status_text, "Running the page's scripts... (Esc stops them)", sizeof status_text);
-        draw();
-        js_page_start(d);
-        status_text[0] = 0;
+        js_page_start(d);                                  /* starts them; Web's main loop runs them one by one */
         if (need_layout || need_cascade) relayout();
     }
 }
@@ -1504,7 +1501,8 @@ static void handle_event(struct dunc_event *e) {
             if (popup) { if (popup_hover < popup_first) popup_first = popup_hover; if (popup_hover >= popup_first + 12) popup_first = popup_hover - 11; }
             draw(); return;
         }
-        if (k == 27 && (loading || fetch_depth)) { abort_fetch = true; return; }
+        if (k == 27 && (loading || fetch_depth)) { abort_fetch = true; js_stop_scripts(); return; }
+        if (k == 27 && js_scripts_pending()) { js_stop_scripts(); return; }
         if (addr_focus) {
             if (k == '\n') { if (alen) open_typed(addr); return; }
             else if (k == 27) addr_focus = false;
@@ -1554,6 +1552,22 @@ int main(void) {
             continue;
         }
         struct dunc_event e;
+        if (js_scripts_pending()) {                        /* the page's scripts, one per turn, answering events in between */
+            while (sys_event(&e, 0) > 0 && !quit && !pend) handle_event(&e);
+            if (quit || pend) continue;
+            static uint64_t last_lay;
+            char st[220];
+            bool more = js_page_step(st, sizeof st);
+            if (more) {
+                strncpy0(status_text, st, sizeof status_text);
+                if ((need_layout || need_cascade) && sys_time() - last_lay > 1000) { relayout(); last_lay = sys_time(); }
+            } else {
+                strncpy0(status_text, page_status, sizeof status_text);
+                if (need_layout || need_cascade) relayout();
+            }
+            draw();
+            continue;
+        }
         if (need_layout) {                                 /* lay out again once the events (e.g. a resize drag) settle */
             if (sys_event(&e, 0) > 0) { handle_event(&e); continue; }
             if (sys_time() - last_layout_t < 200 && next_image()) { /* images still coming: not too often */ }
