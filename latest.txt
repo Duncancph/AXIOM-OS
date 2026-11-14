@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 56
-notes JavaScript in Web (Web 0.4): scripts on web pages now run; script errors at about:console
-file kernel b56/thane.elf.gz 13028448 22bccb0032cd08447a5196cd5e272acd56da493b56aac208d983b5bbccceb381
-file initrd b56/initrd.tar.gz 1228800 e980343131fedf3d343e9cdb27ebd27c3e5a43cabee1f1915894e980aed91ad4
-file bootx64 b56/bootx64.efi.gz 1482752 98497ad9f01e43ebd7c2f7d02e49e28a288ca8119cc42ac3cd9e487cb31806c4
-file biosboot b56/biosboot.img.gz 168649 749ae1d553e187dfb468a621bd6bbeaab0347898690d4f00e57505f6fe92baa1
-signature 3045022100a6c5fd204c84fb734b921cd2444f3fe18ccbcdfe678602995dcefe34ed6d750602206fddc7947a60635f1e64cefd940b05bb4d6194f276ffa16dbfcd5047b6bc7fea
+build 58
+notes Alt+Tab, window snapping, Settings > Personalise, screen sizes in the boot menu
+file kernel b58/thane.elf.gz 13201008 466674a16cc2a6b898d0b3449545f63ac112b7d792b4c0538c5de9ad84370851
+file initrd b58/initrd.tar.gz 1249280 3e92bce6c1818831366c9435cc1c7ce70c392a4539979fb8ef7a80bda22eba4f
+file bootx64 b58/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b58/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3046022100fd29a1a6ca4b4e8020b9e52e1612a4ef8a737f79792a97989fd4b60f7be0e8dc022100a3c3506033d63486d8c790865e035d8cc6a5a4ac8742954b1951a677f82be831
