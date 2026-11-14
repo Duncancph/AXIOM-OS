@@ -103,6 +103,7 @@ void sleep_ms(uint64_t ms);
 void udelay(uint64_t us);
 /* keymap.c */
 void kbd_hid_key(uint8_t usage, uint8_t mods);
+void desktop_emergency(const char *const *lines, int n);
 void kbd_super(bool down);
 void kbd_ps2_scancode(uint8_t sc);
 void kbd_set_layout(const char *id);

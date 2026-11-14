@@ -3,7 +3,7 @@ LD      := ld
 NASM    := nasm
 COMMON  := -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -Wno-type-limits -ffreestanding -fno-builtin \
            -fno-stack-protector -fno-pic -fno-pie -mgeneral-regs-only -m64 -nostdlib -fno-tree-loop-distribute-patterns
-KCFLAGS := $(COMMON) -mno-red-zone -mcmodel=small -Icommon
+KCFLAGS := $(COMMON) -fno-omit-frame-pointer -mno-red-zone -mcmodel=small -Icommon
 UCFLAGS := $(COMMON) -mcmodel=large
 LDFLAGS := -n -T src/linker.ld -nostdlib -z max-page-size=0x1000 --no-warn-rwx-segments -z noexecstack
 LIBGCC  := $(shell $(CC) -print-libgcc-file-name)
@@ -29,8 +29,9 @@ all: duncos.iso
 # build number = number of commits; updates must have a higher one than the running system
 BUILD_NUM := $(shell git rev-list --count HEAD 2>/dev/null || echo 0)
 $(shell mkdir -p build; [ "`cat build/build_num 2>/dev/null`" = "$(BUILD_NUM)" ] || echo $(BUILD_NUM) > build/build_num)
-build/k/src/update.o build/k/src/syscall.o build/k/src/shell.o: build/build_num
-build/k/src/update.o build/k/src/syscall.o build/k/src/shell.o: KCFLAGS += -DOS_BUILD=$(BUILD_NUM)
+K_BUILD_OBJS := build/k/src/update.o build/k/src/syscall.o build/k/src/shell.o build/k/src/sched.o build/k/src/idt.o
+$(K_BUILD_OBJS): build/build_num
+$(K_BUILD_OBJS): KCFLAGS += -DOS_BUILD=$(BUILD_NUM)
 
 
 build/k/%.o: %.c $(HDRS)

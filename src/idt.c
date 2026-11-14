@@ -51,6 +51,13 @@ void isr_dispatch(struct frame *f) {
     kprintf("err=%lx rip=%lx rsp=%lx cr2=%lx task=%s\n", f->err, f->rip, f->rsp, cr2, current ? current->name : "boot");
     kprintf("rax=%lx rbx=%lx rcx=%lx rdx=%lx\n", f->rax, f->rbx, f->rcx, f->rdx);
     kprintf("System halted. Press the power button to restart.\n");
+    char a[96], b[96], c[96];
+    ksnprintf(a, sizeof a, "DuncOS stopped: %s (vector %lu) in '%s'", v < 20 ? names[v] : "exception", v, current ? current->name : "boot");
+    ksnprintf(b, sizeof b, "rip=%lx cr2=%lx err=%lx build %d", f->rip, cr2, f->err, OS_BUILD);
+    uint64_t *bp = (uint64_t *)f->rbp; int k = ksnprintf(c, sizeof c, "called from");
+    for (int i = 0; i < 6 && current && current->kstack && (uint8_t *)bp >= current->kstack && (uint64_t)bp + 16 <= current->kstack_top; i++) { k += ksnprintf(c + k, sizeof c - k, " %lx", bp[1]); bp = (uint64_t *)bp[0]; }
+    const char *l[4] = { a, b, c, "Please photograph this for Claude. Press the power button to restart." };
+    desktop_emergency(l, 4);
     for (;;) __asm__ volatile("cli; hlt");
 }
 

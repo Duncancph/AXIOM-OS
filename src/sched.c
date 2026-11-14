@@ -128,8 +128,13 @@ static void account(void) {
 }
 uint64_t cpu_time_us(void) { account(); return uptime_us(); }
 
+static volatile uint64_t last_sched_ms;
+static bool stall_reported;
+
 void schedule(void) {
+    __asm__ volatile("cli");
     uint64_t now = uptime_ms();
+    last_sched_ms = now; stall_reported = false;
     for (int i = 0; i < MAX_TASKS; i++) {
         struct task *t = &tasks[i];
         if ((t->state == PS_SLEEPING || t->state == PS_BLOCKED) && t->wake_at && now >= t->wake_at) {
@@ -143,7 +148,7 @@ void schedule(void) {
         if (t != idle_task && (t->state == PS_READY || (t == current && t->state == PS_RUNNING))) { next = t; break; }
     }
     if (!next) next = idle_task;
-    if (next == current) { current->state = PS_RUNNING; return; }
+    if (next == current) { current->state = PS_RUNNING; if (!current->user) __asm__ volatile("sti"); return; }
     struct task *prev = current;
     account();
     if (prev->state == PS_RUNNING) prev->state = PS_READY;
@@ -152,6 +157,7 @@ void schedule(void) {
     tss_set_rsp0(next->kstack_top);
     if (read_cr3() != (uint64_t)next->pml4) write_cr3((uint64_t)next->pml4);
     switch_to(&prev->rsp, next->rsp);
+    if (!current->user) __asm__ volatile("sti");     /* see thread_entry */
 }
 
 void task_yield(void) { schedule(); }
@@ -213,9 +219,26 @@ void event_push(struct task *t, const struct dunc_event *ev) {
     if (t->state == PS_BLOCKED && t->waiting_event) { t->state = PS_READY; t->wake_at = 0; }
 }
 
+/* Watchdog: kernel code isn't preempted, so a kernel thread that never yields freezes everything.
+ * After 5 s without a task switch, show where it is stuck (on screen and in the log) to help find it. */
+static void report_stall(struct frame *f) {
+    char l[6][96]; const char *lines[6]; int n = 0;
+    ksnprintf(l[n++], 96, "DuncOS is stuck: '%s' has been running for %lu s", current ? current->name : "?", (uptime_ms() - last_sched_ms) / 1000);
+    ksnprintf(l[n++], 96, "at %lx, build %d (please photograph this for Claude)", f->rip, OS_BUILD);
+    uint64_t *bp = (uint64_t *)f->rbp; char b[96]; int k = ksnprintf(b, sizeof b, "called from");
+    for (int i = 0; i < 6 && current && current->kstack && (uint8_t *)bp >= current->kstack && (uint64_t)bp + 16 <= current->kstack_top; i++) {
+        k += ksnprintf(b + k, sizeof b - k, " %lx", bp[1]);
+        bp = (uint64_t *)bp[0];
+    }
+    strncpy0(l[n++], b, 96);
+    for (int i = 0; i < n; i++) { lines[i] = l[i]; kprintf("[stuck] %s\n", l[i]); }
+    desktop_emergency(lines, n);
+}
+
 void sched_tick(struct frame *f) {
     sched_ticks++;
     lapic_eoi();
+    if ((f->cs & 3) == 0 && last_sched_ms && !stall_reported && uptime_ms() - last_sched_ms > 5000) { stall_reported = true; report_stall(f); }
     if ((f->cs & 3) == 3) {
         schedule();
         if (current->killed) task_exit(-1);

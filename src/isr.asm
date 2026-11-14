@@ -80,6 +80,7 @@ switch_to:
 ; First run of a kernel thread: rbx = function, r12 = argument
 global thread_entry
 thread_entry:
+    sti                     ; kernel threads run with the timer on (for the watchdog; it never preempts them)
     mov rdi, r12
     call rbx
     xor edi, edi

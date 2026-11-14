@@ -18,7 +18,7 @@ struct rtl {
     uint32_t rx_cur, tx_cur;
     bool gen_g;
     uint16_t isr_seen;                   /* status bits seen since the last packet */
-    uint64_t last_rx;
+    uint64_t last_rx, last_restart;
     int restarts;
 };
 
@@ -89,8 +89,10 @@ static void r_poll(struct netif *n) {
      * some chips don't carry on by themselves, so restart the card (the link stays up). */
     uint64_t now = uptime_ms();
     /* (Also if nothing at all has arrived for 15 s: a network always has some broadcasts.) */
-    if (r8(t, 0x6C) & 2 && ((t->isr_seen & 0x50 && now - t->last_rx > 2000) || now - t->last_rx > 15000)) {
-        if (t->restarts++ < 5) LOG_WARN("rtl8168: receiving stopped after %lu packets (status %04x); restarting the card\n", n->rx_packets, t->isr_seen);
+    if (r8(t, 0x6C) & 2 && now - t->last_restart > 30000 && t->restarts < 20 &&
+        ((t->isr_seen & 0x50 && now - t->last_rx > 2000) || now - t->last_rx > 30000)) {
+        t->last_restart = now;
+        if (t->restarts++ < 5) LOG_WARN("rtl8168: receiving stopped after %lu packets (status %04x); restarting the card (%d)\n", n->rx_packets, t->isr_seen, t->restarts);
         start_hw(t);
     }
 }
@@ -100,7 +102,10 @@ static bool r_link(struct netif *n) { return r8(n->priv, 0x6C) & 2; }
 /* reset the MAC, give it fresh descriptor rings and start receiving and sending */
 static void start_hw(struct rtl *t) {
     bool gen_g = t->gen_g;
+    /* stop the way Linux does before a reset: close the receive gate, stop RX/TX, let the FIFOs drain */
     if (gen_g) w32(t, 0xF0, r32(t, 0xF0) | (1u << 19));   /* MISC: RXDV gate on while resetting */
+    w8(t, 0x37, 0);
+    for (int i = 0; i < 100 && gen_g && (r8(t, 0xD3) & 0x30) != 0x30; i++) udelay(100);   /* MCU: RX + TX FIFO empty */
     w8(t, 0x37, 0x10);                   /* reset */
     for (int i = 0; i < 1000 && (r8(t, 0x37) & 0x10); i++) udelay(1000);
     for (int i = 0; i < NRX; i++) {

@@ -58,7 +58,7 @@ static const char *CROWN[12] = {   /* from desktop_highland.c */
 static void fetch(void) {
     struct sysinfo s; sys_sysinfo(&s);
     char v[6][48];
-    ksnprintf(v[0], 48, "DuncOS 0.1");
+    ksnprintf(v[0], 48, "DuncOS %s, build %ld", strncmp(s.kernel, "Thane ", 6) ? s.kernel : s.kernel + 6, sys_call(SYS_UPDATE, UPDATE_BUILD, 0, 0, 0, 0));
     ksnprintf(v[1], 48, "%s", s.kernel);
     ksnprintf(v[2], 48, "castle");
     ksnprintf(v[3], 48, "%lu min", s.uptime_ms / 60000);

@@ -190,6 +190,16 @@ static void flush_rect(struct rect r) {
     if (overlap(r, (struct rect){ mx - cur_hx, my - cur_hy, 13, 19 })) cursor_paint(mx, my, true);
 }
 
+/* draw a message straight onto the screen (used by the watchdog when the system is stuck) */
+void desktop_emergency(const char *const *lines, int n) {
+    if (!bb || !fb32) return;
+    struct canvas c = { bb, W, H, W, 0, 0, W, H };
+    int h = 16 + n * 20;
+    gfx_fill(&c, 20, H - 120 - h, W - 40 > 780 ? 780 : W - 40, h, 0x7F1D1D);
+    for (int i = 0; i < n; i++) gfx_mono_text(&c, 30, H - 120 - h + 8 + i * 20, lines[i], 0xFFFFFF);
+    flush_rect((struct rect){ 20, H - 120 - h, W - 40 > 780 ? 780 : W - 40, h });
+}
+
 static void set_cursor(bool resize) {
     const char **img = resize ? cursor_resize : cursor_img;
     if (img == cur_img) return;

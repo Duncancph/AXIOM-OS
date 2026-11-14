@@ -35,7 +35,7 @@ static void draw(void) {
     gfx_vgrad(c, 0, 0, WW, WH, 0x0A1428, 0x06080F);
     block(crown, 5, 22, UI_GOLD);
     block(title, 5, 118, UI_ACCENT);
-    gfx_text_center(c, &font_ui_bold, 0, WW, 222, 0xF0F0F0, "~ Thane Kernel v0.1 ~");
+    gfx_text_center(c, &font_ui_bold, 0, WW, 222, 0xF0F0F0, "~ Thane Kernel v0.2 ~");
     gfx_text_center(c, &font_ui, 0, WW, 242, 0x6B7280, "Created by Bryan Duncan");
 
     struct sysinfo s; sys_sysinfo(&s);
