@@ -21,7 +21,7 @@ console.log(Object.create(null), Object.assign(Object.create(null), { a: 1 }));
 console.log({ get g() { return 1; }, set s(v) {}, get gs() { return 1; }, set gs(v) {} });
 console.log([1.5, -2.25, 1e-7, 2 ** 60], { n: -0 }, [0.1 + 0.2]);
 console.log('%s is %d years and %i, %f', 'Bob', 42.5, 42.5, '3.5', 'extra', { o: 1 });
-console.log('%o and %O and %j', [1], { a: { b: { c: { d: 1 } } } }, { j: 1 }, '%% done %c styled', 'color: red');
+console.log('%o and %O and %j', 42, { a: { b: { c: { d: 1 } } } }, { j: 1 }, '%% done %c styled', 'color: red');
 console.log('100%', '%x unknown', '%s');
 console.log([undefined, null], { u: undefined, n: null, f() {}, arrow: () => 1, [Symbol('k')]: 'symval' });
 console.log([[1, 2], [3, 4]], { matrix: [[1, 0, 0], [0, 1, 0], [0, 0, 1]] });

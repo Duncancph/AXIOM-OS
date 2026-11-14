@@ -58,6 +58,7 @@ js_rt *js_new(const struct js_host *host) {
     }
     for (int i = 0; i < S__COUNT; i++) {
         JSSymbol *s = (JSSymbol *)gc_alloc(rt, sizeof(JSSymbol), GC_SYM);
+        s->cls = JS_UNDEF;
         s->desc = mkstr(str_cstr(rt, sym_names[i]));
         s->hash = (uint32_t)(++rt->sym_counter * 2654435761u) | 1;
         rt->syms[i] = mksym(s);
@@ -89,8 +90,10 @@ void js_free(js_rt *rt) {
             JSObject *o = (JSObject *)h;
             free(o->props);
             free(o->hidx);
-            if (o->cls == CLS_ARRAY || o->cls == CLS_ARGUMENTS)
+            if (o->cls == CLS_ARRAY || o->cls == CLS_ARGUMENTS) {
                 free(o->u.arr.elems);
+                free(o->u.arr.pmap);
+            }
             else if (o->cls == CLS_BOUND)
                 free(o->u.bound.args);
             else if (o->cls != CLS_HOST)

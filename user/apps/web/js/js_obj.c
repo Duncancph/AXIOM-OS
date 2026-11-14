@@ -107,7 +107,8 @@ static inline Prop *find_raw(JSObject *o, jsval key) {
 
 Prop *find_own(js_rt *rt, JSObject *o, jsval key) {
     if (UNLIKELY(o->oflags & OF_LAZY) &&
-        (key == ATOM(length) || key == ATOM(name) || key == ATOM(prototype)))
+        (key == ATOM(length) || key == ATOM(name) || key == ATOM(prototype) || key == ATOM(arguments) ||
+         key == ATOM(caller)))
         materialize_fn(rt, o);
     return find_raw(o, key);
 }
@@ -250,6 +251,10 @@ void materialize_fn(js_rt *rt, JSObject *o) {
     add_prop(rt, o, ATOM(length), mknum(fp->length), P_C);
     add_prop(rt, o, ATOM(name), is_undef(fp->name) ? ATOM(empty) : fp->name, P_C);
     uint32_t f = fp->flags;
+    if (!(f & (FP_STRICT | FP_ARROW | FP_METHOD | FP_GENERATOR | FP_ASYNC | FP_GETSET | FP_CLASS_CTOR))) {
+        add_prop(rt, o, ATOM(arguments), JS_NULL, 0);
+        add_prop(rt, o, ATOM(caller), JS_NULL, 0);
+    }
     if (f & FP_GENERATOR) {
         JSObject *p = new_object(rt, rt->intr[(f & FP_ASYNC) ? I_AsyncGeneratorProto : I_GeneratorProto], CLS_OBJECT);
         add_prop(rt, o, ATOM(prototype), mkobj(p), P_W);
@@ -369,7 +374,11 @@ static int lookup_own(js_rt *rt, JSObject *o, jsval key, jsval *out, Accessor **
         case CLS_ARGUMENTS: {
             int64_t ix = key_index(rt, key);
             if (ix >= 0 && ix < o->u.arr.len && o->u.arr.elems[ix] != JS_HOLE) {
-                *out = o->u.arr.elems[ix];
+                uint16_t *pm = o->u.arr.pmap;
+                if (pm && ix < pm[0] && pm[1 + ix] != 0xFFFF)
+                    *out = o->u.arr.menv->slots[pm[1 + ix]];
+                else
+                    *out = o->u.arr.elems[ix];
                 return 1;
             }
             break;
@@ -481,7 +490,7 @@ jsval get_c(js_rt *rt, jsval obj, const char *key) { return get_p(rt, obj, atom_
 jsval get_idx(js_rt *rt, jsval obj, uint32_t i) {
     if (is_obj(obj)) {
         JSObject *o = vobj(obj);
-        if ((o->cls == CLS_ARRAY && !(o->oflags & OF_SLOW_ARRAY)) || o->cls == CLS_ARGUMENTS) {
+        if ((o->cls == CLS_ARRAY && !(o->oflags & OF_SLOW_ARRAY)) || (o->cls == CLS_ARGUMENTS && !o->u.arr.pmap)) {
             if (i < o->u.arr.len && o->u.arr.elems[i] != JS_HOLE) return o->u.arr.elems[i];
         }
     } else if (is_str(obj)) {
@@ -640,6 +649,14 @@ int set_prop(js_rt *rt, jsval obj, jsval key, jsval val, jsval receiver, bool th
                         array_make_slow(rt, o);
                     }
                 }
+            } else if (o->cls == CLS_ARGUMENTS && mkobj(o) == receiver) {
+                int64_t ix = key_index(rt, key);
+                if (ix >= 0 && ix < o->u.arr.len && o->u.arr.elems[ix] != JS_HOLE) {
+                    o->u.arr.elems[ix] = val;
+                    uint16_t *pm = o->u.arr.pmap;
+                    if (pm && ix < pm[0] && pm[1 + ix] != 0xFFFF) o->u.arr.menv->slots[pm[1 + ix]] = val;
+                    return 1;
+                }
             } else if (o->cls == CLS_TYPEDARRAY) {
                 int64_t ix = key_index(rt, key);
                 if (ix >= 0) {
@@ -764,7 +781,8 @@ int get_own_desc(js_rt *rt, JSObject *o, jsval key, PropDesc *d) {
         case CLS_ARGUMENTS: {
             int64_t ix = key_index(rt, key);
             if (ix >= 0 && ix < o->u.arr.len && o->u.arr.elems[ix] != JS_HOLE) {
-                d->value = o->u.arr.elems[ix];
+                uint16_t *pm = o->u.arr.pmap;
+                d->value = (pm && ix < pm[0] && pm[1 + ix] != 0xFFFF) ? o->u.arr.menv->slots[pm[1 + ix]] : o->u.arr.elems[ix];
                 d->flags = P_DEFAULT;
                 d->has = HAS_VALUE | HAS_W | HAS_E | HAS_C;
                 return 1;
@@ -930,8 +948,10 @@ int define_own(js_rt *rt, JSObject *o, jsval key, PropDesc *d, bool th) {
         } else if (o->cls == CLS_ARGUMENTS) {
             int64_t ix = key_index(rt, key);
             if (ix >= 0 && ix < o->u.arr.len && o->u.arr.elems[ix] != JS_HOLE) {
-                /* move element to an ordinary property */
-                jsval v = o->u.arr.elems[ix];
+                /* move element to an ordinary property (and unmap it) */
+                uint16_t *pm = o->u.arr.pmap;
+                jsval v = (pm && ix < pm[0] && pm[1 + ix] != 0xFFFF) ? o->u.arr.menv->slots[pm[1 + ix]] : o->u.arr.elems[ix];
+                if (pm && ix < pm[0]) pm[1 + ix] = 0xFFFF;
                 o->u.arr.elems[ix] = JS_HOLE;
                 add_prop(rt, o, key, v, P_DEFAULT);
             }
@@ -1119,6 +1139,7 @@ int delete_prop(js_rt *rt, jsval obj, jsval key, bool th) {
             int64_t ix = key_index(rt, key);
             if (ix >= 0 && ix < o->u.arr.len && o->u.arr.elems[ix] != JS_HOLE) {
                 o->u.arr.elems[ix] = JS_HOLE;
+                if (o->u.arr.pmap && ix < o->u.arr.pmap[0]) o->u.arr.pmap[1 + ix] = 0xFFFF;
                 return 1;
             }
         } else if (o->cls == CLS_STRING) {
@@ -1729,17 +1750,7 @@ JSString *val_brief(js_rt *rt, jsval v) {
     if (is_sym(v)) return vstr(key_to_display(rt, v));
     if (!is_obj(v)) return to_string_prim(rt, v);
     JSObject *o = vobj(v);
-    if (o->oflags & OF_CALLABLE) {
-        SB b;
-        sb_init(&b, rt);
-        jsval n = func_name_of(rt, o);
-        if (o->oflags & OF_CLASS_CTOR)
-            sb_puts(&b, "class ");
-        else
-            sb_puts(&b, "function ");
-        if (is_str(n)) sb_putstr(&b, vstr(n));
-        return sb_finish(&b);
-    }
+    if (o->oflags & OF_CALLABLE) return func_to_string(rt, o);
     if (o->cls == CLS_ARRAY) return str_cstr(rt, "[object Array]");
     /* #<Ctor> */
     SB b;

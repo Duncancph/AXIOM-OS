@@ -615,7 +615,7 @@ double js_pow(double x, double y) {
     w = v - (z - u);
     t = z * z;
     t1 = z - t * (P1 + t * (P2 + t * (P3 + t * (P4 + t * P5))));
-    r = (z * t1) / (t1 - 2.0) - (w + z * w);
+    r = (z * t1) / ((t1 - 2.0) - (w + z * w)); /* sic: V8's variant of fdlibm (results must match node) */
     z = 1.0 - (r - z);
     j = HI(z);
     j += (int32_t)((uint32_t)n << 20);
@@ -1102,7 +1102,7 @@ double js_atan2(double y, double x) {
     ly = LO(y);
     iy = hy & 0x7fffffff;
     if (x != x || y != y) return JS_NAN;
-    if (((hx - 0x3ff00000) | lx) == 0) return js_atan(y);
+    if ((((uint32_t)hx - 0x3ff00000u) | lx) == 0) return js_atan(y);
     m = ((hy >> 31) & 1) | ((hx >> 30) & 2);
     if ((iy | ly) == 0) {
         switch (m) {
@@ -1245,7 +1245,7 @@ double js_acosh(double x) {
         if (hx >= 0x7ff00000) return x + x;
         return js_log(x) + ln2;
     }
-    if (((hx - 0x3ff00000) | lx) == 0) return 0.0;
+    if ((((uint32_t)hx - 0x3ff00000u) | lx) == 0) return 0.0;
     if (hx > 0x40000000) {
         t = x * x;
         return js_log(2.0 * x - 1.0 / (x + js_sqrt(t - 1.0)));

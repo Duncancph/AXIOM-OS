@@ -37,6 +37,8 @@ typedef struct FS {
     int args_slot, rest_slot;
     jsval pending_labels[8];
     int npending;
+    Node *pat_src; /* source expression of the value being destructured (error messages) */
+    int pat_nested;
 } FS;
 
 struct CG {
@@ -538,6 +540,35 @@ static void describe(FS *fs, SB *b, Node *n, int depth) {
         sb_puts(b, "(...)");
         return;
     case N_OPTCHAIN: describe(fs, b, n->a, depth); return;
+    case N_NUM: {
+        char t[40];
+        int k = num_to_cstr(n->u.num, t);
+        sb_putn(b, t, (uint32_t)k);
+        return;
+    }
+    case N_STR:
+        sb_puts(b, "\"");
+        sb_putstr(b, vstr(n->u.atom));
+        sb_puts(b, "\"");
+        return;
+    case N_UNARY:
+        if (n->u.op == OPR_VOID && n->a->kind == N_NUM) {
+            sb_puts(b, "(void ");
+            describe(fs, b, n->a, depth + 1);
+            sb_puts(b, ")");
+            return;
+        }
+        if (n->u.op == OPR_NEG && n->a->kind == N_NUM) {
+            sb_puts(b, "-");
+            describe(fs, b, n->a, depth + 1);
+            return;
+        }
+        sb_puts(b, "(intermediate value)");
+        return;
+    case N_NULL: sb_puts(b, "null"); return;
+    case N_TRUE: sb_puts(b, "true"); return;
+    case N_FALSE: sb_puts(b, "false"); return;
+    case N_OBJECT: sb_puts(b, n->a ? "{(intermediate value)}" : "{}"); return;
     default: sb_puts(b, "(intermediate value)"); return;
     }
 }
@@ -549,12 +580,27 @@ static uint32_t desc_const(FS *fs, Node *callee) {
     return cst(fs, atomize(fs->rt, s));
 }
 
+/* constant holding the message "<expr> is not iterable" for a value produced by n */
+static uint32_t iter_desc(FS *fs, Node *n) {
+    SB b;
+    sb_init(&b, fs->rt);
+    if (n->kind == N_CALL) {
+        describe(fs, &b, n->a, 0);
+        sb_puts(&b, " is not a function or its return value is not iterable");
+    } else {
+        describe(fs, &b, n, 0);
+        sb_puts(&b, " is not iterable");
+    }
+    return cst(fs, atomize(fs->rt, sb_finish(&b)));
+}
+
 static void gen_args_array(FS *fs, Node *args) {
     op(fs, OP_NEW_ARRAY);
     for (Node *a = args; a; a = a->next) {
         if (a->kind == N_SPREAD) {
             gen_expr(fs, a->a);
             op(fs, OP_ARRAY_SPREAD);
+            u32_(fs, 0xFFFFFFFEu);
         } else {
             gen_expr(fs, a);
             op(fs, OP_ARRAY_APPEND);
@@ -810,6 +856,7 @@ static void gen_array(FS *fs, Node *n) {
         else if (e->kind == N_SPREAD) {
             gen_expr(fs, e->a);
             op(fs, OP_ARRAY_SPREAD);
+            u32_(fs, iter_desc(fs, e->a));
         } else {
             gen_expr(fs, e);
             op(fs, OP_ARRAY_APPEND);
@@ -1335,6 +1382,7 @@ static void gen_expr(FS *fs, Node *n) {
             new_local(fs);
             loc_op(fs, OP_ITER_INIT, k);
             u8_(fs, 0);
+            u32_(fs, 0xFFFFFFFFu);
             op(fs, OP_PUSH_UNDEF);
             op(fs, OP_PUSH_I8);
             u8_(fs, 0);
@@ -1444,11 +1492,16 @@ static void gen_pattern(FS *fs, Node *pat, int mode) {
         gen_target_store(fs, pat, mode);
         return;
     }
+    Node *src = fs->pat_src;
+    int nested = fs->pat_nested;
+    fs->pat_src = 0;
+    fs->pat_nested = 1;
     if (pat->kind == N_ARRAY_PAT) {
         int k = new_local(fs);
         new_local(fs);
         loc_op(fs, OP_ITER_INIT, k);
         u8_(fs, 0);
+        u32_(fs, src && !nested ? iter_desc(fs, src) : 0xFFFFFFFFu);
         for (Node *e = pat->a; e; e = e->next) {
             if (e->kind == N_HOLE) {
                 loc_op(fs, OP_ITER_VALUE, k);
@@ -1462,10 +1515,24 @@ static void gen_pattern(FS *fs, Node *pat, int mode) {
             }
         }
         loc_op(fs, OP_ITER_CLOSE_IF, k);
+        fs->pat_nested = nested;
         return;
     }
     if (pat->kind == N_OBJECT_PAT) {
         op(fs, OP_REQ_COERCIBLE);
+        {
+            Node *e0 = pat->a;
+            u32_(fs, e0 && e0->kind != N_REST && !(e0->flags & NF_COMPUTED) ? cst(fs, e0->a->u.atom) : 0xFFFFFFFFu);
+            uint32_t d = 0xFFFFFFFFu;
+            if (src && !nested) {
+                SB b;
+                sb_init(&b, fs->rt);
+                describe(fs, &b, src, 0);
+                d = cst(fs, atomize(fs->rt, sb_finish(&b)));
+            }
+            u32_(fs, d);
+            u8_(fs, nested ? 1 : 0);
+        }
         int t = new_local(fs);
         loc_op(fs, OP_PUT_LOC, t);
         bool has_rest = false;
@@ -1515,8 +1582,10 @@ static void gen_pattern(FS *fs, Node *pat, int mode) {
             }
             gen_target_store(fs, target, mode);
         }
+        fs->pat_nested = nested;
         return;
     }
+    fs->pat_nested = nested;
     cg_error(fs, pat->line, "Invalid destructuring assignment target");
 }
 
@@ -1646,6 +1715,7 @@ static void gen_var_decl(FS *fs, Node *n) {
         if (d->b) {
             if (d->a->kind == N_IDENT) infer_name(d->b, d->a->u.atom);
             gen_expr(fs, d->b);
+            fs->pat_src = d->b;
             gen_pattern(fs, d->a, mode);
         } else if (n->u.op != VK_VAR) {
             op(fs, OP_PUSH_UNDEF);
@@ -1674,6 +1744,7 @@ static void gen_for_in_of(FS *fs, Node *n) {
     if (is_of) {
         loc_op(fs, OP_ITER_INIT, k);
         u8_(fs, is_await ? 1 : 0);
+        u32_(fs, iter_desc(fs, n->b));
     } else
         loc_op(fs, OP_FOR_IN_INIT, k);
     c = push_ctl(fs, CT_LOOP);
@@ -2063,6 +2134,13 @@ static void gen_class(FS *fs, ClassNode *cls, jsval inferred) {
         if (b->kind == B_PRIVATE) {
             op(fs, OP_NEW_PRIVATE);
             u32_(fs, cst(fs, b->name));
+            u32_(fs, b->param_index != PK_FIELD ? cst(fs, is_undef(cls->name) ? A(anonymous) : cls->name) : 0xFFFFFFFFu);
+            {
+                bool st = false;
+                for (Node *m = cls->members; m; m = m->next)
+                    if ((m->flags & NF_PRIVATE) && (m->flags & NF_STATIC) && m->a && m->a->kind == N_STR && m->a->u.atom == b->name) st = true;
+                u8_(fs, st ? 1 : 0);
+            }
             put_binding(fs, b, b->name, M_INIT_LET, false);
         }
     for (Node *m = cls->members; m; m = m->next) {
@@ -2135,6 +2213,14 @@ static uint32_t fp_flags(FuncNode *fn) {
     return f;
 }
 
+static bool fn_mapped_args(FuncNode *fn) {
+    if (fn->flags & (FN_STRICT | FN_ARROW)) return false;
+    if (fn->has_rest) return false;
+    for (Node *p = fn->params; p; p = p->next)
+        if (p->kind != N_IDENT || !p->bind) return false;
+    return true;
+}
+
 static FuncProto *compile_fn(FS *parent, FuncNode *fn) {
     js_rt *rt = parent ? parent->rt : 0;
     FS fsv;
@@ -2154,6 +2240,12 @@ static FuncProto *compile_fn(FS *parent, FuncNode *fn) {
     if (check_stack(fs->rt)) cg_error(fs, fn->line, "Maximum call stack size exceeded");
 
     Scope *sc = fn->scope;
+    if (fn->args_b && fn_mapped_args(fn)) {
+        /* sloppy function with simple parameters: arguments[i] aliases parameter i, so parameters
+         * live in the environment, which the arguments object refers to */
+        for (Node *p = fn->params; p; p = p->next)
+            if (p->bind) p->bind->captured = true;
+    }
     prepare_scope(sc);
     fs->nlocals = fn->nparams;
     if (fn->has_rest) fs->rest_slot = new_local(fs);
@@ -2211,6 +2303,15 @@ static FuncProto *compile_fn(FS *parent, FuncNode *fn) {
         op(fs, OP_PUT_ENV);
         u8_(fs, 0);
         u16_(fs, (uint32_t)b->env_idx);
+    }
+    if (fn->args_b && fn_mapped_args(fn)) {
+        idx = 0;
+        for (Node *p = fn->params; p; p = p->next, idx++)
+            if (p->bind && p->bind->captured && p->bind->env_idx >= 0) {
+                op(fs, OP_MAP_ARGS);
+                u8_(fs, (uint32_t)idx);
+                u16_(fs, (uint32_t)p->bind->env_idx);
+            }
     }
     if (fn->name_b) {
         op(fs, OP_PUSH_FUNC);

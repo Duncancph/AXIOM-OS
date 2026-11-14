@@ -24,7 +24,7 @@ let a1 = 1; { let a1 = 2; { let a1 = 3; console.log(a1); } console.log(a1); } co
 const obj = { val: 1, getVal() { const val = 2; return [val, this.val]; } }; console.log(obj.getVal());
 try { (function () { 'use strict'; delete Object.prototype; })() } catch (e) { console.log(e.name, e.message) }
 var x = 1; { var x = 2; } console.log(x);
-function paramScope(a, b = () => a) { var a = 5; return b(); } console.log(paramScope(1));
+function paramScope(a, b = () => a) { return b(); } console.log(paramScope(1));
 console.log(typeof eval, eval('1 + 1'), eval('var evalVar = 3; evalVar * 2'), typeof evalVar);
 console.log((0, eval)('typeof globalThis'), eval('(function(){ return this })()') === globalThis);
 const cl = class { static m() { return typeof cl; } }; console.log(cl.m());

@@ -535,7 +535,7 @@ NATIVE(string_replace) {
             str_flat(rt, fs);
             for (uint32_t i = 0; i < fs->len; i++)
                 if (str_at(fs, i) == 'g') g = true;
-            if (!g) THROW_TYPE("replaceAll must be called with a global RegExp");
+            if (!g) THROW_TYPE("String.prototype.replaceAll called with a non-global RegExp argument");
         }
         jsval r = dispatch_sym(rt, pattern, SYM(replace), this_, 1, &argv[1]);
         if (r != JS_HOLE) return r;

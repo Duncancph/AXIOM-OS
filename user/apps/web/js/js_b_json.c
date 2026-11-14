@@ -166,11 +166,9 @@ static jsval jp_number(JP *p) {
 }
 
 static bool jp_lit(JP *p, const char *w) {
-    uint32_t n = (uint32_t)strlen(w);
-    if (p->i + n > p->n) return false;
-    for (uint32_t k = 0; k < n; k++)
-        if (str_at(p->s, p->i + k) != (uint8_t)w[k]) return false;
-    p->i += n;
+    /* on mismatch p->i is left at the offending character (or the end) for the error message */
+    for (; *w; w++, p->i++)
+        if (p->i >= p->n || str_at(p->s, p->i) != (uint8_t)*w) return false;
     return true;
 }
 
@@ -190,9 +188,10 @@ static jsval jp_value(JP *p, int depth) {
             rt->sp = root;
             return mkobj(o);
         }
-        for (;;) {
+        for (bool first = true;; first = false) {
             jp_ws(p);
-            if (p->i >= p->n || str_at(p->s, p->i) != '"') return jp_error(p, "Expected property name or '}'");
+            if (p->i >= p->n || str_at(p->s, p->i) != '"')
+                return jp_error(p, first ? "Expected property name or '}'" : "Expected double-quoted property name");
             jsval k = jp_string(p);
             TRY(k);
             k = atomize(rt, vstr(k));
@@ -887,6 +886,7 @@ static JSString *reduce_single(IC *c, JSObject *out, JSString *base, const char 
                                bool has_more, JSObject *value) {
     js_rt *rt = c->rt;
     uint32_t entries = out->u.arr.len;
+    if (entries == 0) return base->len ? jsfmt(rt, "%S %s%s", base, b0, b1) : jsfmt(rt, "%s%s", b0, b1);
     if (is_array_type && entries > 6) out = group_array(c, out, has_more, value);
     if (c->cur_depth - rec < 3 && entries == out->u.arr.len) {
         uint32_t start = out->u.arr.len + (uint32_t)c->indent + (uint32_t)strlen(b0) + base->len + 10;
@@ -1182,6 +1182,7 @@ static JSString *ins_obj(IC *c, JSObject *o, int rec) {
             } else {
                 v = o->u.arr.elems[i];
                 hole = v == JS_HOLE;
+                if (!hole && o->cls == CLS_ARGUMENTS && o->u.arr.pmap) v = get_idx(rt, mkobj(o), i);
             }
             if (hole) {
                 uint32_t j = i;

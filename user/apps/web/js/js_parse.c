@@ -1391,7 +1391,7 @@ static Node *to_pattern(P *p, Node *e, bool binding) {
     }
     default: break;
     }
-    p_error_line(p, e->line, binding ? "Invalid destructuring assignment target" : "Invalid left-hand side in assignment");
+    p_error_line(p, e->line, "Invalid destructuring assignment target");
 }
 
 /* check that an object literal used as expression has no CoverInitializedName */
@@ -2506,6 +2506,10 @@ static Node *parse_class(P *p, bool is_expr) {
         if (!(m->flags & (NF_COMPUTED | NF_PRIVATE)) && (m->a->u.atom == A(constructor) || (is_static && m->a->u.atom == A(prototype))))
             p_error(p, "Classes may not have a field named '%S'", vstr(m->a->u.atom));
         m->u.op = PK_FIELD;
+        if (m->flags & NF_PRIVATE) {
+            Binding *pb = find_in(cs, m->a->u.atom);
+            if (pb) pb->param_index = PK_FIELD;
+        }
         FuncNode **target = is_static ? &cls->static_init : &cls->field_init;
         if (!*target) *target = synth_func(p, FN_METHOD | (is_static ? FN_STATIC_INIT : FN_FIELD_INIT), cs);
         FuncNode *ifn = *target;

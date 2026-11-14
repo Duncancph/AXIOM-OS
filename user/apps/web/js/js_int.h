@@ -70,6 +70,7 @@ typedef struct JSSymbol {
     GCHdr h; /* flags: 1 = private name, 2 = registered (Symbol.for) */
     uint32_t hash;
     jsval desc; /* string or undefined */
+    jsval cls;  /* private methods/accessors: name of the declaring class (brand check message) */
 } JSSymbol;
 
 typedef struct JSBig { /* BigInt: sign + magnitude */
@@ -129,7 +130,7 @@ typedef struct JSObject {
     uint32_t hmask;
     uint32_t _r2;
     union {
-        struct { jsval *elems; uint32_t len, cap; } arr; /* Array, Arguments */
+        struct { jsval *elems; uint32_t len, cap; struct Env *menv; uint16_t *pmap; } arr; /* Array, Arguments (menv/pmap: mapped arguments) */
         struct { struct FuncProto *fp; Env *env; struct JSObject *home; struct JSObject *fields; } fn;
         struct { js_native fn; void *data; jsval name; int32_t length; uint8_t api; } nat;
         struct { jsval target, bthis; jsval *args; uint32_t nargs; } bound;

@@ -803,6 +803,32 @@ static JS_NOINLINE int copy_data_props(js_rt *rt, jsval target, jsval src, jsval
     return 0;
 }
 
+/* throw a source-describing "is not iterable" error before iterating obj (msg: string constant, or
+ * undefined for the generic message; call spread uses its own message) */
+static int iter_precheck(js_rt *rt, jsval obj, jsval msg, bool call_spread) {
+    if (!call_spread && !is_str(msg)) return 0;
+    if (is_nullish(obj)) {
+        if (call_spread) {
+            throw_error(rt, E_TYPE, "%S is not iterable (cannot read property %S)", val_brief(rt, obj), val_brief(rt, obj));
+            return -1;
+        }
+    } else {
+        if (is_obj(obj) && vobj(obj)->cls == CLS_ARRAY) return 0;
+        if (is_str(obj)) return 0;
+        jsval *root = push_tmp(rt, obj);
+        jsval m = get_v(rt, obj, SYM(iterator));
+        rt->sp = root;
+        if (m == JS_EXC) return -1;
+        if (is_callable(m)) return 0;
+        if (call_spread) {
+            throw_error(rt, E_TYPE, "Spread syntax requires ...iterable[Symbol.iterator] to be a function");
+            return -1;
+        }
+    }
+    throw_error(rt, E_TYPE, "%S", vstr(msg));
+    return -1;
+}
+
 static JS_NOINLINE int array_spread(js_rt *rt, jsval arr, jsval src) {
     JSObject *a = vobj(arr);
     if (is_obj(src) && vobj(src)->cls == CLS_ARRAY && !(vobj(src)->oflags & OF_SLOW_ARRAY)) {
@@ -989,6 +1015,13 @@ static JS_NOINLINE jsval do_class(js_rt *rt, FuncProto *cfp, bool heritage, jsva
     return mkobj(ctor);
 }
 
+static jsval priv_missing(js_rt *rt, jsval key, const char *verb, const char *prep) {
+    JSSymbol *s = vsym(key);
+    if (s->h.flags & 8) return throw_error(rt, E_TYPE, "Receiver must be class %S", vstr(s->cls));
+    if (s->h.flags & 4) return throw_error(rt, E_TYPE, "Receiver must be an instance of class %S", vstr(s->cls));
+    return throw_error(rt, E_TYPE, "Cannot %s private member %S %s an object whose class did not declare it", verb, vstr(s->desc), prep);
+}
+
 static JS_NOINLINE jsval priv_get(js_rt *rt, jsval obj, jsval key) {
     if (is_obj(obj)) {
         Prop *p = find_own(rt, vobj(obj), key);
@@ -1001,7 +1034,7 @@ static JS_NOINLINE jsval priv_get(js_rt *rt, jsval obj, jsval key) {
             return p->val;
         }
     }
-    return throw_error(rt, E_TYPE, "Cannot read private member %S from an object whose class did not declare it", vstr(vsym(key)->desc));
+    return priv_missing(rt, key, "read", "from");
 }
 static JS_NOINLINE int priv_put(js_rt *rt, jsval obj, jsval key, jsval v) {
     if (is_obj(obj)) {
@@ -1016,14 +1049,14 @@ static JS_NOINLINE int priv_put(js_rt *rt, jsval obj, jsval key, jsval v) {
                 return call_fn(rt, a->set, obj, 1, &v) == JS_EXC ? -1 : 0;
             }
             if (!(p->flags & P_W)) {
-                throw_error(rt, E_TYPE, "Private method is not writable");
+                throw_error(rt, E_TYPE, "Private method '%S' is not writable", vstr(vsym(key)->desc));
                 return -1;
             }
             p->val = v;
             return 0;
         }
     }
-    throw_error(rt, E_TYPE, "Cannot write private member %S to an object whose class did not declare it", vstr(vsym(key)->desc));
+    priv_missing(rt, key, "write", "to");
     return -1;
 }
 static JS_NOINLINE int priv_def(js_rt *rt, jsval obj, jsval key, jsval v, int kind) {
@@ -1051,10 +1084,11 @@ static JS_NOINLINE int priv_def(js_rt *rt, jsval obj, jsval key, jsval v, int ki
     return 0;
 }
 
-static JS_NOINLINE jsval new_private(js_rt *rt, jsval name) {
+static JS_NOINLINE jsval new_private(js_rt *rt, jsval name, jsval cls, int is_static) {
     JSSymbol *s = (JSSymbol *)gc_alloc(rt, sizeof(JSSymbol), GC_SYM);
-    s->h.flags = 1;
+    s->h.flags = 1 | (is_str(cls) ? 4 : 0) | (is_static ? 8 : 0);
     s->desc = name;
+    s->cls = is_str(cls) ? cls : JS_UNDEF;
     s->hash = (uint32_t)(++rt->sym_counter * 2654435761u) | 1;
     return mksym(s);
 }
@@ -1934,12 +1968,17 @@ static jsval run(js_rt *rt, bool throwing) {
         pc++;
         NEXT;
     }
-    CASE(ARRAY_SPREAD)
+    CASE(ARRAY_SPREAD) {
         SAVE();
+        uint32_t di = rd32(pc + 1);
+        if (!(is_obj(sp[-1]) && vobj(sp[-1])->cls == CLS_ARRAY) &&
+            iter_precheck(rt, sp[-1], di >= 0xFFFFFFFEu ? JS_UNDEF : K[di], di == 0xFFFFFFFEu) < 0)
+            goto exception;
         if (array_spread(rt, sp[-2], sp[-1]) < 0) goto exception;
         sp--;
-        pc++;
+        pc += 5;
         NEXT;
+    }
     CASE(SET_FUNC_NAME)
         SAVE();
         set_fn_name(rt, sp[-2], sp[-1]);
@@ -2407,7 +2446,10 @@ static jsval run(js_rt *rt, bool throwing) {
         pc++;
         NEXT;
     }
-    CASE(NEW_PRIVATE) *sp++ = new_private(rt, K[rd32(pc + 1)]); pc += 5; NEXT;
+    CASE(NEW_PRIVATE)
+        *sp++ = new_private(rt, K[rd32(pc + 1)], rd32(pc + 5) == 0xFFFFFFFFu ? JS_UNDEF : K[rd32(pc + 5)], pc[9]);
+        pc += 10;
+        NEXT;
     CASE(SET_HOME) {
         JSObject *fn = vobj(sp[-1]);
         if (fn->cls == CLS_FUNCTION) fn->u.fn.home = vobj(sp[-2]);
@@ -2445,9 +2487,10 @@ static jsval run(js_rt *rt, bool throwing) {
     CASE(ITER_INIT)
         SAVE();
         rt->coro_status = 0;
+        if (rd32(pc + 4) != 0xFFFFFFFFu && iter_precheck(rt, sp[-1], K[rd32(pc + 4)], false) < 0) goto exception;
         if (iter_init_op(rt, &loc[rd16(pc + 1)], sp[-1], pc[3]) < 0) goto exception;
         sp--;
-        pc += 4;
+        pc += 8;
         NEXT;
     CASE(ITER_NEXT) {
         SAVE();
@@ -2542,13 +2585,40 @@ static jsval run(js_rt *rt, bool throwing) {
         *sp++ = v;
         pc += 3;
         NEXT;
+    CASE(MAP_ARGS) {
+        jsval av = loc[f->fp->args_slot];
+        int pi = pc[1];
+        if (is_obj(av) && pi < (int)vobj(av)->u.arr.len) {
+            JSObject *ao = vobj(av);
+            if (!ao->u.arr.pmap) {
+                int n = f->fp->nparams;
+                ao->u.arr.pmap = (uint16_t *)malloc(sizeof(uint16_t) * (size_t)(n + 1));
+                if (ao->u.arr.pmap) {
+                    ao->u.arr.pmap[0] = (uint16_t)n;
+                    for (int i = 0; i < n; i++) ao->u.arr.pmap[1 + i] = 0xFFFF;
+                }
+                ao->u.arr.menv = f->env;
+            }
+            if (ao->u.arr.pmap && pi < ao->u.arr.pmap[0]) ao->u.arr.pmap[1 + pi] = rd16(pc + 2);
+        }
+        pc += 4;
+        NEXT;
+    }
     CASE(REQ_COERCIBLE)
         if (is_nullish(sp[-1])) {
             SAVE();
-            throw_error(rt, E_TYPE, "Cannot destructure '%S' as it is %S.", val_brief(rt, sp[-1]), val_brief(rt, sp[-1]));
+            JSString *vb = val_brief(rt, sp[-1]);
+            uint32_t ni = rd32(pc + 1), di = rd32(pc + 5);
+            JSString *ds = di != 0xFFFFFFFFu ? vstr(K[di]) : vb;
+            if (ni != 0xFFFFFFFFu && pc[9])
+                throw_error(rt, E_TYPE, "Cannot read properties of %S (reading '%S')", vb, vstr(K[ni]));
+            else if (ni != 0xFFFFFFFFu)
+                throw_error(rt, E_TYPE, "Cannot destructure property '%S' of '%S' as it is %S.", vstr(K[ni]), ds, vb);
+            else
+                throw_error(rt, E_TYPE, "Cannot destructure '%S' as it is %S.", ds, vb);
             goto exception;
         }
-        pc++;
+        pc += 10;
         NEXT;
 
     CASE(INITIAL_YIELD) {

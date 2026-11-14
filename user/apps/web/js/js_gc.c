@@ -45,6 +45,7 @@ static void trace_obj(js_rt *rt, JSObject *o) {
     case CLS_ARRAY:
     case CLS_ARGUMENTS:
         for (uint32_t i = 0; i < o->u.arr.len; i++) MV(o->u.arr.elems[i]);
+        MP(o->u.arr.menv);
         break;
     case CLS_FUNCTION:
         MP(o->u.fn.fp);
@@ -93,7 +94,7 @@ static void trace(js_rt *rt, GCHdr *h) {
         }
         break;
     }
-    case GC_SYM: MV(((JSSymbol *)h)->desc); break;
+    case GC_SYM: MV(((JSSymbol *)h)->desc); MV(((JSSymbol *)h)->cls); break;
     case GC_OBJ: trace_obj(rt, (JSObject *)h); break;
     case GC_FUNCPROTO: {
         FuncProto *fp = (FuncProto *)h;
@@ -127,7 +128,7 @@ static void finalize(js_rt *rt, GCHdr *h) {
         free(o->props);
         free(o->hidx);
         switch (o->cls) {
-        case CLS_ARRAY: case CLS_ARGUMENTS: free(o->u.arr.elems); break;
+        case CLS_ARRAY: case CLS_ARGUMENTS: free(o->u.arr.elems); free(o->u.arr.pmap); break;
         case CLS_BOUND: free(o->u.bound.args); break;
         case CLS_HOST:
             if (o->u.host.cls && o->u.host.cls->finalize) o->u.host.cls->finalize(o->u.host.ptr);
