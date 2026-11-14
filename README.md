@@ -64,7 +64,8 @@ with true multitasking and memory protection between apps.
 **Desktop: the "Highland" theme** (design by Bryan Duncan: `src/desktop_highland.c`, `src/gfx.h`,
 `common/theme_highland.h`, used unchanged, wired in by `src/highland.c`)
 - Mountain-ridge wallpaper with moon, translucent top bar (crown menu, active app, Bluetooth, clock)
-- Floating dock with pixel-art app icons, running dots and tooltips
+- Floating dock with smooth, modern app icons (gradient tiles with white symbols, drawn by
+  `tools/genicons.py`), running dots and tooltips
 - Compositing window manager: rounded windows with shadows and red/gold/green window buttons
   (close, minimise, maximise), drag to move, resize from the right/bottom edge or corner,
   double-click the title bar to maximise

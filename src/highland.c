@@ -4,6 +4,40 @@
  */
 #include "desktop_highland.c"
 #include "highland.h"
+#include "icons_data.h"
+
+/* the smooth app icons (tools/genicons.py); unknown names get the gear */
+const uint32_t *hl_app_icon(const char *name, int menu) {
+    int n = sizeof app_icons / sizeof app_icons[0], g = 0;
+    for (int i = 0; i < n; i++) {
+        const char *a = app_icons[i].name, *b = name;
+        while (*a && *a == *b) a++, b++;
+        if (!*a && !*b) return menu ? app_icons[i].menu : app_icons[i].dock;
+        if (app_icons[i].name[0] == 'g' && app_icons[i].name[1] == 'e') g = i;
+    }
+    return menu ? app_icons[g].menu : app_icons[g].dock;
+}
+
+/* draw an ARGB icon (straight alpha) onto the frame buffer */
+static void blend_icon(const struct framebuffer *fb, int x, int y, const uint32_t *px, int size) {
+    for (int j = 0; j < size; j++) {
+        int yy = y + j;
+        if (yy < 0 || yy >= (int)fb->height) continue;
+        volatile uint32_t *row = gfx_row(fb, (uint32_t)yy);
+        for (int i = 0; i < size; i++) {
+            int xx = x + i;
+            if (xx < 0 || xx >= (int)fb->width) continue;
+            uint32_t s = px[j * size + i], a = s >> 24;
+            if (!a) continue;
+            if (a == 255) { row[xx] = s & 0xFFFFFF; continue; }
+            uint32_t d = row[xx];
+            uint32_t r = ((s >> 16 & 255) * a + (d >> 16 & 255) * (255 - a)) / 255;
+            uint32_t g = ((s >> 8 & 255) * a + (d >> 8 & 255) * (255 - a)) / 255;
+            uint32_t b = ((s & 255) * a + (d & 255) * (255 - a)) / 255;
+            row[xx] = r << 16 | g << 8 | b;
+        }
+    }
+}
 
 static const char *ICON_CROWN16[16] = {
     "................", "................",
@@ -94,13 +128,19 @@ void hl_dock_rect(int W, int H, int n, int *x, int *y, int *w, int *h) {
 }
 
 void hl_render_dock(const struct framebuffer *fb, const char *const *icons, const int *running, int n) {
-    struct hl_dock_item items[HL_MAX_DOCK];
+    static const char *BLANK[16] = { "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "" };
+    struct hl_dock_item items[HL_MAX_DOCK] = { 0 };
     if (n > HL_MAX_DOCK) n = HL_MAX_DOCK;
-    for (int i = 0; i < n; i++) {
-        const struct named_icon *ic = lookup(icons[i]);
-        items[i].icon = ic->rows; items[i].bg = ic->bg; items[i].fg = ic->fg; items[i].running = running[i];
+    for (int i = 0; i < n; i++) {                 /* the Highland dock draws the tiles in each icon's edge colour ... */
+        const uint32_t *px = hl_app_icon(icons[i], 0);
+        items[i].icon = BLANK; items[i].bg = px[(ICON_DOCK / 2) * ICON_DOCK + 1] & 0xFFFFFF; items[i].fg = 0; items[i].running = running[i];
     }
     hl_draw_dock(fb, items, n);
+    int x, y, w, h;                               /* ... and the smooth icons go on top */
+    hl_dock_rect((int)fb->width, (int)fb->height, n, &x, &y, &w, &h);
+    for (int i = 0; i < n; i++)
+        blend_icon(fb, x + HL_DOCK_PAD + i * (HL_DOCK_ICON + HL_DOCK_GAP) + (HL_DOCK_ICON - ICON_DOCK) / 2,
+                   y + HL_DOCK_PAD + (HL_DOCK_ICON - ICON_DOCK) / 2, hl_app_icon(icons[i], 0), ICON_DOCK);
 }
 
 void hl_render_topbar(const struct framebuffer *fb, const char *app, const char *clock) {

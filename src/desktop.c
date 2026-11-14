@@ -244,9 +244,18 @@ static void draw_menu(void) {
     for (int i = 0; i < HL_NAPPS; i++) {
         struct rect r = menu_item(i);
         if (hover_ctl == 200 + i) gfx_rrect(&cv, r.x, r.y, r.w, r.h, 8, HL_ACCENT, 36);
-        uint32_t bg, fg; const char **ic = hl_icon(apps_get(i)->icon, &bg, &fg);
-        gfx_rrect(&cv, r.x + 6, r.y + 4, 34, 34, 9, bg, 255);
-        pixel_icon(&cv, ic, 16, r.x + 7, r.y + 5, 2, fg);
+        const uint32_t *ic = hl_app_icon(apps_get(i)->icon, 1);
+        for (int j = 0; j < 34; j++) {                    /* the app's icon, blended */
+            int yy = r.y + 4 + j;
+            if (yy < cv.cy0 || yy >= cv.cy1) continue;
+            for (int k = 0; k < 34; k++) {
+                int xx = r.x + 6 + k; uint32_t s = ic[j * 34 + k], al = s >> 24;
+                if (!al || xx < cv.cx0 || xx >= cv.cx1) continue;
+                uint32_t *d = &cv.px[yy * cv.stride + xx], dv = *d;
+                *d = ((s >> 16 & 255) * al + (dv >> 16 & 255) * (255 - al)) / 255 << 16 |
+                     ((s >> 8 & 255) * al + (dv >> 8 & 255) * (255 - al)) / 255 << 8 | ((s & 255) * al + (dv & 255) * (255 - al)) / 255;
+            }
+        }
         gfx_mono_text(&cv, r.x + 52, r.y + 13, app_name(i), hover_ctl == 200 + i ? HL_TEXT : HL_TEXT_DIM);
         if (apps_get(i)->installed) gfx_mono_text(&cv, r.x + 52 + (int)strlen(app_name(i)) * 8 + 8, r.y + 13, "clan", HL_GOLD);
         if (app_running(i)) gfx_circle(&cv, r.x + r.w - 14, r.y + r.h / 2, 3, HL_GREEN, 255);
