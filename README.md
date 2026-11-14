@@ -94,7 +94,7 @@ with true multitasking and memory protection between apps.
 |---|---|
 | editor 0.4 | Text editor: line numbers, selection (Shift+arrows, mouse), copy/cut/paste, select all, save / save as, UTF-8 files, unsaved-changes prompt (`edit <file>` in castle, or double-click a file in Files) |
 | clock 1.0 | Analog and digital clock |
-| web 0.2 | Web browser for `https://` and `http://` sites: headings, text, bold, lists, links, back, address bar. A padlock and the status bar show the encryption and who the certificate belongs to; sites that fail the security checks are blocked with an explanation. The start page links to text-only sites that suit it, such as text.npr.org and lite.duckduckgo.com |
+| web 0.3 | Web browser for `https://`, `http://` and `file://` pages: style sheets (CSS selectors, cascade, `@media`, the box model, colours, borders, lists, tables, simple flex rows), pictures (PNG, JPEG, GIF, BMP, loaded after the text), forms (GET and POST), cookies that survive restarts, gzip, UTF-8 pages, back and forward, a resizable window. A padlock and the status bar show the encryption and who the certificate belongs to; sites that fail the security checks are blocked with an explanation. No JavaScript |
 
 ## Put it on a PC
 
@@ -137,7 +137,8 @@ with true multitasking and memory protection between apps.
 - Sound: Intel HD Audio only (nearly all PCs; USB audio isn't supported), tested in QEMU, not on real
   codecs. Only system sounds for now (test chime, notifications).
 - Keyboard layouts and text cover Western European languages only (Windows-1252).
-- IP fragments aren't supported (rarely needed with TCP); the web browser shows text and links only.
+- IP fragments aren't supported (rarely needed with TCP). Web runs no JavaScript and has no positioned boxes
+  (they are laid out in the normal flow), `rowspan`, web fonts, SVG or video; animated GIFs show their first frame.
 - IPv6 gets its address by SLAAC. Networks that hand out IPv6 addresses only by DHCPv6 (the router's
   "M" flag with no autoconfiguration prefix, found on some business networks) give DuncOS no global
   IPv6 address; it then uses IPv4. Stateless DHCPv6 (for DNS) is supported.
@@ -213,7 +214,8 @@ user/lib         libdunc: app runtime (system calls, windows, UI widgets, HTTP/H
   crypto/          SHA-2, HMAC/HKDF, AES-GCM, ChaCha20-Poly1305, X25519, big numbers, RSA, ECDSA/ECDH,
                    X.509 certificates, TLS 1.3 client
 tests/           host-side tests (make test); tests/tls has the TLS test matrix
-user/apps        the apps (editor.c, clock.c and web.c are clan packages, listed in repo/index.txt)
+user/apps        the apps (editor.c, clock.c and web.c are clan packages, listed in repo/index.txt);
+                 web/ holds the browser's HTML parser, CSS engine and layout (tests/test_web.c, tests/web/)
 rootfs/          files copied onto the system disk at start-up
 ```
 

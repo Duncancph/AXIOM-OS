@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Layout and CSS test</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="print.css" media="print">
+<style>
+  .site-header { background: #1B2945; color: #F4F1EA; padding: 12px 0; }
+  .site-header .container { display: flex; justify-content: space-between; padding-top: 0; padding-bottom: 0; }
+  .logo { font-size: 22px; font-weight: 700; color: #F2C94C; }
+  nav a { color: #DCE6F5; text-decoration: none; margin-left: 18px; }
+  nav a:hover { text-decoration: underline; }
+  .hero { background-color: rgb(43, 108, 176); color: white; text-align: center; padding: 28px 16px; margin: 0 0 20px; }
+  .hero h1 { color: #fff; font-size: 36px; margin: 0; }
+  .hero p { font-size: 18px; margin: 6px 0 0; opacity: .9 }
+  .cards { display: flex; gap: 12px; }
+  .card { border: 1px solid #CBD5E0; border-top: 4px solid var(--accent); background: #fff; padding: 10px 14px; width: 30%; }
+  .card h3 { margin: 0 0 6px; }
+  .note { border-left: 4px solid #ED8936; background: #FFFAF0; padding: 8px 14px; margin: 16px 0; }
+  .center-box { width: 50%; margin: 16px auto; text-align: center; border: 2px solid #48BB78; padding: 8px; }
+  .right { text-align: right; color: #718096; font-size: 12px; }
+  .big { font-size: 150%; } .small { font-size: smaller; } .em { font-size: 1.25em; }
+  ul.plain { list-style: none; padding-left: 0; }
+  ol.roman { list-style-type: upper-roman; }
+  .tag { background: #FEEBC8; color: #7B341E; padding: 1px 6px; font-size: 13px; }
+  pre { background: #2D3748; color: #E2E8F0; padding: 10px 14px; }
+  .upper { text-transform: uppercase; letter-spacing: 1px; font-size: 13px; color: #A0AEC0; }
+  .hidden { display: none; } .invisible { visibility: hidden; }
+  #special.box.wide { border: 3px double #805AD5; }
+  div > p.child { color: #C53030; }
+  p + p.sibling { color: #2F855A; }
+  li:first-child { font-weight: bold; }
+  tr:nth-child(even) td { background: #F7FAFC; }
+  .imp { color: blue !important; } .imp { color: red; }
+  @media (max-width: 600px) { .cards { display: block; } .card { width: auto; margin-bottom: 8px; } .narrow-only { display: block !important; } }
+  .narrow-only { display: none; color: #C05621; font-weight: bold; }
+  .wide-only { color: #2B6CB0; }
+  @media (max-width: 600px) { .wide-only { display: none; } }
+</style>
+</head>
+<body>
+<header class="site-header"><div class="container"><span class="logo">DuncOS Times</span>
+<nav><a href="index.html">Home</a><a href="images.html">Images</a><a href="form.html">Forms</a><a href="cookies.html">Cookies</a></nav></div></header>
+<section class="hero"><h1>Layout and CSS</h1><p>Colours, boxes, borders and lists from real style sheets</p></section>
+<div class="container">
+<p class="upper">Tuesday &middot; Edition 3</p>
+<p class="narrow-only">The window is narrow: the media query for max-width 600px applies.</p>
+<p class="wide-only">The window is wide (more than 600px).</p>
+<div class="cards">
+  <div class="card"><h3>Boxes</h3><p>Padding, borders and a coloured top edge.</p></div>
+  <div class="card"><h3>Flex row</h3><p>Three cards side by side with a gap.</p></div>
+  <div class="card"><h3>Media</h3><p>On a narrow window they stack.</p></div>
+</div>
+<div class="note"><b>Note:</b> this box has a thick left border and a warm background. Here is <span class="tag">a tag</span> and <code>inline code</code>, plus <a href="layout.html#tables">a link to the tables</a>.</div>
+<p>Text sizes: <span class="small">smaller</span>, normal, <span class="em">1.25em</span> and <span class="big">150%</span>. <i>Italic</i>, <b>bold</b>, <u>underlined</u>, <s>struck out</s> and <strong><em>both</em></strong>. H<sub>2</sub>O and E = mc<sup>2</sup>.</p>
+<div class="center-box">A centred box, half the width.</div>
+<div id="special" class="box wide"><p class="child">A child paragraph (red, from div &gt; p.child), inside a box with a double purple border (#id.class.class).</p>
+<p class="sibling">An adjacent sibling (green, from p + p.sibling).</p></div>
+<p class="imp">This should be blue: !important beats a later rule.</p>
+<p class="hidden">You must not see this (display none).</p>
+<p>Before <span class="invisible">INVISIBLE</span> after (a gap where hidden text is).</p>
+<h2>Lists</h2>
+<ul><li>First item (bold, :first-child)</li><li>Second item<ul><li>Nested, circle bullets</li><li>Another</li></ul></li><li>Third</li></ul>
+<ol start="3"><li>Numbered from three</li><li>Four</li></ol>
+<ol class="roman"><li>Roman one</li><li>Roman two</li><li>Roman three</li></ol>
+<ul class="plain"><li>No bullet</li><li>No bullet either</li></ul>
+<h2 id="tables">Tables</h2>
+<table class="grid" width="100%">
+<tr><th>Planet</th><th>Moons</th><th>Notes</th></tr>
+<tr><td>Mercury</td><td align="right">0</td><td>Closest to the Sun</td></tr>
+<tr><td>Earth</td><td align="right">1</td><td>Home, with a long description that should wrap inside its cell when the window gets narrow</td></tr>
+<tr><td>Jupiter</td><td align="right">95</td><td>Largest</td></tr>
+<tr><td colspan="2" bgcolor="#FEFCBF">A cell spanning two columns</td><td>End</td></tr>
+</table>
+<h2>Preformatted</h2>
+<pre>int main(void) {
+    printf("hello, world\n");   /* spaces   kept */
+}</pre>
+<blockquote>A blockquote is indented on both sides, with the default margins of the built-in style sheet.</blockquote>
+<hr>
+<p class="right">Right-aligned small print &copy; 2026 DuncOS</p>
+</div>
+</body>
+</html>

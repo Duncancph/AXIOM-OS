@@ -47,7 +47,7 @@ static inline int tcp_shut(int h) { return sys_call(SYS_TCP_CLOSE, h, 0, 0, 0, 0
 const char *net_strerror(int e);
 void ip_str(uint32_t ip, char *out);          /* out: at least 16 bytes */
 
-/* HTTP (http:// only for now). Returns the body length (truncated to max), or a negative error.
+/* HTTP and HTTPS. Returns the body length (truncated to max), or a negative error.
  * Follows redirects. status/ctype/final_url may be NULL. */
 #define HTTP_EHTTPS -20
 #define HTTP_EURL -21
@@ -57,6 +57,20 @@ long http_get(const char *url, char *body, long max, int *status, char *ctype, i
  * *total is set to Content-Length when the server sends it, else -1. Returns bytes received or an error. */
 typedef bool (*http_sink)(const char *data, long len, void *ctx);
 long http_fetch(const char *url, http_sink sink, void *ctx, int *status, long *total, char *ctype, int ctlen, char *final_url, int fulen);
+/* General request: method ("GET"/"POST"/...), optional body with its Content-Type. rq may be NULL (GET).
+ * After a POST, 301/302/303 redirects continue as GET; 307/308 repeat the request. */
+struct http_req { const char *method; const char *body; long body_len; const char *content_type; const char *referer; };
+long http_request(const char *url, const struct http_req *rq, http_sink sink, void *ctx, int *status, long *total,
+                  char *ctype, int ctlen, char *final_url, int fulen);
+/* Options for this program (default 0): HTTP_OPT_COOKIES keeps a cookie jar (persistent cookies are saved in
+ * /home/.web/cookies); HTTP_OPT_GZIP asks for gzip-compressed responses and decodes them. */
+#define HTTP_OPT_COOKIES 1
+#define HTTP_OPT_GZIP 2
+extern int http_options;
+int http_cookie_count(void);
+void http_cookies_clear(void);
+/* "name=value; ..." for a listing (about:cookies style): returns lines "domain path name" for each cookie */
+int http_cookie_list(char *out, int max);
 const char *http_strerror(long e);
 /* security of the last http_fetch/http_get: secure = 1 for a verified https:// connection */
 struct http_security { int secure; char cipher[48], subject[96], issuer[96]; char addr[IP_STRLEN]; };   /* addr: the server address used */
