@@ -11,6 +11,8 @@ struct task *current;
 void *kmalloc(size_t n) { return calloc(1, n ? n : 1); }
 void kfree(void *p) { free(p); }
 void rtc_read(struct rtc_time *t) { t->year = 2026; t->mon = 11; t->day = 14; t->hour = 9; t->min = 41; t->sec = 30; }
+void rtc_read_local(struct rtc_time *t) { rtc_read(t); t->utc_offset_min = 0; }
+void random_bytes(void *b, size_t n) { memset(b, 0x5A, n); }
 void kprintf(const char *f, ...) { va_list a; va_start(a, f); vprintf(f, a); va_end(a); }
 
 static FILE *img; static long reads, writes;
@@ -23,7 +25,12 @@ static int fails;
 int main(int argc, char **argv) {
     img = fopen(argv[1], "r+b");
     fseek(img, 0, SEEK_END);
-    struct blockdev bd = { 0, 512, ftell(img) / 512, rd, wrt, "test" };
+    struct blockdev bd = { 0, 512, ftell(img) / 512, rd, wrt, 0, 0, "test" };
+    if (argc > 2 && !strcmp(argv[2], "--format")) {          /* make a new file system with DuncOS's formatter first */
+        int r = fat_format(&bd, 0, bd.blocks, "DUNCFMT");
+        printf("fat_format: %s\n", r ? "FAILED" : "ok");
+        if (r) return 1;
+    }
     char label[16] = "", why[96] = "";
     void *v = fat_mount(&bd, label, why, sizeof why);
     if (!v) { printf("mount failed: %s\n", why); return 1; }
@@ -37,7 +44,8 @@ int main(int argc, char **argv) {
     /* read a file written by mtools */
     char buf[70000];
     long r = o->read(v, "/Hello From Linux.txt", buf, 0, sizeof buf);
-    CHECK(r == 27 && !memcmp(buf, "written by mtools on Linux\n", 27), "read mtools file (%ld)", r);
+    bool formatted = argc > 2;
+    CHECK(formatted || (r == 27 && !memcmp(buf, "written by mtools on Linux\n", 27)), "read mtools file (%ld)", r);
 
     /* create files with short + long names, sizes around cluster boundaries */
     CHECK(o->write(v, "/NOTES.TXT", "short name\n", 11) == 11, "write short");

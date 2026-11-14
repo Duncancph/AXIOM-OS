@@ -117,6 +117,8 @@ test:
 	printf 'written by mtools on Linux\n' > build/test/hello.txt && MTOOLS_SKIP_CHECK=1 mcopy -i build/test/fat.img build/test/hello.txt "::/Hello From Linux.txt"
 	build/test/test_fat build/test/fat.img
 	fsck.fat -n build/test/fat.img && echo "fsck.fat: clean"
+	rm -f build/test/fmt.img && truncate -s 100M build/test/fmt.img && build/test/test_fat build/test/fmt.img --format
+	fsck.fat -n build/test/fmt.img && echo "fsck.fat after fat_format: clean"
 	gcc -std=gnu17 -O1 -w -fno-builtin -o build/test/test_inet tests/test_inet.c common/inet.c common/str.c
 	python3 tests/test_inet.py build/test/test_inet
 	gcc -std=gnu17 -O1 -DTZ_TEST -o build/test/test_tz tests/test_tz.c src/tz.c && python3 tests/test_tz.py build/test/test_tz
