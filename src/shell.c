@@ -57,6 +57,7 @@ static void cmd_help(void) {
         {"clear", "clear the screen"},
         {"uptime", "time since boot"},
         {"log", "kernel messages"},
+        {"clan", "package manager: list, install, remove apps"},
         {"reboot", "restart the computer"},
         {"poweroff", "turn the computer off"},
     };
@@ -122,6 +123,7 @@ void shell_execute(char *line) {
     }
     else if (!strcmp(c, "echo")) { for (int i = 1; i < argc; i++) kprintf("%s%s", argv[i], i + 1 < argc ? " " : ""); kprintf("\n"); }
     else if (!strcmp(c, "uptime")) cmd_uptime();
+    else if (!strcmp(c, "clan")) clan_command(argc, argv);
     else if (!strcmp(c, "log") || !strcmp(c, "dmesg")) {
         char *b = page_alloc(8);
         if (b) { console_log_read(b, 8 * 4096); console_write(b); for (int i = 0; i < 8; i++) page_free(b + i * 4096); }

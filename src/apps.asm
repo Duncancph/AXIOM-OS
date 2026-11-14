@@ -8,14 +8,17 @@ global app_images, app_count
 
 align 8
 app_images:
-    APP about, "About DuncOS", 0
+    APP files, "Files", 0
     APP terminal, "Terminal", 0
     APP monitor, "System Monitor", 0
     APP bluetooth, "Bluetooth", 0
     APP calc, "Calculator", 0
     APP sandbox, "Protection Test", 0
-app_count: dd 6
+    APP about, "About DuncOS", 0
+app_count: dd 7
 
+id_files: db "files", 0
+title_files: db "Files", 0
 id_about: db "about", 0
 title_about: db "About DuncOS", 0
 id_terminal: db "terminal", 0
@@ -29,6 +32,9 @@ title_calc: db "Calculator", 0
 id_sandbox: db "sandbox", 0
 title_sandbox: db "Protection Test", 0
 
+align 16
+bin_files: incbin "build/user/files.elf"
+bin_files_end:
 align 16
 bin_about: incbin "build/user/about.elf"
 bin_about_end:

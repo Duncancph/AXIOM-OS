@@ -32,6 +32,8 @@ static void on_report(struct usb_dev *d, int dci, int cc, uint32_t len) {
             else if (k == 0x4A) input_push(KEY_HOME);
             else if (k == 0x4D) input_push(KEY_END);
             else if (k == 0x4C) input_push(KEY_DEL);
+            else if (k == 0x4B) input_push(KEY_PGUP);
+            else if (k == 0x4E) input_push(KEY_PGDN);
             else if (k == 0x58) input_push('\n');
             else if (k == 0xE3 || k == 0xE7) input_push(KEY_SUPER);
         }

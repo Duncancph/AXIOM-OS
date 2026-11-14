@@ -54,7 +54,7 @@ void lapic_timer_start(uint32_t hz) {
         if (phys < 0x100000000ULL) boot_pd[phys >> 21] |= 0x18;   /* uncached */
         else map_mmio(phys, 4096);
         __asm__ volatile("mov %%cr3,%%rax; mov %%rax,%%cr3" ::: "rax", "memory");
-        lapic = (volatile uint32_t *)phys;
+        lapic = mmio_virt(phys);
     }
     lapic_w(0xF0, 0x1FF);              /* enable, spurious vector 0xFF */
     lapic_w(0x80, 0);                  /* task priority: accept all */

@@ -18,6 +18,21 @@ static inline uint64_t sys_time(void) { return sys_call(SYS_TIME, 0, 0, 0, 0, 0)
 static inline void sys_log(const char *s) { sys_call(SYS_LOG, (long)s, 0, 0, 0, 0); }
 static inline int sys_event(struct dunc_event *e, long timeout_ms) { return sys_call(SYS_EVENT, (long)e, timeout_ms, 0, 0, 0); }
 static inline int sys_spawn(const char *app) { return sys_call(SYS_SPAWN, (long)app, 0, 0, 0, 0); }
+static inline int sys_spawn_arg(const char *app, const char *arg) { return sys_call(SYS_SPAWN, (long)app, (long)arg, 0, 0, 0); }
+static inline int sys_getarg(char *buf, long n) { return sys_call(SYS_GETARG, (long)buf, n, 0, 0, 0); }
+static inline int sys_apps(struct dunc_app *a, int max) { return sys_call(SYS_APPS, (long)a, max, 0, 0, 0); }
+static inline int fs_list(const char *p, struct dunc_dirent *d, int max) { return sys_call(SYS_FS_LIST, (long)p, (long)d, max, 0, 0); }
+static inline long fs_read(const char *p, void *buf, uint64_t off, uint64_t len) { return sys_call(SYS_FS_READ, (long)p, (long)buf, off, len, 0); }
+static inline long fs_write(const char *p, const void *buf, uint64_t len) { return sys_call(SYS_FS_WRITE, (long)p, (long)buf, len, 0, 0); }
+static inline int fs_mkdir(const char *p) { return sys_call(SYS_FS_MKDIR, (long)p, 0, 0, 0, 0); }
+static inline int fs_delete(const char *p) { return sys_call(SYS_FS_DELETE, (long)p, 0, 0, 0, 0); }
+static inline int fs_rename(const char *a, const char *b) { return sys_call(SYS_FS_RENAME, (long)a, (long)b, 0, 0, 0); }
+static inline int fs_copy(const char *a, const char *b) { return sys_call(SYS_FS_COPY, (long)a, (long)b, 0, 0, 0); }
+static inline int fs_stat(const char *p, struct dunc_stat *st) { return sys_call(SYS_FS_STAT, (long)p, (long)st, 0, 0, 0); }
+static inline int fs_volumes(struct dunc_volume *v, int max) { return sys_call(SYS_FS_VOLUMES, (long)v, max, 0, 0, 0); }
+const char *fs_strerror(int e);
+/* join a directory and a name / resolve a user path (supports ~, ., ..) into out */
+void path_resolve(const char *cwd, const char *in, char *out, int n);
 static inline int sys_procs(struct procinfo *p, int max) { return sys_call(SYS_PROCS, (long)p, max, 0, 0, 0); }
 static inline int sys_kill(int pid) { return sys_call(SYS_KILL, pid, 0, 0, 0, 0); }
 static inline long sys_kcmd(const char *cmd, char *buf, long len) { return sys_call(SYS_KCMD, (long)cmd, (long)buf, len, 0, 0); }
@@ -30,6 +45,8 @@ static inline void sys_notify(const char *t, const char *m) { sys_call(SYS_NOTIF
 /* windows */
 struct app { struct win_info wi; struct canvas c; };
 bool app_open(struct app *a, int w, int h, const char *title);
+bool app_open_ex(struct app *a, int w, int h, const char *title, int flags);   /* flags: WIN_RESIZABLE */
+bool app_resize(struct app *a, const struct dunc_event *e);   /* handle EV_RESIZE; true if resized */
 void app_flush(struct app *a);
 void app_flush_rect(struct app *a, int x, int y, int w, int h);
 static inline void app_title(struct app *a, const char *t) { sys_call(SYS_WIN_TITLE, a->wi.id, (long)t, 0, 0, 0); }

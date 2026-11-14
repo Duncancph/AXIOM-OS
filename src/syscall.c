@@ -1,6 +1,7 @@
 /* System calls: every pointer coming from a program is checked against that program's
  * own page tables before the kernel touches it. */
 #include "kernel.h"
+#include "vfs.h"
 
 #define UOK(p, n, w) user_ok(current->pml4, (const void *)(p), (n), (w))
 
@@ -73,13 +74,21 @@ uint64_t syscall_dispatch(struct frame *f) {
         if (current->nwin >= 16) return (uint64_t)-1;
         uint32_t *buf; int pages;
         uint64_t va = USER_WIN_BASE + (uint64_t)current->nwin * 0x4000000ULL;
-        struct window *w = wm_create(current, (int)a, (int)b, title, &buf, &pages, va);
+        struct window *w = wm_create(current, (int)a, (int)b, title, &buf, &pages, va, (int)e);
         if (!w) return (uint64_t)-1;
         current->nwin++;
         for (int i = 0; i < pages; i++) vm_map(current->pml4, va + i * 4096ULL, (uint64_t)buf + i * 4096ULL, true, false);
         struct win_info *wi = (struct win_info *)d;
         wi->id = wm_id(w); wi->buf = (uint32_t *)va; wi->w = (int)a; wi->h = (int)b;
         return wi->id;
+    }
+    case SYS_WIN_RESIZE: {
+        if (!UOK(b, sizeof(struct win_info), true)) return (uint64_t)-1;
+        int nw, nh;
+        if (!wm_resize(current, (int)a, &nw, &nh)) return (uint64_t)-1;
+        struct win_info *wi = (struct win_info *)b;
+        wi->w = nw; wi->h = nh;
+        return 0;
     }
     case SYS_WIN_FLUSH: return wm_flush(current, (int)a, (int)b, (int)c, (int)d, (int)e) ? 0 : (uint64_t)-1;
     case SYS_EVENT: return sys_event(a, (int64_t)b);
@@ -90,9 +99,55 @@ uint64_t syscall_dispatch(struct frame *f) {
     }
     case SYS_WIN_CLOSE: return wm_close(current, (int)a) ? 0 : (uint64_t)-1;
     case SYS_SPAWN: {
-        char app[32];
-        if (!copy_str(app, a, sizeof app)) return (uint64_t)-1;
-        return (uint64_t)(int64_t)task_spawn(app);
+        char app[32], arg[256] = "";
+        if (!copy_str(app, a, sizeof app) || (b && !copy_str(arg, b, sizeof arg))) return (uint64_t)-1;
+        return (uint64_t)(int64_t)task_spawn_arg(app, arg);
+    }
+    case SYS_GETARG:
+        if (!b || !UOK(a, b, true)) return (uint64_t)-1;
+        strncpy0((char *)a, current->arg, b);
+        return strlen(current->arg);
+    case SYS_APPS: {
+        int max = (int)b, n = apps_count();
+        if (max < 0 || !UOK(a, (uint64_t)max * sizeof(struct dunc_app), true)) return (uint64_t)-1;
+        struct dunc_app *o = (struct dunc_app *)a;
+        for (int i = 0; i < n && i < max; i++) {
+            const struct app_entry *e = apps_get(i);
+            strncpy0(o[i].id, e->id, sizeof o[i].id); strncpy0(o[i].name, e->name, sizeof o[i].name);
+            o[i].installed = e->installed;
+        }
+        return n < max ? n : max;
+    }
+    case SYS_FS_LIST: case SYS_FS_READ: case SYS_FS_WRITE: case SYS_FS_MKDIR: case SYS_FS_DELETE:
+    case SYS_FS_RENAME: case SYS_FS_STAT: case SYS_FS_COPY: {
+        char p1[PATH_MAX_], p2[PATH_MAX_];
+        if (!copy_str(p1, a, sizeof p1)) return (uint64_t)FS_EINVAL;
+        int64_t r = FS_EINVAL;
+        current->busy++;
+        switch (f->rax) {
+        case SYS_FS_LIST:
+            if ((int)c > 0 && (int)c <= 1024 && UOK(b, c * sizeof(struct dunc_dirent), true)) r = vfs_list(p1, (struct dunc_dirent *)b, (int)c);
+            break;
+        case SYS_FS_READ:
+            if (UOK(b, d, true)) r = vfs_read(p1, (void *)b, c, d);
+            break;
+        case SYS_FS_WRITE:
+            if (c <= (64u << 20) && (c == 0 || UOK(b, c, false))) r = vfs_write(p1, (const void *)b, c);
+            break;
+        case SYS_FS_MKDIR: r = vfs_mkdir(p1); break;
+        case SYS_FS_DELETE: r = vfs_delete(p1); break;
+        case SYS_FS_RENAME: if (copy_str(p2, b, sizeof p2)) r = vfs_rename(p1, p2); break;
+        case SYS_FS_COPY: if (copy_str(p2, b, sizeof p2)) r = vfs_copy(p1, p2); break;
+        case SYS_FS_STAT: if (UOK(b, sizeof(struct dunc_stat), true)) r = vfs_stat(p1, (struct dunc_stat *)b); break;
+        }
+        current->busy--;
+        if (f->rax == SYS_FS_WRITE || f->rax == SYS_FS_DELETE || f->rax == SYS_FS_RENAME) apps_refresh();
+        return (uint64_t)r;
+    }
+    case SYS_FS_VOLUMES: {
+        int max = (int)b;
+        if (max <= 0 || max > 8 || !UOK(a, (uint64_t)max * sizeof(struct dunc_volume), true)) return (uint64_t)-1;
+        return vfs_volumes((struct dunc_volume *)a, max);
     }
     case SYS_PROCS: {
         int max = (int)b, n = 0;

@@ -7,8 +7,15 @@ long sys_call(long n, long a, long b, long c, long d, long e) {
     return r;
 }
 
-bool app_open(struct app *a, int w, int h, const char *title) {
-    if (sys_call(SYS_WIN_CREATE, w, h, (long)title, (long)&a->wi, 0) < 0) return false;
+bool app_open(struct app *a, int w, int h, const char *title) { return app_open_ex(a, w, h, title, 0); }
+bool app_resize(struct app *a, const struct dunc_event *e) {
+    if (e->type != EV_RESIZE) return false;
+    if (sys_call(SYS_WIN_RESIZE, a->wi.id, (long)&a->wi, 0, 0, 0) < 0) return false;
+    gfx_init(&a->c, a->wi.buf, a->wi.w, a->wi.h, a->wi.w);
+    return true;
+}
+bool app_open_ex(struct app *a, int w, int h, const char *title, int flags) {
+    if (sys_call(SYS_WIN_CREATE, w, h, (long)title, (long)&a->wi, flags) < 0) return false;
     gfx_init(&a->c, a->wi.buf, a->wi.w, a->wi.h, a->wi.w);
     return true;
 }
@@ -40,4 +47,45 @@ void ui_button(struct canvas *c, int x, int y, int w, int h, const char *label, 
     if (style == BTN_NORMAL && !disabled) gfx_rrect_outline(c, x, y, w, h, 8, UI_BORDER, 255);
     const struct font *f = &font_ui_bold;
     gfx_text_center(c, f, x, w, y + (h + f->ascent - f->descent) / 2 - 1, fg, label);
+}
+
+const char *fs_strerror(int e) {
+    switch (e) {
+    case FS_ENOENT: return "No such file or folder";
+    case FS_EEXIST: return "Already exists";
+    case FS_ENOTDIR: return "Not a folder";
+    case FS_EISDIR: return "Is a folder";
+    case FS_ENOSPC: return "Not enough space";
+    case FS_EIO: return "Drive read/write error";
+    case FS_ENOTEMPTY: return "Folder is not empty";
+    case FS_EROFS: return "Can't change this";
+    case FS_EINVAL: return "Invalid name or path";
+    }
+    return "Error";
+}
+
+void path_resolve(const char *cwd, const char *in, char *out, int n) {
+    char tmp[512];
+    if (in[0] == '~') ksnprintf(tmp, sizeof tmp, "/home%s", in + 1);
+    else if (in[0] == '/') strncpy0(tmp, in, sizeof tmp);
+    else ksnprintf(tmp, sizeof tmp, "%s/%s", cwd, in);
+    /* normalise . and .. */
+    char comp[32][64]; int nc = 0;
+    for (char *p = tmp; *p;) {
+        while (*p == '/') p++;
+        if (!*p) break;
+        char c[64]; int k = 0;
+        while (*p && *p != '/') { if (k < 63) c[k++] = *p; p++; }
+        c[k] = 0;
+        if (!strcmp(c, ".")) continue;
+        if (!strcmp(c, "..")) { if (nc) nc--; continue; }
+        if (nc < 32) strncpy0(comp[nc++], c, 64);
+    }
+    int k = 0;
+    if (!nc) { strncpy0(out, "/", n); return; }
+    for (int i = 0; i < nc; i++) {
+        if (k + 1 < n) out[k++] = '/';
+        for (const char *s = comp[i]; *s && k + 1 < n; s++) out[k++] = *s;
+    }
+    out[k] = 0;
 }

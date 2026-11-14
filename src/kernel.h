@@ -68,6 +68,7 @@ struct bootinfo {
     uint64_t rsdp; /* physical address of a copy of the ACPI RSDP */
     uint8_t rsdp_copy[64];
     char bootloader[64];
+    uint64_t mod_start, mod_end;      /* initial files (tar), loaded by GRUB */
     char cmdline[128];
     bool uefi;
 };
@@ -78,7 +79,11 @@ void mem_init(void);
 void *page_alloc(size_t pages);      /* zeroed, 4 KiB aligned, below 4 GiB; NULL if out of memory */
 void *page_alloc_or_panic(size_t pages);
 void page_free(void *page);          /* single 4 KiB page */
-void map_mmio(uint64_t phys, uint64_t size);
+/* Device memory above 4 GiB is mapped into the kernel-only top half of the address space
+ * (shared by every program's page tables); below 4 GiB it is identity mapped. */
+#define HHDM 0xFFFF800000000000ULL
+static inline void *mmio_virt(uint64_t phys) { return (void *)(phys < 0x100000000ULL ? phys : HHDM + phys); }
+void *map_mmio(uint64_t phys, uint64_t size);
 void map_mmio_flags(uint64_t phys, uint64_t size, uint64_t cache);
 uint64_t mem_total(void);
 uint64_t mem_used(void);
@@ -128,6 +133,7 @@ void acpi_reboot(void);
 /* ---- usb ---- */
 void xhci_init_all(void);
 void xhci_poll(void);
+void xhci_service(void);
 void usb_list(void);
 
 /* ---- bluetooth (bt.c) ---- */
@@ -153,6 +159,7 @@ void fb_write_combining(uint64_t addr, uint64_t size);
 void rtc_read(struct rtc_time *t);
 
 /* ---- vm.c ---- */
+void vm_init(void);
 uint64_t *vm_create(void);
 bool vm_map(uint64_t *pml4, uint64_t va, uint64_t pa, bool writable, bool owned);
 long vm_alloc(uint64_t *pml4, uint64_t va, uint64_t len);
@@ -178,6 +185,8 @@ struct task {
     struct dunc_event evq[EVQ_SIZE]; int evh, evt;
     int nwin;
     char *capture; size_t cap_len, cap_max;
+    char arg[256];             /* start-up argument (e.g. a file to open) */
+    char appid[24];
 };
 struct frame {
     uint64_t r15, r14, r13, r12, r11, r10, r9, r8, rbp, rdi, rsi, rdx, rcx, rbx, rax;
@@ -190,6 +199,7 @@ extern bool sched_running;
 void sched_init(void);
 struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg);
 int task_spawn(const char *app);
+int task_spawn_arg(const char *app, const char *arg);
 void sched_start(void) __attribute__((noreturn));
 void schedule(void);
 void task_yield(void);
@@ -202,9 +212,19 @@ void sched_tick(struct frame *f);
 void kyield(void);
 uint64_t cpu_time_us(void);   /* also brings the running task's CPU time up to date */         /* yield if the scheduler runs, else spin */
 struct app_image { const char *id, *title; const uint8_t *start, *end; };
+/* ---- apps.c: registry of built-in and installed (clan) apps ---- */
+struct app_entry { char id[24], name[32], icon[16], version[12]; const struct app_image *builtin; bool installed; };
+void apps_refresh(void);
+int apps_count(void);
+const struct app_entry *apps_get(int i);
+const struct app_entry *apps_find(const char *id);
+void clan_command(int argc, char **argv);
 const struct app_image *app_find(const char *id);
 extern const struct app_image app_images[];
 extern const int app_count;
+
+void *kmalloc(size_t n);
+void kfree(void *p);
 
 /* ---- syscall.c ---- */
 uint64_t syscall_dispatch(struct frame *f);
@@ -214,7 +234,8 @@ struct window;
 bool desktop_available(void);
 void desktop_init(void);
 void desktop_thread(void *arg);
-struct window *wm_create(struct task *t, int w, int h, const char *title, uint32_t **buf, int *pages, uint64_t uva);
+struct window *wm_create(struct task *t, int w, int h, const char *title, uint32_t **buf, int *pages, uint64_t uva, int flags);
+bool wm_resize(struct task *t, int id, int *nw, int *nh);
 int wm_id(struct window *w);
 bool wm_flush(struct task *t, int id, int x, int y, int w, int h);
 bool wm_set_title(struct task *t, int id, const char *title);

@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "vfs.h"
 
 struct bootinfo bootinfo;
 
@@ -28,6 +29,9 @@ static void parse_multiboot(uint64_t addr) {
             bootinfo.g_pos = p[34]; bootinfo.g_size = p[35];
             bootinfo.b_pos = p[36]; bootinfo.b_size = p[37];
             break;
+        case 3:
+            if (!bootinfo.mod_start) { bootinfo.mod_start = *(uint32_t *)(p + 8); bootinfo.mod_end = *(uint32_t *)(p + 12); }
+            break;
         case 11: case 12: bootinfo.uefi = true; break;
         case 14: case 15: {
             uint32_t n = size - 8 < sizeof bootinfo.rsdp_copy ? size - 8 : sizeof bootinfo.rsdp_copy;
@@ -39,6 +43,11 @@ static void parse_multiboot(uint64_t addr) {
     }
 }
 
+/* Watches for USB devices being plugged in or removed. */
+static void usb_thread(void *arg) {
+    for (;;) { xhci_service(); task_sleep(100); }
+}
+
 void kmain(uint32_t magic, uint64_t mbi) {
     serial_init();
     if (magic != 0x36D76289) {
@@ -47,6 +56,7 @@ void kmain(uint32_t magic, uint64_t mbi) {
     }
     parse_multiboot(mbi);
     mem_init();
+    vm_init();
     gdt_init();
     idt_init();
     console_init();
@@ -70,6 +80,9 @@ void kmain(uint32_t magic, uint64_t mbi) {
     if (ps2_present) LOG_OK("PS/2 controller%s\n", mouse_present ? " (keyboard + mouse)" : "");
     acpi_init();
     boot_progress(25);
+    vfs_init();
+    if (bootinfo.mod_start) initrd_load((const uint8_t *)bootinfo.mod_start, (const uint8_t *)bootinfo.mod_end);
+    apps_refresh();
     pci_scan();
     LOG_OK("PCI: %d devices\n", pci_count);
     boot_progress(35);
@@ -85,6 +98,7 @@ void kmain(uint32_t magic, uint64_t mbi) {
     boot_progress(92);
     sched_init();
     task_create_kernel("Desktop", desktop_thread, 0);
+    task_create_kernel("USB", usb_thread, 0);
     task_spawn("about");
     boot_progress(100);
     sleep_ms(400);

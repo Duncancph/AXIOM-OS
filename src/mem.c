@@ -9,6 +9,7 @@ static void *free_list;
 
 void mem_init(void) {
     uint64_t kend = ((uint64_t)kernel_end + 0xFFFFF) & ~0xFFFFFULL;
+    if (bootinfo.mod_end > kend) kend = (bootinfo.mod_end + 0xFFFFF) & ~0xFFFFFULL;   /* keep GRUB's module safe */
     for (int i = 0; i < bootinfo.mmap_count; i++) {
         struct mmap_ent *e = &bootinfo.mmap[i];
         if (e->type != 1) continue;
@@ -56,15 +57,15 @@ uint64_t mem_used(void) { return next_free - region_start - free_count * 4096; }
 void map_mmio_flags(uint64_t phys, uint64_t size, uint64_t cache) {
     for (uint64_t a = phys & ~0x1FFFFFULL; a < phys + size; a += 0x200000) {
         if (a < 0x100000000ULL) continue;
-        uint64_t *pml4 = boot_pml4;
-        int i4 = (a >> 39) & 511, i3 = (a >> 30) & 511, i2 = (a >> 21) & 511;
+        uint64_t *pml4 = boot_pml4, va = HHDM + a;
+        int i4 = (va >> 39) & 511, i3 = (va >> 30) & 511, i2 = (va >> 21) & 511;
         if (!(pml4[i4] & 1)) pml4[i4] = (uint64_t)page_alloc_or_panic(1) | 3;
         uint64_t *pdpt = (uint64_t *)(pml4[i4] & ~0xFFFULL);
         if (!(pdpt[i3] & 1)) pdpt[i3] = (uint64_t)page_alloc_or_panic(1) | 3;
         uint64_t *pd = (uint64_t *)(pdpt[i3] & ~0xFFFULL);
         pd[i2] = a | 0x83 | cache;
-        __asm__ volatile("invlpg (%0)" ::"r"(a) : "memory");
+        __asm__ volatile("invlpg (%0)" ::"r"(va) : "memory");
     }
 }
-/* Identity-map a device region above 4 GiB as uncached 2 MiB pages. */
-void map_mmio(uint64_t phys, uint64_t size) { map_mmio_flags(phys, size, 0x18); }
+/* Map device memory (uncached) and return the address to use for it. */
+void *map_mmio(uint64_t phys, uint64_t size) { map_mmio_flags(phys, size, 0x18); return mmio_virt(phys); }

@@ -12,6 +12,13 @@
 
 extern uint64_t boot_pml4[];
 
+/* Programs copy the kernel's top-level page table entries when they're created, so the kernel
+ * window must already exist: pre-create its PML4 entries at boot. */
+void vm_init(void) {
+    for (int i = 256; i < 512; i++)
+        if (!(boot_pml4[i] & P)) boot_pml4[i] = (uint64_t)page_alloc_or_panic(1) | P | W;
+}
+
 uint64_t *vm_create(void) {
     uint64_t *pml4 = page_alloc(1);
     if (!pml4) return 0;

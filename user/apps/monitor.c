@@ -1,8 +1,7 @@
 /* System Monitor: live CPU and memory use, and every running process. */
 #include "../lib/dunc.h"
 
-#define WW 680
-#define WH 520
+static int WW = 680, WH = 520;
 #define HIST 60
 static struct app a;
 static struct procinfo procs[32], prev[32];
@@ -60,10 +59,11 @@ static void draw(void) {
     gfx_fill(c, 0, 0, WW, WH, UI_BG);
     char v[32], s[64];
     ksnprintf(v, sizeof v, "%d%%", cpu_now);
-    stat_card(c, 20, 18, 312, "CPU", v, "in use", cpu_hist, UI_ACCENT);
+    int cw = (WW - 56) / 2;
+    stat_card(c, 20, 18, cw, "CPU", v, "in use", cpu_hist, UI_ACCENT);
     ksnprintf(v, sizeof v, "%lu MiB", si.mem_used >> 20);
     ksnprintf(s, sizeof s, "of %lu MiB", si.mem_total >> 20);
-    stat_card(c, 348, 18, 312, "Memory", v, s, mem_hist, 0xA78BFA);
+    stat_card(c, 36 + cw, 18, cw, "Memory", v, s, mem_hist, 0xA78BFA);
 
     gfx_text(c, &font_ui_bold, 20, 198, UI_TEXT, "Processes");
     uint64_t up = si.uptime_ms / 1000;
@@ -75,7 +75,8 @@ static void draw(void) {
     ui_button(c, WW - 20 - 110, 178, 110, 30, "End task", BTN_DANGER, hover_btn, !can_kill);
 
     ui_card(c, 20, 216, WW - 40, WH - 236);
-    static const int colx[] = { 36, 92, 300, 380, 470, 560 };
+    int extra = WW - 680 > 0 ? WW - 680 : 0;
+    int colx[] = { 36, 92, 300 + extra / 2, 380 + extra * 2 / 3, 470 + extra * 5 / 6, 560 + extra };
     static const char *hdr[] = { "PID", "Name", "Type", "State", "CPU", "Memory" };
     for (int i = 0; i < 6; i++) gfx_text(c, &font_ui_bold, colx[i], 242, UI_MUTED, hdr[i]);
     gfx_fill(c, 30, 250, WW - 60, 1, UI_BORDER);
@@ -99,7 +100,7 @@ static void draw(void) {
 }
 
 int main(void) {
-    if (!app_open(&a, WW, WH, "System Monitor")) return 1;
+    if (!app_open_ex(&a, WW, WH, "System Monitor", WIN_RESIZABLE)) return 1;
     sample(); sys_sleep(250); sample();
     last_sample = sys_time();
     draw();
@@ -110,6 +111,8 @@ int main(void) {
         int r = wait > 0 ? sys_event(&e, wait) : 0;
         if (r == 0) { sample(); last_sample = sys_time(); draw(); continue; }
         if (e.type == EV_CLOSE) break;
+        if (e.type == EV_RESIZE) { if (app_resize(&a, &e)) { WW = a.wi.w; WH = a.wi.h; draw(); } continue; }
+
         if (e.type == EV_MOUSE_MOVE || e.type == EV_MOUSE_LEAVE) {
             int hb = e.type == EV_MOUSE_MOVE && ui_in(e.x, e.y, WW - 130, 178, 110, 30);
             int hr = -1;

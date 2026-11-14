@@ -8,14 +8,15 @@ UCFLAGS := $(COMMON) -mcmodel=large
 LDFLAGS := -n -T src/linker.ld -nostdlib -z max-page-size=0x1000 --no-warn-rwx-segments -z noexecstack
 LIBGCC  := $(shell $(CC) -print-libgcc-file-name)
 
-APPS    := about terminal monitor bluetooth calc sandbox
+APPS    := files about terminal monitor bluetooth calc sandbox
+REPO_APPS := editor clock
 K_SRCS  := $(filter-out src/desktop_highland.c,$(wildcard src/*.c)) common/gfx.c common/str.c
 K_OBJS  := $(patsubst %.c,build/k/%.o,$(K_SRCS)) build/k/boot.o build/k/isr.o build/k/apps.o
 U_LIB   := build/u/crt0.o build/u/libdunc.o build/u/gfx.o build/u/str.o
 U_ELFS  := $(patsubst %,build/user/%.elf,$(APPS))
 HDRS    := $(wildcard src/*.h common/*.h user/lib/*.h)
 
-.PHONY: all run run-uefi clean
+.PHONY: all run run-uefi clean test
 all: duncos.iso
 
 build/k/%.o: %.c $(HDRS)
@@ -48,8 +49,25 @@ build/user/%.elf: build/u/app_%.o $(U_LIB) user/user.ld
 build/thane.elf: $(K_OBJS) src/linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(K_OBJS)
 
-duncos.iso: build/thane.elf iso/boot/grub/grub.cfg
+# Initial files: home folder, the OS source in ~/Projects/thane, and the clan package repository
+REPO_PKGS := $(patsubst %,build/user/%.elf,$(REPO_APPS))
+build/initrd.tar: $(shell find rootfs -type f) $(REPO_PKGS) repo/index.txt $(K_SRCS) README.md
+	rm -rf build/rootfs && mkdir -p build/rootfs && cp -r rootfs/. build/rootfs/
+	mkdir -p build/rootfs/home/Projects/thane/kernel build/rootfs/home/Projects/thane/drivers \
+	         build/rootfs/home/Projects/thane/boot build/rootfs/home/Projects/thane/fonts build/rootfs/home/Projects/thane/docs \
+	         build/rootfs/system/repo
+	cp src/sched.c src/vm.c src/syscall.c src/idt.c src/cpu.c src/isr.asm src/mem.c src/kmalloc.c src/vfs.c src/apps.c \
+	   src/desktop.c src/highland.c src/desktop_highland.c src/gfx.h build/rootfs/home/Projects/thane/kernel/
+	cp $(wildcard src/xhci.c src/usb*.c src/bt.c src/kbd.c src/pci.c src/acpi.c src/rtc.c src/fat.c) build/rootfs/home/Projects/thane/drivers/
+	cp src/boot.asm src/fb_boot_logo.c src/linker.ld iso/boot/grub/grub.cfg build/rootfs/home/Projects/thane/boot/
+	cp src/font8x16.h tools/genunifont.py common/theme_highland.h build/rootfs/home/Projects/thane/fonts/
+	cp README.md build/rootfs/home/Projects/thane/docs/
+	cp repo/index.txt $(REPO_PKGS) build/rootfs/system/repo/ 2>/dev/null || true
+	tar --format=ustar --owner=0 --group=0 -cf $@ -C build/rootfs .
+
+duncos.iso: build/thane.elf build/initrd.tar iso/boot/grub/grub.cfg
 	cp build/thane.elf iso/boot/thane.elf
+	cp build/initrd.tar iso/boot/initrd.tar
 	grub-mkrescue -o $@ iso 2>/dev/null
 
 QEMU := qemu-system-x86_64 -m 1G -device qemu-xhci -device usb-kbd -device usb-mouse -serial stdio
@@ -59,4 +77,13 @@ run-uefi: duncos.iso
 	$(QEMU) -bios /usr/share/ovmf/OVMF.fd -cdrom $<
 
 clean:
-	rm -rf build iso/boot/thane.elf duncos.iso
+	rm -rf build iso/boot/thane.elf iso/boot/initrd.tar duncos.iso
+
+test:
+	@mkdir -p build/test
+	gcc -std=gnu17 -O1 -w -fno-builtin -o build/test/test_bt tests/test_bt.c src/bt.c common/str.c && build/test/test_bt | tail -4
+	gcc -std=gnu17 -O1 -w -fno-builtin -Isrc -o build/test/test_fat tests/test_fat.c src/fat.c common/str.c
+	rm -f build/test/fat.img && truncate -s 64M build/test/fat.img && mkfs.fat -F 32 -n DUNCTEST build/test/fat.img >/dev/null
+	printf 'written by mtools on Linux\n' > build/test/hello.txt && MTOOLS_SKIP_CHECK=1 mcopy -i build/test/fat.img build/test/hello.txt "::/Hello From Linux.txt"
+	build/test/test_fat build/test/fat.img
+	fsck.fat -n build/test/fat.img && echo "fsck.fat: clean"

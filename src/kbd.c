@@ -95,6 +95,7 @@ void ps2_poll(void) {
             case 0x47: input_push(KEY_HOME); break;   case 0x4F: input_push(KEY_END); break;
             case 0x53: input_push(KEY_DEL); break;    case 0x1C: input_push('\n'); break;
             case 0x5B: case 0x5C: input_push(KEY_SUPER); break;
+            case 0x49: input_push(KEY_PGUP); break;   case 0x51: input_push(KEY_PGDN); break;
             }
             continue;
         }

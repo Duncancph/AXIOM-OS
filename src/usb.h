@@ -21,12 +21,23 @@ struct usb_dev {
     usb_xfer_cb ep_cb[32];
     volatile int xfer_done[32];
     volatile uint32_t xfer_cc[32], xfer_res[32];
+    volatile uint64_t xfer_ptr[32];
     uint16_t vid, pid, mps0;
     uint8_t dclass, dsub, dproto;
     char manufacturer[48], product[48];
     uint8_t config[1024]; uint16_t config_len;
     const char *driver;
     int max_dci;
+    /* topology */
+    int root_port, depth; uint32_t route;
+    struct usb_dev *parent; int parent_port;
+    int tt_slot, tt_port; bool mtt;
+    /* hub */
+    int hub_ports, hub_dci; volatile uint32_t hub_pending;
+    /* drivers */
+    void (*detach)(struct usb_dev *d);
+    void *drv;
+    volatile int lock_owner; int lock_depth;
 };
 
 /* Completion codes */
@@ -38,6 +49,13 @@ struct usb_dev {
 extern struct usb_dev usb_devs[USB_MAX_DEVS];
 
 int usb_control(struct usb_dev *d, uint8_t rt, uint8_t req, uint16_t val, uint16_t idx, uint16_t len, void *data);
+/* Synchronous bulk transfer into/out of a physically contiguous buffer. Returns bytes moved, or -1 / -2 (stall). */
+long usb_bulk(struct usb_dev *d, int dci, void *buf, uint32_t len, uint32_t timeout_ms);
+void usb_clear_halt(struct usb_dev *d, int dci, uint8_t ep_addr);
+void usb_lock(struct usb_dev *d);
+void usb_unlock(struct usb_dev *d);
+void xhci_service(void);            /* hot-plug: called regularly by the USB thread */
+void msc_attach(struct usb_dev *d, int iface);
 int usb_configure_ep(struct usb_dev *d, const uint8_t *epdesc, const uint8_t *ss_comp);
 int usb_queue_in(struct usb_dev *d, int dci, usb_xfer_cb cb);
 const uint8_t *usb_find_endpoint(struct usb_dev *d, int iface, int type, bool in, const uint8_t **ss_comp);

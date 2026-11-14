@@ -67,6 +67,7 @@ void xhci_poll(void) {
 uint64_t uptime_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1000 + t.tv_nsec / 1000000; }
 int input_poll(void) { return -1; }
 void kyield(void) {}
+void desktop_notify(const char *t, const char *m) {}
 bool sched_running;
 struct task *current;
 void console_set_color(int c) {}

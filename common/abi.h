@@ -11,13 +11,16 @@ enum {
     SYS_EXIT, SYS_YIELD, SYS_SLEEP, SYS_TIME, SYS_LOG,
     SYS_WIN_CREATE, SYS_WIN_FLUSH, SYS_EVENT, SYS_WIN_TITLE, SYS_WIN_CLOSE,
     SYS_SPAWN, SYS_PROCS, SYS_KILL, SYS_KCMD, SYS_BT, SYS_SYSINFO, SYS_POWER, SYS_RTC, SYS_NOTIFY,
+    SYS_FS_LIST, SYS_FS_READ, SYS_FS_WRITE, SYS_FS_MKDIR, SYS_FS_DELETE, SYS_FS_RENAME, SYS_FS_STAT,
+    SYS_FS_VOLUMES, SYS_GETARG, SYS_WIN_RESIZE, SYS_APPS, SYS_FS_COPY,
     SYS_COUNT
 };
 
 /* keys (besides printable ASCII, '\n', '\b', '\t', 27 = Esc) */
-enum { KEY_UP = 0x80, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_HOME, KEY_END, KEY_DEL };
+enum { KEY_UP = 0x80, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_HOME, KEY_END, KEY_DEL, KEY_PGUP, KEY_PGDN };
 
-enum { EV_NONE, EV_KEY, EV_MOUSE_DOWN, EV_MOUSE_UP, EV_MOUSE_MOVE, EV_CLOSE, EV_FOCUS, EV_BLUR, EV_MOUSE_LEAVE, EV_WHEEL };
+enum { EV_NONE, EV_KEY, EV_MOUSE_DOWN, EV_MOUSE_UP, EV_MOUSE_MOVE, EV_CLOSE, EV_FOCUS, EV_BLUR, EV_MOUSE_LEAVE, EV_WHEEL,
+       EV_RESIZE /* x,y = new content size: call sys_win_resize */, EV_FILES_CHANGED };
 struct dunc_event { int type, win, x, y, key, button; };
 
 struct win_info { int id; uint32_t *buf; int w, h; };
@@ -37,3 +40,17 @@ struct bt_adapter { int present, ok, le; char maker[32], version[16], addr[18], 
 struct bt_device { uint8_t addr[6]; int le, rssi; uint32_t cod; char name[64]; char kind[16]; };
 
 struct rtc_time { int year, mon, day, hour, min, sec; };
+
+/* ---- files ---- */
+#define PATH_MAX_ 256
+struct dunc_dirent { char name[64]; int is_dir; uint64_t size; };
+struct dunc_stat { int is_dir, volume; uint64_t size; };
+struct dunc_volume { char path[16], label[32], kind[16]; uint64_t total, free; int writable; };
+enum { FS_OK = 0, FS_ENOENT = -1, FS_EEXIST = -2, FS_ENOTDIR = -3, FS_EISDIR = -4, FS_ENOSPC = -5,
+       FS_EIO = -6, FS_ENOTEMPTY = -7, FS_EROFS = -8, FS_EINVAL = -9 };
+
+/* ---- registered apps (built-in + installed with clan) ---- */
+struct dunc_app { char id[24], name[32]; int installed; };
+
+/* window flags */
+#define WIN_RESIZABLE 1

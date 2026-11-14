@@ -60,8 +60,7 @@ void console_init(void) {
     struct bootinfo *b = &bootinfo;
     if (b->fb_addr && b->fb_type == 1 && (b->fb_bpp == 32 || b->fb_bpp == 24 || b->fb_bpp == 16)) {
         console_has_fb = true;
-        fb = (volatile uint8_t *)b->fb_addr;
-        map_mmio(b->fb_addr, (uint64_t)b->fb_pitch * b->fb_h);
+        fb = map_mmio(b->fb_addr, (uint64_t)b->fb_pitch * b->fb_h);
         pitch = b->fb_pitch; width = b->fb_w; height = b->fb_h; bpp = b->fb_bpp;
         scale = width >= 2560 ? 2 : 1;
         cols = width / (8 * scale); rows = height / (16 * scale);

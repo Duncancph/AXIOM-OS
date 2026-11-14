@@ -179,8 +179,13 @@ static void handle_async(uint8_t *e) {
 
 /* ---------------- public API ---------------- */
 
+static void bt_detach(struct usb_dev *d) {
+    if (bdev == d) { bdev = 0; info_ok = false; desktop_notify("Bluetooth", "The Bluetooth adapter was removed."); }
+}
+
 void bt_attach(struct usb_dev *d, int iface, int dci) {
     bdev = d; bt_iface = iface; bt_dci = dci;
+    d->detach = bt_detach;
     usb_queue_in(d, dci, on_event);
     int st = hci_cmd(0x0C03, 0, 0, 0, 0);       /* HCI_Reset */
     if (st != 0) {

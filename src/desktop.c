@@ -20,6 +20,10 @@ struct window {
     char title[64];
     uint32_t *buf; int pages; uint64_t uva;
     uint64_t close_req;
+    bool resizable, maximized, resize_sent;
+    int want_w, want_h;                 /* size requested from the app */
+    int rx, ry, rw, rh;                 /* position/size to restore after maximise */
+    uint64_t last_title_click;
 };
 static inline int fw(struct window *w) { return w->w + 2; }
 static inline int fh(struct window *w) { return w->h + TITLE + 1; }
@@ -33,17 +37,22 @@ static struct canvas cv;
 static struct framebuffer full;
 
 static int mx, my, mbtn, drag_win = -1, drag_ox, drag_oy, capture_win = -1, hover_win = -1;
+static int resize_win = -1, resize_mode, resize_ox, resize_oy, resize_w0, resize_h0;   /* mode: 1 right, 2 bottom, 3 corner */
+#define MIN_W 280
+#define MIN_H 160
 static int hover_ctl, hx, hy, hw, hh;
 static bool menu_open;
 static char bar_sig[96];
+static struct rect dock_area_cached;
 static int run_sig = -1;
 
 struct toast { bool used; char title[64], msg[160]; uint64_t until; };
 static struct toast toasts[4];
 
-/* apps, in dock order (matches highland.c) */
-static const char *app_ids[HL_NAPPS]   = { "terminal", "monitor", "bluetooth", "calc", "sandbox", "about" };
-static const char *app_names[HL_NAPPS] = { "Terminal", "System Monitor", "Bluetooth", "Calculator", "Protection Test", "About DuncOS" };
+/* apps come from the registry (built-in + installed with clan) */
+static int napps_dock(void) { int n = apps_count(); return n > HL_MAX_DOCK ? HL_MAX_DOCK : n; }
+#define HL_NAPPS napps_dock()
+static const char *app_name(int i) { return apps_get(i)->name; }
 
 /* ---------------- geometry ---------------- */
 struct rect { int x, y, w, h; };
@@ -57,7 +66,7 @@ static struct rect runion(struct rect a, struct rect b) {
 static bool contains(struct rect a, struct rect b) { return b.x >= a.x && b.y >= a.y && b.x + b.w <= a.x + a.w && b.y + b.h <= a.y + a.h; }
 
 static struct rect bar_rect(void) { return (struct rect){ 0, 0, W, HL_BAR_H }; }
-static struct rect dock_rect(void) { int x, y, w, h; hl_dock_rect(W, H, &x, &y, &w, &h); return (struct rect){ x, y, w, h }; }
+static struct rect dock_rect(void) { int x, y, w, h; hl_dock_rect(W, H, HL_NAPPS, &x, &y, &w, &h); return (struct rect){ x, y, w, h }; }
 static struct rect dock_area(void) { struct rect d = dock_rect(); return (struct rect){ d.x - 1, d.y - 1, d.w + 2, d.h + 10 }; }  /* incl. shadow */
 static struct rect dock_item(int i) { struct rect d = dock_rect(); return (struct rect){ d.x + HL_DOCK_PAD + i * (HL_DOCK_ICON + HL_DOCK_GAP), d.y + HL_DOCK_PAD, HL_DOCK_ICON, HL_DOCK_ICON }; }
 static struct rect frame_area(struct window *w) { return (struct rect){ w->x - 8, w->y - 2, fw(w) + 16, fh(w) + 30 }; }
@@ -105,12 +114,12 @@ static int top_window(void) {
     return -1;
 }
 static int app_index(const char *id) {
-    for (int i = 0; id && i < HL_NAPPS; i++) if (!strcmp(app_ids[i], id)) return i;
+    for (int i = 0; id && i < HL_NAPPS; i++) if (!strcmp(apps_get(i)->id, id)) return i;
     return -1;
 }
 static bool app_running(int a) {
     for (int i = 0; i < MAX_TASKS; i++)
-        if (tasks[i].state && tasks[i].state != PS_ZOMBIE && tasks[i].app && !strcmp(tasks[i].app, app_ids[a])) return true;
+        if (tasks[i].state && tasks[i].state != PS_ZOMBIE && tasks[i].app && !strcmp(tasks[i].app, apps_get(a)->id)) return true;
     return false;
 }
 
@@ -144,15 +153,24 @@ static const char *cursor_img[] = {
     "X", "XX", "X.X", "X..X", "X...X", "X....X", "X.....X", "X......X", "X.......X", "X........X",
     "X.........X", "X......XXXXX", "X...X..X", "X..XX..X", "X.X  X..X", "XX   X..X", "X     X..X", "      X..X", "       XX" };
 
+static const char *cursor_resize[] = {   /* diagonal resize, hotspot at the centre */
+    "XXXXXX       ", "X....X       ", "X...X        ", "X....X       ", "X.X..X       ", "XX X..X      ",
+    "     X..X    ", "      X..X XX", "       X..X.X", "       X....X", "        X...X", "       X....X", "       XXXXXX" };
+static const char **cur_img = cursor_img;
+static int cur_rows = 19, cur_hx, cur_hy;
+
 /* The cursor is drawn straight onto the screen (save-under), so moving it never recomposes. */
 static void cursor_paint(int cx, int cy, bool show) {
-    for (int j = 0; j < 19; j++) {
+    cx -= cur_hx; cy -= cur_hy;
+    for (int j = 0; j < cur_rows; j++) {
         int y = cy + j;
         if (y >= H) break;
-        for (int i = 0; cursor_img[j][i]; i++) {
+        if (y < 0) continue;
+        for (int i = 0; cur_img[j][i]; i++) {
             int x = cx + i;
             if (x >= W) break;
-            char ch = cursor_img[j][i];
+            if (x < 0) continue;
+            char ch = cur_img[j][i];
             if (ch == ' ') continue;
             uint32_t c = !show ? bb[y * W + x] : ch == 'X' ? 0x000000 : 0xFFFFFF;
             fb32[(size_t)y * fb_stride + x] = fbcol(c);
@@ -167,7 +185,15 @@ static void flush_rect(struct rect r) {
         if (fb_xrgb) for (int i = 0; i < r.w; i++) d[i] = s[i];
         else for (int i = 0; i < r.w; i++) d[i] = fbcol(s[i]);
     }
-    if (overlap(r, (struct rect){ mx, my, 12, 19 })) cursor_paint(mx, my, true);
+    if (overlap(r, (struct rect){ mx - cur_hx, my - cur_hy, 13, 19 })) cursor_paint(mx, my, true);
+}
+
+static void set_cursor(bool resize) {
+    const char **img = resize ? cursor_resize : cursor_img;
+    if (img == cur_img) return;
+    cursor_paint(mx, my, false);
+    cur_img = img; cur_rows = resize ? 13 : 19; cur_hx = resize ? 6 : 0; cur_hy = resize ? 6 : 0;
+    cursor_paint(mx, my, true);
 }
 
 static void draw_window(int idx, struct rect r) {
@@ -185,7 +211,9 @@ static void draw_window(int idx, struct rect r) {
         gfx_line(&cv, w->x + 17, cy - 3, w->x + 23, cy + 3, 0x5A1010, 2);
         gfx_line(&cv, w->x + 17, cy + 3, w->x + 23, cy - 3, 0x5A1010, 2);
         gfx_fill(&cv, w->x + 36, cy - 1, 9, 2, 0x5A3C00);
+        if (w->resizable) { gfx_fill(&cv, w->x + 56, cy - 1, 9, 2, 0x0E4A22); gfx_fill(&cv, w->x + 59, cy - 4, 2, 9, 0x0E4A22); }
     }
+    if (!w->resizable) gfx_circle(&cv, w->x + 60, w->y + HL_TITLE_H / 2, HL_DOT_R + 1, HL_WIN_BG, 170);   /* can't maximise */
 }
 
 static void draw_dock_overlay(void) {
@@ -193,7 +221,7 @@ static void draw_dock_overlay(void) {
         int i = hover_ctl - 100;
         struct rect r = dock_item(i);
         gfx_rrect(&cv, r.x, r.y, r.w, r.h, 14, 0xFFFFFF, 26);
-        const char *l = app_names[i];
+        const char *l = app_name(i);
         int lw = gfx_text_width(&font_ui, l) + 22;
         int bx = r.x + r.w / 2 - lw / 2, by = dock_rect().y - 38;
         gfx_rrect(&cv, bx, by, lw, 28, 8, HL_DOCK_BG, 235);
@@ -214,10 +242,11 @@ static void draw_menu(void) {
     for (int i = 0; i < HL_NAPPS; i++) {
         struct rect r = menu_item(i);
         if (hover_ctl == 200 + i) gfx_rrect(&cv, r.x, r.y, r.w, r.h, 8, HL_ACCENT, 36);
-        uint32_t bg, fg; const char **ic = hl_app_icon(i, &bg, &fg);
+        uint32_t bg, fg; const char **ic = hl_icon(apps_get(i)->icon, &bg, &fg);
         gfx_rrect(&cv, r.x + 6, r.y + 4, 34, 34, 9, bg, 255);
         pixel_icon(&cv, ic, 16, r.x + 7, r.y + 5, 2, fg);
-        gfx_mono_text(&cv, r.x + 52, r.y + 13, app_names[i], hover_ctl == 200 + i ? HL_TEXT : HL_TEXT_DIM);
+        gfx_mono_text(&cv, r.x + 52, r.y + 13, app_name(i), hover_ctl == 200 + i ? HL_TEXT : HL_TEXT_DIM);
+        if (apps_get(i)->installed) gfx_mono_text(&cv, r.x + 52 + (int)strlen(app_name(i)) * 8 + 8, r.y + 13, "clan", HL_GOLD);
         if (app_running(i)) gfx_circle(&cv, r.x + r.w - 14, r.y + r.h / 2, 3, HL_GREEN, 255);
     }
     gfx_blend(&cv, m.x + 1, m.y + m.h - 64, m.w - 2, 1, 0xFFFFFF, 16);
@@ -302,9 +331,9 @@ static void compose(struct rect r) {
         gfx_line(&cv, bx - 4, cy - 4, bx + 4, cy + 3, bc, 1); gfx_line(&cv, bx + 4, cy + 3, bx, cy + 7, bc, 1);
     }
     if (overlap(r, dock_area())) {
-        int running[HL_NAPPS];
-        for (int i = 0; i < HL_NAPPS; i++) running[i] = app_running(i);
-        hl_render_dock(&full, running);
+        int running[HL_MAX_DOCK]; const char *icons[HL_MAX_DOCK];
+        for (int i = 0; i < HL_NAPPS; i++) { running[i] = app_running(i); icons[i] = apps_get(i)->icon; }
+        hl_render_dock(&full, icons, running, HL_NAPPS);
     }
     draw_dock_overlay();
     if (menu_open) draw_menu();
@@ -348,6 +377,7 @@ static void remove_window(int idx) {
     for (int i = 0; i < nz; i++) if (zorder[i] != idx) zorder[k++] = zorder[i];
     nz = k;
     if (drag_win == idx) drag_win = -1;
+    if (resize_win == idx) resize_win = -1;
     if (capture_win == idx) capture_win = -1;
     if (hover_win == idx) hover_win = -1;
     hover_ctl = 0;
@@ -359,7 +389,7 @@ static struct window *find(struct task *t, int id) {
     return 0;
 }
 
-struct window *wm_create(struct task *t, int w, int h, const char *title, uint32_t **buf, int *pages, uint64_t uva) {
+struct window *wm_create(struct task *t, int w, int h, const char *title, uint32_t **buf, int *pages, uint64_t uva, int flags) {
     int top = HL_BAR_H + 8, bottom = dock_rect().y - 8;
     if (!desktop_ok || w < 100 || h < 60 || w > W - 20 || h + TITLE + 1 > H - HL_BAR_H - 16) return 0;
     int idx = -1, open = 0;
@@ -372,6 +402,8 @@ struct window *wm_create(struct task *t, int w, int h, const char *title, uint32
     memset(win, 0, sizeof *win);
     win->used = true; win->id = next_wid++; win->owner = t; win->w = w; win->h = h;
     win->buf = b; win->pages = np; win->uva = uva;
+    win->resizable = flags & WIN_RESIZABLE;
+    win->want_w = w; win->want_h = h;
     strncpy0(win->title, title, sizeof win->title);
     for (int i = 0; i < w * h; i++) b[i] = HL_WIN_BG;
     int off = (open % 5) * 32 - 48;
@@ -387,6 +419,61 @@ struct window *wm_create(struct task *t, int w, int h, const char *title, uint32
 }
 
 int wm_id(struct window *w) { return w->id; }
+
+static int max_content_w(void) { return W - 2; }
+static int max_content_h(void) { return dock_rect().y - 8 - HL_BAR_H - TITLE - 1; }
+
+/* Ask the app to redraw at a new size (it answers with SYS_WIN_RESIZE). */
+static void request_size(struct window *w, int cw, int ch) {
+    if (cw < MIN_W) cw = MIN_W;
+    if (ch < MIN_H) ch = MIN_H;
+    if (cw > max_content_w()) cw = max_content_w();
+    if (ch > H - HL_BAR_H - TITLE - 1) ch = H - HL_BAR_H - TITLE - 1;
+    w->want_w = cw; w->want_h = ch;
+    if (w->resize_sent || (cw == w->w && ch == w->h)) return;
+    struct dunc_event e = { EV_RESIZE, w->id, cw, ch, 0, 0 };
+    event_push(w->owner, &e);
+    w->resize_sent = true;
+}
+
+/* Called by the app: swap in a buffer of the size we asked for. */
+bool wm_resize(struct task *t, int id, int *nw, int *nh) {
+    struct window *w = find(t, id);
+    if (!w || !w->resizable) return false;
+    int cw = w->want_w, ch = w->want_h;
+    w->resize_sent = false;
+    if (cw == w->w && ch == w->h) { *nw = cw; *nh = ch; return true; }
+    int np = (cw * ch * 4 + 4095) / 4096;
+    uint32_t *nb = page_alloc(np);
+    if (!nb) return false;
+    for (int y = 0; y < ch; y++)
+        for (int x = 0; x < cw; x++)
+            nb[y * cw + x] = (x < w->w && y < w->h) ? w->buf[y * w->w + x] : HL_WIN_BG;
+    damage_frame(w);
+    vm_unmap(t->pml4, w->uva, w->pages);
+    for (int i = 0; i < w->pages; i++) page_free((uint8_t *)w->buf + i * 4096);
+    for (int i = 0; i < np; i++) vm_map(t->pml4, w->uva + i * 4096ULL, (uint64_t)nb + i * 4096ULL, true, false);
+    w->buf = nb; w->pages = np; w->w = cw; w->h = ch;
+    damage_frame(w);
+    *nw = cw; *nh = ch;
+    return true;
+}
+
+static void toggle_maximize(struct window *w) {
+    if (!w->resizable) return;
+    damage_frame(w);
+    if (!w->maximized) {
+        w->rx = w->x; w->ry = w->y; w->rw = w->w; w->rh = w->h;
+        w->x = 0; w->y = HL_BAR_H;
+        w->maximized = true;
+        request_size(w, max_content_w(), max_content_h());
+    } else {
+        w->x = w->rx; w->y = w->ry;
+        w->maximized = false;
+        request_size(w, w->rw, w->rh);
+    }
+    damage_frame(w);
+}
 
 bool wm_flush(struct task *t, int id, int x, int y, int w, int h) {
     struct window *win = find(t, id);
@@ -462,7 +549,22 @@ static void set_hover(int ctl, struct rect r) {
     if (ctl) damage(hx, hy, hw, hh);
 }
 
+static int resize_zone(int *wi_out) {
+    int wi = window_at(mx, my);
+    for (int z = nz - 1; z >= 0 && wi < 0; z--) {   /* zones extend a few pixels outside the frame */
+        struct window *w = &wins[zorder[z]];
+        if (!w->minimized && mx >= w->x && mx < w->x + fw(w) + 5 && my >= w->y && my < w->y + fh(w) + 5) wi = zorder[z];
+    }
+    if (wi < 0 || !wins[wi].resizable) return 0;
+    struct window *w = &wins[wi];
+    bool right = mx >= w->x + fw(w) - 6, bottom = my >= w->y + fh(w) - 6;
+    bool corner = mx >= w->x + fw(w) - 16 && my >= w->y + fh(w) - 16;
+    *wi_out = wi;
+    return corner ? 3 : right ? 1 : bottom ? 2 : 0;
+}
+
 static void update_hover(void) {
+    int zw; set_cursor(resize_win >= 0 || resize_zone(&zw));
     if (menu_open) {
         for (int i = 0; i < HL_NAPPS; i++) if (in_rect(menu_item(i), mx, my)) { set_hover(200 + i, menu_item(i)); return; }
         for (int k = 0; k < 2; k++) if (in_rect(menu_btn(k), mx, my)) { set_hover(300 + k, menu_btn(k)); return; }
@@ -491,8 +593,8 @@ static void toggle_menu(bool open) {
 }
 
 static void launch(int a) {
-    if (task_spawn(app_ids[a]) < 0) {
-        char m[96]; ksnprintf(m, sizeof m, "Couldn't start %s (out of memory or too many apps).", app_names[a]);
+    if (task_spawn(apps_get(a)->id) < 0) {
+        char m[96]; ksnprintf(m, sizeof m, "Couldn't start %s (out of memory or too many apps).", app_name(a));
         desktop_notify("Couldn't open app", m);
     }
     damage_r(dock_area());
@@ -533,6 +635,14 @@ static void click(int button) {
     if (in_rect(crown_btn(), mx, my)) { toggle_menu(true); return; }
     for (int i = 0; i < HL_NAPPS; i++) if (in_rect(dock_item(i), mx, my)) { activate_app(i); return; }
     if (in_rect(dock_rect(), mx, my) || my < HL_BAR_H) return;
+    int zw, zone = resize_zone(&zw);
+    if (zone && button == 1) {
+        if (zw != top_window()) raise(zw);
+        struct window *w = &wins[zw];
+        resize_win = zw; resize_mode = zone; resize_ox = mx; resize_oy = my; resize_w0 = w->w; resize_h0 = w->h;
+        w->maximized = false;
+        return;
+    }
     int wi = window_at(mx, my);
     if (wi < 0) return;
     struct window *w = &wins[wi];
@@ -541,8 +651,19 @@ static void click(int button) {
         if (button != 1) return;
         if (in_rect(dot(w, 0), mx, my)) close_window_clicked(w);
         else if (in_rect(dot(w, 1), mx, my)) { int old = top_window(); w->minimized = true; damage_frame(w); focus_changed(old); hover_ctl = 0; }
-        else if (in_rect(dot(w, 2), mx, my)) { /* maximise: needs resizable windows (not yet) */ }
-        else { drag_win = wi; drag_ox = mx - w->x; drag_oy = my - w->y; }
+        else if (in_rect(dot(w, 2), mx, my)) toggle_maximize(w);
+        else {
+            uint64_t now = uptime_ms();
+            if (now - w->last_title_click < 400) { toggle_maximize(w); w->last_title_click = 0; return; }
+            w->last_title_click = now;
+            if (w->maximized) {   /* dragging a maximised window restores it under the cursor */
+                w->maximized = false;
+                damage_frame(w);
+                w->x = mx - w->rw / 2; if (w->x < 0) w->x = 0;
+                request_size(w, w->rw, w->rh);
+            }
+            drag_win = wi; drag_ox = mx - w->x; drag_oy = my - w->y;
+        }
         return;
     }
     capture_win = wi;
@@ -561,6 +682,12 @@ static void handle_mouse(int dx, int dy, int b, int wheel) {
     bool moved = mx != ox || my != oy;
     if (moved) { cursor_paint(ox, oy, false); cursor_paint(mx, my, true); }
 
+    if (moved && resize_win >= 0) {
+        struct window *w = &wins[resize_win];
+        int nw = resize_w0 + ((resize_mode & 1) ? mx - resize_ox : 0);
+        int nh = resize_h0 + ((resize_mode & 2) ? my - resize_oy : 0);
+        request_size(w, nw, nh);
+    }
     if (moved && drag_win >= 0) {
         struct window *w = &wins[drag_win];
         damage_frame(w);
@@ -577,9 +704,10 @@ static void handle_mouse(int dx, int dy, int b, int wheel) {
     if (pressed & 2) click(2);
     if (released & 3) {
         drag_win = -1;
+        if (resize_win >= 0) { resize_win = -1; update_hover(); }
         if (capture_win >= 0) { send_mouse(capture_win, EV_MOUSE_UP, (released & 1) ? 1 : 2); capture_win = -1; }
     }
-    if (moved && drag_win < 0) {
+    if (moved && drag_win < 0 && resize_win < 0) {
         update_hover();
         int target = capture_win >= 0 ? capture_win : window_at(mx, my);
         bool content = target >= 0 && my >= wins[target].y + TITLE;
@@ -615,7 +743,7 @@ static struct framebuffer splash_fb;
 void boot_progress(int percent) {
     if (!desktop_available()) return;
     if (!splash_shown) {
-        splash_fb = (struct framebuffer){ (volatile uint32_t *)bootinfo.fb_addr, bootinfo.fb_w, bootinfo.fb_h, bootinfo.fb_pitch };
+        splash_fb = (struct framebuffer){ mmio_virt(bootinfo.fb_addr), bootinfo.fb_w, bootinfo.fb_h, bootinfo.fb_pitch };
         boot_logo_show(&splash_fb);
         splash_shown = true;
     }
@@ -625,7 +753,7 @@ void boot_progress(int percent) {
 void desktop_init(void) {
     struct bootinfo *b = &bootinfo;
     W = b->fb_w; H = b->fb_h; fb_stride = b->fb_pitch / 4;
-    fb32 = (uint32_t *)b->fb_addr;
+    fb32 = mmio_virt(b->fb_addr);
     fb_xrgb = b->r_pos == 16 && b->g_pos == 8 && b->b_pos == 0;
     int pages = (W * H * 4 + 4095) / 4096;
     bb = page_alloc(pages); wall = page_alloc(pages);
@@ -661,13 +789,22 @@ void desktop_thread(void *arg) {
             bar_text(app, sizeof app, clk, sizeof clk);
             ksnprintf(sig, sizeof sig, "%s|%s", app, clk);
             if (strcmp(sig, bar_sig)) { strncpy0(bar_sig, sig, sizeof bar_sig); damage_r(bar_rect()); }
-            int rs = 0;
+            int rs = HL_NAPPS << 20;
             for (int i = 0; i < HL_NAPPS; i++) if (app_running(i)) rs |= 1 << i;
-            if (rs != run_sig) { run_sig = rs; damage_r(dock_area()); if (menu_open) damage_r(menu_rect()); }
+            if (rs != run_sig) {
+                struct rect old = dock_area_cached;
+                run_sig = rs;
+                damage_r(old); damage_r(dock_area()); dock_area_cached = dock_area();
+                if (hover_ctl >= 100 && hover_ctl < 200) { hover_ctl = 0; update_hover(); }
+                if (menu_open) damage(menu_rect().x - 6, menu_rect().y, menu_rect().w + 12, menu_rect().h + 20 + MENU_ROW);
+            }
             for (int i = 0; i < MAX_WIN; i++)        /* show "(Not responding)" */
                 if (wins[i].used && wins[i].close_req && now - wins[i].close_req > 1000 && now - wins[i].close_req < 1400)
                     damage(wins[i].x, wins[i].y, fw(&wins[i]), TITLE);
         }
+        for (int i = 0; i < MAX_WIN; i++)
+            if (wins[i].used && wins[i].resizable && !wins[i].resize_sent && (wins[i].want_w != wins[i].w || wins[i].want_h != wins[i].h))
+                request_size(&wins[i], wins[i].want_w, wins[i].want_h);
         task_reap();
 
         int n = ndmg; struct rect todo[32];

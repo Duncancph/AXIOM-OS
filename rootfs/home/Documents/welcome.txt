@@ -1,0 +1,16 @@
+Welcome to DuncOS
+=================
+
+DuncOS runs on the Thane kernel and was created by Bryan Duncan.
+
+Things to try
+- Open Files from the dock and look around ~/Projects/thane:
+  it holds the real source code of this operating system.
+- In the terminal (castle), type 'help', then try 'ls', 'cd Documents', 'cat welcome.txt'.
+- Install an app: clan install editor
+  Then open this file with: edit ~/Documents/welcome.txt
+- Plug in a USB flash drive formatted as FAT32: it appears in Files as a drive.
+- Drag the edge of a window to resize it, or click the green dot to maximise.
+
+Your files in ~ live in memory until you copy them to a USB drive:
+files on the system disk are reset when the computer restarts.

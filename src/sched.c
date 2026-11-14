@@ -1,6 +1,8 @@
 /* Preemptive multitasking. User programs are switched by the local APIC timer
  * (250 Hz); kernel threads (the desktop) run until they sleep or yield. */
 #include "kernel.h"
+#include "vfs.h"
+void kfree(void *p);
 
 struct task tasks[MAX_TASKS];
 struct task *current;
@@ -53,19 +55,34 @@ const struct app_image *app_find(const char *id) {
     return 0;
 }
 
-int task_spawn(const char *app) {
-    const struct app_image *img = app_find(app);
-    if (!img) return -1;
-    struct task *t = alloc_task(img->title);
-    if (!t) return -1;
-    t->user = true; t->app = img->id;
+int task_spawn(const char *app) { return task_spawn_arg(app, ""); }
+
+int task_spawn_arg(const char *app, const char *arg) {
+    const struct app_entry *ae = apps_find(app);
+    if (!ae) return -1;
+    const uint8_t *img = 0; uint64_t img_len = 0; void *loaded = 0;
+    if (ae->builtin) { img = ae->builtin->start; img_len = ae->builtin->end - ae->builtin->start; }
+    else {
+        char path[64]; ksnprintf(path, sizeof path, "/apps/%s.elf", ae->id);
+        loaded = vfs_read_all(path, &img_len);
+        img = loaded;
+        if (!img) return -1;
+    }
+    struct task *t = alloc_task(ae->name);
+    if (!t) { kfree(loaded); return -1; }
+    t->user = true;
+    strncpy0(t->appid, ae->id, sizeof t->appid);
+    t->app = t->appid;
+    strncpy0(t->arg, arg ? arg : "", sizeof t->arg);
     t->pml4 = vm_create();
     uint64_t entry;
-    long pages = t->pml4 ? elf_load(t->pml4, img->start, img->end - img->start, &entry) : -1;
+    long pages = t->pml4 ? elf_load(t->pml4, img, img_len, &entry) : -1;
     long sp = pages >= 0 ? vm_alloc(t->pml4, USER_STACK_TOP - 256 * 1024, 256 * 1024) : -1;
+    kfree(loaded);
     if (pages < 0 || sp < 0) {
         if (t->pml4) vm_destroy(t->pml4);
         for (int i = 0; i < KSTACK_PAGES; i++) page_free(t->kstack + i * 4096);
+        t->state = 0;
         return -1;
     }
     t->pages = pages + sp;

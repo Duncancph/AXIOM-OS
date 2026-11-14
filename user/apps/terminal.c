@@ -2,16 +2,16 @@
  * processes; everything else is passed to the Thane kernel's command shell. */
 #include "../lib/dunc.h"
 
-#define WW 780
-#define WH 470
+static int WW = 780, WH = 470;
 #define PAD 12
-#define COLS ((WW - 2 * PAD) / 8)
+#define MAXCOLS 240
+#define COLS ((WW - 2 * PAD) / 8 > MAXCOLS ? MAXCOLS : (WW - 2 * PAD) / 8)
 #define ROWS ((WH - 2 * PAD) / 16)
 #define LINES 400
 
 static struct app a;
-static char text[LINES][COLS + 1];
-static uint8_t color[LINES][COLS];
+static char text[LINES][MAXCOLS + 1];
+static uint8_t color[LINES][MAXCOLS];
 static int nlines = 1, cx;
 static int fetch_line = -100;   /* line where the pixel crown is drawn */              /* cursor column on the last line */
 static char input[128]; static int ilen;
@@ -68,7 +68,16 @@ static void fetch(void) {
     for (int i = 0; i < 6; i++) { puts_c("           ", C_TEXT); print("%s", ""); cur_col = C_GOLD; print("%-9s", k[i]); cur_col = C_TEXT; print("%s\n", v[i]); }
     putch('\n');
 }
-static void prompt(void) { puts_c("~ > ", C_GREEN); prompt_len = 4; }
+static char cwd[256] = "/home";
+static void short_cwd(char *out, int n) {
+    if (!strncmp(cwd, "/home", 5) && (cwd[5] == 0 || cwd[5] == '/')) ksnprintf(out, n, "~%s", cwd + 5);
+    else strncpy0(out, cwd, n);
+}
+static void prompt(void) {
+    char s[64]; short_cwd(s, sizeof s);
+    int o = cur_col; cur_col = C_GREEN; print("%s > ", s); cur_col = o;
+    prompt_len = cx;
+}
 
 static void draw(void) {
     struct canvas *c = &a.c;
@@ -100,13 +109,52 @@ static void show_input(void) {
     cur_col = o;
 }
 
-static const char *apps[][2] = {
-    {"terminal", "Terminal"}, {"monitor", "System Monitor"}, {"bluetooth", "Bluetooth"},
-    {"calc", "Calculator"}, {"sandbox", "Protection Test"}, {"about", "About DuncOS"} };
+static void human(uint64_t b, char *out, int n) {
+    if (b < 1024) ksnprintf(out, n, "%lu B", b);
+    else if (b < 1024 * 1024) ksnprintf(out, n, "%lu KB", b / 1024);
+    else ksnprintf(out, n, "%lu.%lu MB", b >> 20, ((b >> 10) & 1023) * 10 / 1024);
+}
+
+static void cmd_ls(const char *arg) {
+    char path[256]; path_resolve(cwd, *arg ? arg : ".", path, sizeof path);
+    static struct dunc_dirent d[256];
+    int n = fs_list(path, d, 256);
+    if (n < 0) { puts_c(fs_strerror(n), C_RED); putch('\n'); return; }
+    if (!n) { puts_c("(empty)\n", C_DIM); return; }
+    for (int i = 0; i < n; i++) {
+        if (d[i].is_dir) { puts_c("  ", C_TEXT); puts_c(d[i].name, C_CYAN); puts_c("/\n", C_CYAN); }
+        else { char s[24]; human(d[i].size, s, sizeof s); print("  %-40s ", d[i].name); puts_c(s, C_DIM); putch('\n'); }
+    }
+}
+
+static void cmd_cat(const char *arg) {
+    char path[256]; path_resolve(cwd, arg, path, sizeof path);
+    static char buf[16384];
+    long n = fs_read(path, buf, 0, sizeof buf - 1);
+    if (n < 0) { puts_c(fs_strerror(n), C_RED); putch('\n'); return; }
+    buf[n] = 0;
+    for (long i = 0; i < n; i++) if (buf[i] == '\n' || (buf[i] >= 32 && buf[i] < 127) || buf[i] == '\t') putch(buf[i]); else putch('.');
+    if (n == (long)sizeof buf - 1) puts_c("\n... (truncated; open it with 'edit')", C_DIM);
+    if (cx) putch('\n');
+}
+
+static void report(int r) { if (r < 0) { puts_c(fs_strerror(r), C_RED); putch('\n'); } }
+
+static bool app_installed(const char *id) {
+    struct dunc_app a[24]; int n = sys_apps(a, 24);
+    for (int i = 0; i < n; i++) if (!strcmp(a[i].id, id)) return true;
+    return false;
+}
+
+static const char *strchr_(const char *s, char c) { for (; *s; s++) if (*s == c) return s; return 0; }
 
 static void cmd_help(void) {
     puts_c("Terminal commands\n", C_GOLD);
     static const char *h[][2] = {
+        {"ls [folder]", "list files"}, {"cd <folder>", "change folder (~ is your home)"}, {"cat <file>", "show a file"},
+        {"mkdir <name>", "make a folder"}, {"rm <path>", "delete a file or folder"}, {"mv <a> <b>", "move or rename"},
+        {"cp <a> <b>", "copy"}, {"touch <file>", "create an empty file"}, {"echo hi > f", "write text to a file"},
+        {"edit <file>", "open a file in Editor"}, {"df", "drives and free space"},
         {"apps", "list installed apps"}, {"open <app>", "start an app, e.g. 'open calc'"},
         {"ps", "list running processes"}, {"kill <pid>", "stop a process"},
         {"date", "show the date and time"}, {"fetch", "system summary"}, {"clear", "clear the screen"}, {"exit", "close this terminal"} };
@@ -115,7 +163,8 @@ static void cmd_help(void) {
     static const char *k[][2] = {
         {"sysinfo", "CPU, memory, display"}, {"pci", "hardware on the PCI bus"}, {"usb", "USB devices"},
         {"bt", "Bluetooth adapter"}, {"bt scan [secs]", "find nearby Bluetooth devices"}, {"log", "kernel messages"},
-        {"uptime", "time since boot"}, {"reboot / poweroff", "restart or shut down"} };
+        {"uptime", "time since boot"}, {"clan", "package manager (clan list / clan install)"},
+        {"reboot / poweroff", "restart or shut down"} };
     for (unsigned i = 0; i < sizeof k / sizeof k[0]; i++) { puts_c("  ", C_TEXT); print("%-18s", k[i][0]); puts_c(k[i][1], C_DIM); putch('\n'); }
 }
 
@@ -140,11 +189,73 @@ static void run(char *line) {
     else if (!strcmp(line, "clear") || !strcmp(line, "cls")) { nlines = 1; memset(text, 0, sizeof text); cx = 0; fetch_line = -100; return; }
     else if (!strcmp(line, "exit")) sys_exit(0);
     else if (!strcmp(line, "ps")) cmd_ps();
-    else if (!strcmp(line, "apps")) { for (int i = 0; i < 6; i++) { print("  %-10s ", apps[i][0]); puts_c(apps[i][1], C_DIM); putch('\n'); } }
+    else if (!strcmp(line, "apps")) {
+        struct dunc_app ap[24]; int n = sys_apps(ap, 24);
+        for (int i = 0; i < n; i++) { print("  %-10s ", ap[i].id); puts_c(ap[i].name, C_DIM); if (ap[i].installed) puts_c("  (clan)", C_GOLD); putch('\n'); }
+    }
     else if (!strcmp(line, "open") || !strcmp(line, "run") || !strcmp(line, "start")) {
-        int pid = sys_spawn(arg);
+        char app[32], rest[200] = "", full[256] = "";
+        int k = 0; while (arg[k] && arg[k] != ' ' && k < 31) { app[k] = arg[k]; k++; } app[k] = 0;
+        if (arg[k] == ' ') { strncpy0(rest, arg + k + 1, sizeof rest); path_resolve(cwd, rest, full, sizeof full); }
+        int pid = sys_spawn_arg(app, full);
         if (pid < 0) { puts_c("No such app. Type 'apps' for the list.\n", C_RED); }
-        else print("Started %s (pid %d)\n", arg, pid);
+        else print("Started %s (pid %d)\n", app, pid);
+    }
+    else if (!strcmp(line, "pwd")) print("%s\n", cwd);
+    else if (!strcmp(line, "cd")) {
+        char path[256]; path_resolve(cwd, *arg ? arg : "~", path, sizeof path);
+        struct dunc_stat st;
+        int r = fs_stat(path, &st);
+        if (r < 0) report(r); else if (!st.is_dir) report(FS_ENOTDIR); else strncpy0(cwd, path, sizeof cwd);
+    }
+    else if (!strcmp(line, "ls") || !strcmp(line, "dir")) cmd_ls(arg);
+    else if (!strcmp(line, "cat")) cmd_cat(arg);
+    else if (!strcmp(line, "mkdir")) { char p[256]; path_resolve(cwd, arg, p, sizeof p); report(fs_mkdir(p)); }
+    else if (!strcmp(line, "rm") || !strcmp(line, "del")) { char p[256]; path_resolve(cwd, arg, p, sizeof p); report(fs_delete(p)); }
+    else if (!strcmp(line, "touch")) {
+        char p[256]; path_resolve(cwd, arg, p, sizeof p);
+        struct dunc_stat st;
+        if (fs_stat(p, &st) < 0) report((int)fs_write(p, "", 0));
+    }
+    else if (!strcmp(line, "mv") || !strcmp(line, "cp")) {
+        char a1[128], *b1 = arg; int k = 0;
+        while (*b1 && *b1 != ' ' && k < 127) a1[k++] = *b1++;
+        a1[k] = 0; while (*b1 == ' ') b1++;
+        if (!*a1 || !*b1) { puts_c("usage: mv|cp <from> <to>\n", C_RED); }
+        else {
+            char pa[256], pb[256]; path_resolve(cwd, a1, pa, sizeof pa); path_resolve(cwd, b1, pb, sizeof pb);
+            struct dunc_stat st;
+            if (fs_stat(pb, &st) == 0 && st.is_dir) {      /* into a folder */
+                const char *base = pa; for (const char *s = pa; *s; s++) if (*s == '/') base = s + 1;
+                char t[256]; ksnprintf(t, sizeof t, "%s/%s", pb, base); strncpy0(pb, t, sizeof pb);
+            }
+            report(!strcmp(line, "mv") ? fs_rename(pa, pb) : fs_copy(pa, pb));
+        }
+    }
+    else if (!strcmp(line, "echo") && strchr_(arg, '>')) {
+        char text[200]; int k = 0;
+        const char *s = arg;
+        while (*s && *s != '>' && k < 199) text[k++] = *s++;
+        while (k && text[k - 1] == ' ') k--;
+        text[k++] = '\n'; text[k] = 0;
+        s++; while (*s == ' ') s++;
+        char p[256]; path_resolve(cwd, s, p, sizeof p);
+        report((int)fs_write(p, text, k));
+    }
+    else if (!strcmp(line, "edit")) {
+        if (!app_installed("editor")) puts_c("Editor isn't installed yet. Run: clan install editor\n", C_GOLD);
+        else {
+            char p[256] = ""; if (*arg) path_resolve(cwd, arg, p, sizeof p);
+            if (sys_spawn_arg("editor", p) < 0) puts_c("Couldn't start Editor.\n", C_RED);
+        }
+    }
+    else if (!strcmp(line, "df")) {
+        struct dunc_volume v[8]; int n = fs_volumes(v, 8);
+        puts_c("  DRIVE    NAME               TYPE      SIZE        FREE\n", C_GOLD);
+        for (int i = 0; i < n; i++) {
+            char t[24], f[24]; human(v[i].total, t, sizeof t); human(v[i].free, f, sizeof f);
+            print("  %-8s %-18s %-9s %-11s %s\n", v[i].path, v[i].label, v[i].kind, t, f);
+        }
     }
     else if (!strcmp(line, "kill")) {
         if (sys_kill((int)katoi(arg)) < 0) puts_c("No such app process (kernel threads can't be killed).\n", C_RED);
@@ -169,7 +280,7 @@ static void run(char *line) {
 }
 
 int main(void) {
-    if (!app_open(&a, WW, WH, "castle - ~")) return 1;
+    if (!app_open_ex(&a, WW, WH, "castle - ~", WIN_RESIZABLE)) return 1;
     fetch();
     puts_c("Type 'help' to see the available commands.\n", C_DIM);
     prompt();
@@ -188,6 +299,7 @@ int main(void) {
             continue;
         }
         if (e.type == EV_CLOSE) break;
+        if (e.type == EV_RESIZE) { if (app_resize(&a, &e)) { WW = a.wi.w; WH = a.wi.h; draw(); } continue; }
         if (e.type != EV_KEY) continue;
         int k = e.key;
         cursor_on = true;

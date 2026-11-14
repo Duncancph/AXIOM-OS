@@ -1,8 +1,7 @@
 /* Bluetooth settings: adapter details and a scan for nearby devices. */
 #include "../lib/dunc.h"
 
-#define WW 540
-#define WH 560
+static int WW = 540, WH = 560;
 static struct app a;
 static struct bt_adapter ad;
 static struct bt_device devs[64];
@@ -79,13 +78,15 @@ static void draw(void) {
 }
 
 int main(void) {
-    if (!app_open(&a, WW, WH, "Bluetooth")) return 1;
+    if (!app_open_ex(&a, WW, WH, "Bluetooth", WIN_RESIZABLE)) return 1;
     sys_bt(BT_INFO, &ad, 0);
     draw();
     for (;;) {
         struct dunc_event e;
         sys_event(&e, -1);
         if (e.type == EV_CLOSE) break;
+        if (e.type == EV_RESIZE) { if (app_resize(&a, &e)) { WW = a.wi.w; WH = a.wi.h; draw(); } continue; }
+
         if (e.type == EV_MOUSE_MOVE || e.type == EV_MOUSE_LEAVE) {
             int h = e.type == EV_MOUSE_MOVE && ui_in(e.x, e.y, WW - 170, 252, 150, 36);
             if (h != hover) { hover = h; draw(); }
