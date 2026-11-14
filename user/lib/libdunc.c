@@ -94,3 +94,40 @@ int clip_paste_line(char *buf, int *len, int max) {
     buf[*len] = 0;
     return added;
 }
+
+static bool ext_is(const char *path, const char *list) {
+    const char *dot = 0;
+    for (const char *p = path; *p; p++) { if (*p == '.') dot = p; if (*p == '/') dot = 0; }
+    if (!dot) return false;
+    char e[12]; int k = 0;
+    for (const char *p = dot + 1; *p && k < 11; p++) e[k++] = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
+    e[k] = 0;
+    for (const char *l = list; *l;) {
+        int n = 0; while (l[n] && l[n] != ' ') n++;
+        if (n == k && !strncmp(l, e, n)) return true;
+        l += n; while (*l == ' ') l++;
+    }
+    return false;
+}
+
+const char *app_for_file(const char *path) {
+    if (ext_is(path, "png jpg jpeg gif bmp")) return "viewer";
+    if (ext_is(path, "html htm xhtml")) return "web";
+    if (ext_is(path, "elf bin img iso zip gz tgz tar xz 7z rar exe dll so o a mp3 wav ogg flac mp4 mkv avi mov pdf doc docx xls xlsx ppt pptx")) return 0;
+    return "editor";
+}
+
+const char *open_file(const char *path) {
+    const char *app = app_for_file(path);
+    if (!app) return "No app on DuncOS can open this kind of file yet.";
+    struct dunc_app ap[24]; int n = sys_apps(ap, 24); bool have = false;
+    for (int k = 0; k < n; k++) if (!strcmp(ap[k].id, app)) have = true;
+    if (!have) {                                         /* a clan package: install it */
+        char cmd[48], out[256]; ksnprintf(cmd, sizeof cmd, "clan install %s", app);
+        sys_kcmd(cmd, out, sizeof out);
+    }
+    char arg[300];
+    if (!strcmp(app, "web")) ksnprintf(arg, sizeof arg, "file://%s", path); else strncpy0(arg, path, sizeof arg);
+    if (sys_spawn_arg(app, arg) < 0) return "The app couldn't start.";
+    return 0;
+}

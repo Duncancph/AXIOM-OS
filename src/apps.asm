@@ -16,8 +16,9 @@ app_images:
     APP calc, "Calculator", 0
     APP sandbox, "Protection Test", 0
     APP settings, "Settings", 0
+    APP viewer, "Viewer", 0
     APP about, "About DuncOS", 0
-app_count: dd 9
+app_count: dd 10
 
 id_files: db "files", 0
 title_files: db "Files", 0
@@ -37,6 +38,8 @@ id_sandbox: db "sandbox", 0
 title_sandbox: db "Protection Test", 0
 id_settings: db "settings", 0
 title_settings: db "Settings", 0
+id_viewer: db "viewer", 0
+title_viewer: db "Viewer", 0
 
 align 16
 bin_files: incbin "build/user/files.elf"
@@ -65,3 +68,6 @@ bin_sandbox_end:
 align 16
 bin_settings: incbin "build/user/settings.elf"
 bin_settings_end:
+align 16
+bin_viewer: incbin "build/user/viewer.elf"
+bin_viewer_end:

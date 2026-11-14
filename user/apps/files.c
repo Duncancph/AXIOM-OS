@@ -230,10 +230,8 @@ static void draw(void) {
 static void open_item(int i) {
     char p[256]; child_path(ents[i].name, p, sizeof p);
     if (ents[i].is_dir) { go(p, true); return; }
-    struct dunc_app ap[24]; int n = sys_apps(ap, 24); bool have = false;
-    for (int k = 0; k < n; k++) if (!strcmp(ap[k].id, "editor")) have = true;
-    if (!have) { dialog = 4; return; }
-    if (sys_spawn_arg("editor", p) < 0) flash("Couldn't start Editor.");
+    const char *why = open_file(p);
+    if (why) flash(why);
 }
 
 static void do_delete(bool permanent) {

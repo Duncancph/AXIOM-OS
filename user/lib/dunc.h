@@ -71,6 +71,10 @@ static inline void clip_set(const char *s, long n) { sys_call(SYS_CLIP_SET, (lon
 static inline long clip_get(char *buf, long max) { return sys_call(SYS_CLIP_GET, (long)buf, max, 0, 0, 0); }
 /* paste the clipboard's first line onto the end of a text field; returns how many characters were added */
 int clip_paste_line(char *buf, int *len, int max);
+/* which app opens a file: "viewer", "web", "editor", or 0 if none can */
+const char *app_for_file(const char *path);
+/* open a file with its app (installing it with clan first if needed); 0, or a message why not */
+const char *open_file(const char *path);
 static inline int sys_disks(struct dunc_disk *out, int max) { return sys_call(SYS_DISK_LIST, (long)out, max, 0, 0, 0); }
 static inline int sys_install(int disk_id, int mode) { return sys_call(SYS_DISK_INSTALL, disk_id, mode, 0, 0, 0); }
 static inline void sys_install_status(struct dunc_install *st) { sys_call(SYS_DISK_STATUS, (long)st, 0, 0, 0, 0); }

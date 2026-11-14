@@ -104,6 +104,7 @@ void kmain(uint32_t magic, uint64_t mbi) {
     ahci_init_all();
     nvme_init_all();
     settings_load();
+    hda_init_all();
     boot_progress(35);
     xhci_init_all();
     boot_progress(70);

@@ -9,7 +9,7 @@ static int napps;
 
 static const char *builtin_icon(const char *id) {
     static const char *map[][2] = { {"files", "folder"}, {"terminal", "terminal"}, {"monitor", "monitor"}, {"bluetooth", "bluetooth"},
-                                    {"calc", "calc"}, {"sandbox", "shield"}, {"about", "crown"}, {"network", "network"}, {"settings", "gear"} };
+                                    {"calc", "calc"}, {"sandbox", "shield"}, {"about", "crown"}, {"network", "network"}, {"settings", "gear"}, {"viewer", "photo"} };
     for (unsigned i = 0; i < sizeof map / sizeof map[0]; i++) if (!strcmp(map[i][0], id)) return map[i][1];
     return "gear";
 }

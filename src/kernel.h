@@ -112,6 +112,9 @@ void settings_load(void);
 bool settings_check_password(const char *pw);
 void rtc_read_local(struct rtc_time *t);
 long sound_syscall(int op, uint64_t a, uint64_t b);
+void hda_init_all(void);
+void hda_tick(void);
+void sound_notify(void);
 void desktop_lock(void);                  /* busy-wait */
 const uint8_t *bootmod(const char *name, uint64_t *len);   /* a GRUB module by its name, or 0 */
 uint64_t tsc_hz(void);

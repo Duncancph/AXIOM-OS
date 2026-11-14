@@ -303,8 +303,63 @@ static struct rect intersect(struct rect a, struct rect b) {
     return (struct rect){ x0, y0, x1 > x0 ? x1 - x0 : 0, y1 > y0 ? y1 - y0 : 0 };
 }
 
+/* ---------------- lock screen and screen off ---------------- */
+static bool locked, screen_off;
+static uint64_t last_input;
+static char lock_pw[64]; static int lock_len;
+static char lock_msg[80];
+
+static void draw_lock_screen(void) {
+    gfx_blit(&cv, 0, 0, wall, W, H, W);
+    gfx_blend(&cv, 0, 0, W, H, 0x000000, 70);
+    struct rtc_time t; rtc_read_local(&t);
+    static const char *wd[] = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+    static const char *mn[] = { "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" };
+    static const int mt[] = { 0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4 };
+    int y0 = t.year - (t.mon < 3), dow = (y0 + y0 / 4 - y0 / 100 + y0 / 400 + mt[(t.mon - 1) % 12] + t.day) % 7;
+    char clk[32], date[64];
+    if (settings_int("time.24h")) ksnprintf(clk, sizeof clk, "%02d:%02d", t.hour, t.min);
+    else ksnprintf(clk, sizeof clk, "%d:%02d", t.hour % 12 ? t.hour % 12 : 12, t.min);
+    ksnprintf(date, sizeof date, "%s %d %s", wd[dow], t.day, mn[(t.mon - 1) % 12]);
+    int cy = H / 2 - 90;
+    gfx_text_center(&cv, &font_big, 0, W, cy, HL_TEXT, clk);
+    gfx_text_center(&cv, &font_ui, 0, W, cy + 30, HL_TEXT_DIM, date);
+    int fw_ = 300, fx = (W - fw_) / 2, fy = cy + 70;
+    gfx_rrect(&cv, fx, fy, fw_, 40, 12, HL_TERM_BG, 230);
+    gfx_rrect_outline(&cv, fx, fy, fw_, 40, 12, HL_ACCENT, 200);
+    char dots[64]; int n = lock_len < 40 ? lock_len : 40;
+    for (int i = 0; i < n; i++) dots[i] = '*';
+    dots[n] = 0;
+    if (lock_len) gfx_text_center(&cv, &font_title, fx, fw_, fy + 28, HL_TEXT, dots);
+    else gfx_text_center(&cv, &font_ui, fx, fw_, fy + 26, HL_TEXT_FAINT, "Password");
+    gfx_text_center(&cv, &font_ui, 0, W, fy + 70, lock_msg[0] ? HL_RED : HL_TEXT_FAINT, lock_msg[0] ? lock_msg : "Type your password and press Enter");
+    gfx_text_center(&cv, &font_ui_bold, 0, W, H - 40, HL_TEXT_FAINT, "DuncOS");
+}
+
+void desktop_lock(void) {
+    if (!settings_get("lock.password")[0]) { desktop_notify("No password set", "Set one in Settings > Lock screen to lock this computer."); return; }
+    if (locked) return;
+    locked = true; lock_len = 0; lock_msg[0] = 0; memset(lock_pw, 0, sizeof lock_pw);
+    if (menu_open) menu_open = false;
+    damage(0, 0, W, H);
+}
+
+static void lock_key(int k) {
+    if (k == '\n') {
+        lock_pw[lock_len] = 0;
+        if (settings_check_password(lock_pw)) { locked = false; lock_msg[0] = 0; damage(0, 0, W, H); }
+        else { strncpy0(lock_msg, "That password isn't right. Try again.", sizeof lock_msg); sleep_ms(600); }
+        memset(lock_pw, 0, sizeof lock_pw); lock_len = 0;
+    } else if (k == '\b') { if (lock_len) lock_pw[--lock_len] = 0; }
+    else if (k == 27) { lock_len = 0; memset(lock_pw, 0, sizeof lock_pw); }
+    else if (k >= 32 && k <= 255 && k != 127 && lock_len < 63) { lock_pw[lock_len++] = (char)k; lock_msg[0] = 0; }
+    damage(0, 0, W, H);
+}
+
 static void compose(struct rect r) {
     gfx_clip(&cv, r.x, r.y, r.w, r.h);
+    if (screen_off) { gfx_fill(&cv, r.x, r.y, r.w, r.h, 0x000000); flush_rect(r); return; }
+    if (locked) { draw_lock_screen(); flush_rect(r); return; }
     /* Occlusion: the back buffer keeps the last frame, so when the damage lies inside a
      * window's content only its pixels need redrawing - nothing below it, and not its frame
      * (the rounded-corner pixels outside the content mask are unchanged). */
@@ -526,6 +581,7 @@ int wm_count(struct task *t) {
 }
 
 void desktop_notify(const char *title, const char *msg) {
+    sound_notify();
     kprintf("[notify] %s: %s\n", title, msg);
     if (!desktop_ok) return;
     int slot = -1;
@@ -684,6 +740,18 @@ static void click(int button) {
 
 static void handle_mouse(int dx, int dy, int b, int wheel) {
     random_event((uint64_t)(dx & 0xFFFF) | (uint64_t)(dy & 0xFFFF) << 16 | (uint64_t)b << 32);
+    last_input = uptime_ms();
+    if (screen_off) { screen_off = false; damage(0, 0, W, H); }
+    if (locked) {                                           /* only the pointer moves; nothing is clicked */
+        int ox = mx, oy = my;
+        mx += dx; my += dy;
+        if (mx < 0) mx = 0;
+        if (my < 0) my = 0;
+        if (mx >= W) mx = W - 1;
+        if (my >= H) my = H - 1;
+        if (mx != ox || my != oy) { cursor_paint(ox, oy, false); cursor_paint(mx, my, true); }
+        return;
+    }
     int ox = mx, oy = my;
     if (dx > 5 || dx < -5) dx *= 2;
     if (dy > 5 || dy < -5) dy *= 2;
@@ -734,8 +802,48 @@ static void handle_mouse(int dx, int dy, int b, int wheel) {
     }
 }
 
+/* ---------------- screenshots (Print Screen) ---------------- */
+#include "vfs.h"
+#include "../user/lib/img/img.h"
+static uint32_t *shot_px; static volatile bool shot_busy;
+
+static void screenshot_task(void *arg) {
+    size_t cap = png_encode_bound(W, H);
+    uint8_t *png = kmalloc(cap);
+    long n = png ? png_encode(shot_px, W, H, 1, png, cap) : -1;
+    if (n > 0) {
+        struct rtc_time t; rtc_read_local(&t);
+        char name[80], path[128];
+        ksnprintf(name, sizeof name, "Screenshot %d-%02d-%02d at %02d.%02d.%02d.png", t.year, t.mon, t.day, t.hour, t.min, t.sec);
+        vfs_mkdir("/home/Pictures");
+        ksnprintf(path, sizeof path, "/home/Pictures/%s", name);
+        long w = vfs_write(path, png, n);
+        char m[160];
+        if (w < 0) ksnprintf(m, sizeof m, "Couldn't save it: %s.", fs_error((int)w));
+        else ksnprintf(m, sizeof m, "Saved in Pictures as \"%s\".", name);
+        desktop_notify(w < 0 ? "Screenshot failed" : "Screenshot taken", m);
+    } else desktop_notify("Screenshot failed", "Not enough memory.");
+    kfree(png);
+    shot_busy = false;
+    task_exit(0);
+}
+
+static void take_screenshot(void) {
+    if (shot_busy) return;
+    if (!shot_px) shot_px = page_alloc((W * H * 4 + 4095) / 4096);
+    if (!shot_px) return;
+    memcpy(shot_px, bb, (size_t)W * H * 4);      /* the composed screen, without the mouse pointer */
+    shot_busy = true;
+    task_create_kernel("Screenshot", screenshot_task, 0);
+}
+
 static void handle_key(int k) {
     random_event(k);
+    last_input = uptime_ms();
+    if (screen_off) { screen_off = false; damage(0, 0, W, H); return; }      /* the key just wakes the screen */
+    if (locked) { lock_key(k); return; }
+    if (k == (KEYMOD_SUPER | 'l')) { desktop_lock(); return; }
+    if (KEY_CODE(k) == KEY_PRTSC) { take_screenshot(); return; }
     if (k == KEY_SUPER) { toggle_menu(!menu_open); return; }
     if (menu_open && k == 27) { toggle_menu(false); return; }
     int t = top_window();
@@ -799,6 +907,12 @@ void desktop_thread(void *arg) {
         static uint64_t last_check;
         if (now - last_check > 250) {
             last_check = now;
+            if (!last_input) { last_input = now; if (settings_get("lock.password")[0]) desktop_lock(); }   /* locked at start-up */
+            int lock_min = settings_int("lock.idle_min"), off_min = settings_int("screen.off_min");
+            if (!locked && lock_min > 0 && settings_get("lock.password")[0] && now - last_input > (uint64_t)lock_min * 60000) desktop_lock();
+            if (!screen_off && off_min > 0 && now - last_input > (uint64_t)off_min * 60000) { screen_off = true; damage(0, 0, W, H); }
+            static int last_min = -1;                       /* the lock screen's clock */
+            if (locked && !screen_off) { struct rtc_time tt; rtc_read_local(&tt); if (tt.min != last_min) { last_min = tt.min; damage(0, 0, W, H); } }
             char app[48], clk[32], sig[96];
             bar_text(app, sizeof app, clk, sizeof clk);
             ksnprintf(sig, sizeof sig, "%s|%s|%d", app, clk, net_present() + 2 * net_ready());
@@ -820,6 +934,7 @@ void desktop_thread(void *arg) {
             if (wins[i].used && wins[i].resizable && !wins[i].resize_sent && (wins[i].want_w != wins[i].w || wins[i].want_h != wins[i].h))
                 request_size(&wins[i], wins[i].want_w, wins[i].want_h);
         task_reap();
+        hda_tick();
 
         int n = ndmg; struct rect todo[32];
         memcpy(todo, dmg, sizeof(struct rect) * n); ndmg = 0;
@@ -827,4 +942,3 @@ void desktop_thread(void *arg) {
         task_sleep(8);
     }
 }
-void desktop_lock(void) {}

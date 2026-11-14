@@ -8,13 +8,15 @@ UCFLAGS := $(COMMON) -mcmodel=large
 LDFLAGS := -n -T src/linker.ld -nostdlib -z max-page-size=0x1000 --no-warn-rwx-segments -z noexecstack
 LIBGCC  := $(shell $(CC) -print-libgcc-file-name)
 
-APPS    := files about terminal monitor bluetooth network calc sandbox settings
+APPS    := files about terminal monitor bluetooth network calc sandbox settings viewer
 REPO_APPS := editor clock web
-K_SRCS  := $(filter-out src/desktop_highland.c,$(wildcard src/*.c)) common/gfx.c common/str.c common/inet.c user/lib/crypto/sha2.c user/lib/crypto/aead.c
+K_SRCS  := $(filter-out src/desktop_highland.c,$(wildcard src/*.c)) common/gfx.c common/str.c common/inet.c user/lib/crypto/sha2.c user/lib/crypto/aead.c user/lib/img/pngenc.c user/lib/img/inflate.c
 K_OBJS  := $(patsubst %.c,build/k/%.o,$(K_SRCS)) build/k/boot.o build/k/isr.o build/k/apps.o
 U_LIB   := build/u/crt0.o build/u/libdunc.o build/u/malloc.o build/u/gfx.o build/u/str.o build/u/inet.o
 CRYPTO  := sha2 aead x25519 bn rsa ecc x509 tls
 NETLIB  := build/u/libnet.a
+IMGLIB  := build/u/libimg.a
+IMG     := inflate png pngenc jpeg gif bmp img
 U_ELFS  := $(patsubst %,build/user/%.elf,$(APPS))
 HDRS    := $(wildcard src/*.h common/*.h user/lib/*.h)
 
@@ -49,15 +51,20 @@ build/u/c_%.o: user/lib/crypto/%.c $(wildcard user/lib/crypto/*.h)
 	$(CC) $(UCFLAGS) -c $< -o $@
 $(NETLIB): build/u/http.o $(patsubst %,build/u/c_%.o,$(CRYPTO))
 	rm -f $@ && ar rcs $@ $^
+build/u/i_%.o: user/lib/img/%.c $(wildcard user/lib/img/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(UCFLAGS) -c $< -o $@
+$(IMGLIB): $(patsubst %,build/u/i_%.o,$(IMG))
+	rm -f $@ && ar rcs $@ $^
 build/u/%.o: common/%.c $(HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(UCFLAGS) -c $< -o $@
 build/u/app_%.o: user/apps/%.c $(HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(UCFLAGS) -c $< -o $@
-build/user/%.elf: build/u/app_%.o $(U_LIB) $(NETLIB) user/user.ld
+build/user/%.elf: build/u/app_%.o $(U_LIB) $(NETLIB) $(IMGLIB) user/user.ld
 	@mkdir -p $(dir $@)
-	$(LD) -n -T user/user.ld -nostdlib -z max-page-size=0x1000 -z noexecstack --no-warn-rwx-segments -o $@ $(U_LIB) $< $(NETLIB) $(LIBGCC)
+	$(LD) -n -T user/user.ld -nostdlib -z max-page-size=0x1000 -z noexecstack --no-warn-rwx-segments -o $@ $(U_LIB) $< $(NETLIB) $(IMGLIB) $(LIBGCC)
 
 build/thane.elf: $(K_OBJS) src/linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(K_OBJS)

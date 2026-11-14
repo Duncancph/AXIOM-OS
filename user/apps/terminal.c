@@ -355,8 +355,15 @@ static void run(char *line) {
             bool is_url = false; for (const char *s = rest; *s; s++) if (s[0] == ':' && s[1] == '/' && s[2] == '/') is_url = true;
             if (is_url) strncpy0(full, rest, sizeof full); else path_resolve(cwd, rest, full, sizeof full);
         }
+        char fp[256]; struct dunc_stat st;
+        path_resolve(cwd, app, fp, sizeof fp);
+        if (!full[0] && fs_stat(fp, &st) == 0 && !st.is_dir) {      /* "open photo.png": the file's own app */
+            const char *why = open_file(fp);
+            if (why) { puts_c(why, C_RED); putch('\n'); } else print("Opened %s\n", app);
+            return;
+        }
         int pid = sys_spawn_arg(app, full);
-        if (pid < 0) { puts_c("No such app. Type 'apps' for the list.\n", C_RED); }
+        if (pid < 0) { puts_c("No such app or file. Type 'apps' for the list.\n", C_RED); }
         else print("Started %s (pid %d)\n", app, pid);
     }
     else if (!strcmp(line, "pwd")) print("%s\n", cwd);
