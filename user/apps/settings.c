@@ -205,6 +205,7 @@ static void draw_power(void) {
 }
 
 
+static const char *strchr_(const char *s, char c) { for (; *s; s++) if (*s == c) return s; return 0; }
 void draw(void);
 /* ---- Updates: fetch a signed update over the web; the kernel checks the signature and every file ---- */
 enum { U_IDLE, U_CHECKING, U_CURRENT, U_AVAILABLE, U_DOWNLOADING, U_INSTALLING, U_DONE, U_FAILED };
@@ -261,7 +262,8 @@ static void check_updates(void) {
     struct buf b = { 0, 0, 0, 16384 };
     int status = 0;
     struct http_req rq = { "GET", 0, 0, 0, 0, "Cache-Control: no-cache\r\n", 20000 };
-    long r = http_request(url, &rq, buf_sink, &b, &status, 0, 0, 0, 0, 0);
+    char fresh[160]; ksnprintf(fresh, sizeof fresh, "%s%cnocache=%lu", url, strchr_(url, '?') ? '&' : '?', (unsigned long)sys_time());   /* skip caches */
+    long r = http_request(fresh, &rq, buf_sink, &b, &status, 0, 0, 0, 0, 0);
     free(mtext); mtext = b.p; mlen = b.n;
     if (r < 0) { ustate = U_FAILED; ksnprintf(umsg, sizeof umsg, "Couldn't check for updates: %s.", http_strerror(r)); return; }
     if (status == 404) { ustate = U_CURRENT; strncpy0(umsg, "No updates have been published yet.", sizeof umsg); return; }
