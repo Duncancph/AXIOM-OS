@@ -1014,6 +1014,7 @@ static int parse_disj(RC *c) {
         int a = c->re->ncode;
         for (int k = 0; k < len; k++) emit(c, alt[k]);
         free(alt);
+        relocate(c->re->code, a, a + len, a - start);
         emit(c, R_JMP);
         int jslot = c->re->ncode;
         emit(c, 0);
