@@ -22,8 +22,7 @@ static void sample(void) {
         for (int j = 0; j < nprev; j++) if (prev[j].pid == procs[i].pid) before = prev[j].cpu_us;
         proc_cpu[i] = dt ? (int)((procs[i].cpu_us - before) * 100 / dt) : 0;
         if (proc_cpu[i] > 100) proc_cpu[i] = 100;
-        if (!strcmp(procs[i].name, "Idle")) idle_pct = proc_cpu[i];
-        if (!strcmp(procs[i].name, "Idle") && i < 32) {}
+        if (!strncmp(procs[i].name, "Idle", 4)) idle_pct = proc_cpu[i];
     }
     cpu_now = dt ? 100 - idle_pct : 0;
     memmove(cpu_hist, cpu_hist + 1, sizeof(int) * (HIST - 1)); cpu_hist[HIST - 1] = cpu_now;
