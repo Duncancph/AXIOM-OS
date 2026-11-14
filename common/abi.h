@@ -46,7 +46,11 @@ struct sysinfo {
     char kernel[32];
 };
 
-enum { BT_INFO, BT_SCAN, BT_RESULTS };
+enum { BT_INFO, BT_SCAN, BT_RESULTS, BT_PAIR, BT_PAIR_STATUS, BT_PAIR_CONFIRM, BT_PAIRED, BT_FORGET };
+/* pairing (Bluetooth Classic, Secure Simple Pairing) */
+enum { BTP_IDLE, BTP_CONNECTING, BTP_CONFIRM, BTP_TYPE_CODE, BTP_WORKING, BTP_DONE, BTP_FAILED };
+struct bt_pair { int state; uint32_t code; uint8_t addr[6]; char name[64]; char msg[96]; };
+struct bt_paired { uint8_t addr[6]; char name[64]; };
 struct bt_adapter { int present, ok, le; char maker[32], version[16], addr[18], name[64], usb[96]; };
 struct bt_device { uint8_t addr[6]; int le, rssi; uint32_t cod; char name[64]; char kind[16]; };
 

@@ -249,6 +249,23 @@ uint64_t syscall_dispatch(struct frame *f) {
             if (max < 0 || max > 64 || !UOK(b, (uint64_t)max * sizeof(struct bt_device), true)) return (uint64_t)-1;
             return bt_get_results((struct bt_device *)b, max);
         }
+        if (a == BT_PAIR || a == BT_FORGET) {
+            if (!UOK(b, 6, false)) return (uint64_t)-1;
+            uint8_t ad[6]; memcpy(ad, (void *)b, 6);
+            if (a == BT_FORGET) { bt_forget(ad); return 0; }
+            return (uint64_t)(int64_t)bt_pair_start(ad);
+        }
+        if (a == BT_PAIR_STATUS) {
+            if (!UOK(b, sizeof(struct bt_pair), true)) return (uint64_t)-1;
+            bt_pair_status((struct bt_pair *)b);
+            return 0;
+        }
+        if (a == BT_PAIR_CONFIRM) { bt_pair_confirm((int)b); return 0; }
+        if (a == BT_PAIRED) {
+            int max = (int)c;
+            if (max < 0 || max > 16 || !UOK(b, (uint64_t)max * sizeof(struct bt_paired), true)) return (uint64_t)-1;
+            return bt_paired((struct bt_paired *)b, max);
+        }
         return (uint64_t)-1;
     case SYS_SYSINFO: {
         if (!UOK(a, sizeof(struct sysinfo), true)) return (uint64_t)-1;

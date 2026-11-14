@@ -276,6 +276,12 @@ void boot_progress(int percent);
 /* ---- bt.c (GUI API) ---- */
 void bt_get_adapter(struct bt_adapter *a);
 int bt_get_results(struct bt_device *out, int max);
+int  bt_pair_start(const uint8_t *addr);
+void bt_pair_run(const uint8_t *addr);
+void bt_pair_confirm(int yes);
+void bt_pair_status(struct bt_pair *out);
+int  bt_paired(struct bt_paired *out, int max);
+void bt_forget(const uint8_t *addr);
 
 #define LOG_OK(...)   do { console_set_color(C_LGREEN); kprintf("[ ok ] "); console_set_color(C_LGRAY); kprintf(__VA_ARGS__); } while (0)
 #define LOG_WARN(...) do { console_set_color(C_YELLOW); kprintf("[warn] "); console_set_color(C_LGRAY); kprintf(__VA_ARGS__); } while (0)

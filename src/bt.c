@@ -2,6 +2,7 @@
  * Commands go out over the control endpoint, events come back on the interrupt
  * endpoint. Supports adapter info and discovery of Classic + Low Energy devices. */
 #include "usb.h"
+#include "vfs.h"
 
 static struct usb_dev *bdev;
 static int bt_iface, bt_dci;
@@ -176,6 +177,168 @@ static void handle_async(uint8_t *e) {
         }
     }
 }
+
+/* ---------------- pairing (Classic Secure Simple Pairing, with legacy PIN fallback) ---------------- */
+#define MAXKEYS 16
+struct bkey { uint8_t addr[6], key[16]; char name[64]; };
+static struct bkey keys[MAXKEYS]; static int nkeys; static bool keys_loaded;
+static struct bt_pair pst;
+static volatile int pair_answer = -1;
+static uint8_t pair_addr[6];
+
+static const char *KEYFILE = "/system/config/bluetooth";
+static int hexd(char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; }
+
+static void keys_load(void) {
+    keys_loaded = true; nkeys = 0;
+    static char b[MAXKEYS * 140];
+    long n = vfs_read(KEYFILE, b, 0, sizeof b - 1);
+    if (n <= 0) return;
+    b[n] = 0;
+    for (char *l = b; *l && nkeys < MAXKEYS;) {             /* "aabbccddeeff <32 hex key> name" (address in HCI byte order) */
+        char *e = l; while (*e && *e != '\n') e++;
+        struct bkey *k = &keys[nkeys]; bool ok = e - l >= 6 * 2 + 1 + 32;
+        for (int i = 0; ok && i < 6; i++) { int h = hexd(l[2 * i]), lo = hexd(l[2 * i + 1]); if (h < 0 || lo < 0) ok = false; else k->addr[i] = h << 4 | lo; }
+        for (int i = 0; ok && i < 16; i++) { int h = hexd(l[13 + 2 * i]), lo = hexd(l[14 + 2 * i]); if (h < 0 || lo < 0) ok = false; else k->key[i] = h << 4 | lo; }
+        if (ok) { int m = 0; for (char *p = l + 46; p < e && m < 63; p++) k->name[m++] = *p; k->name[m] = 0; nkeys++; }
+        l = *e ? e + 1 : e;
+    }
+}
+
+static void keys_save(void) {
+    static char b[MAXKEYS * 140]; int n = 0;
+    for (int i = 0; i < nkeys; i++) {
+        for (int j = 0; j < 6; j++) n += ksnprintf(b + n, sizeof b - n, "%02x", keys[i].addr[j]);
+        b[n++] = ' ';
+        for (int j = 0; j < 16; j++) n += ksnprintf(b + n, sizeof b - n, "%02x", keys[i].key[j]);
+        n += ksnprintf(b + n, sizeof b - n, " %s\n", keys[i].name);
+    }
+    vfs_write(KEYFILE, b, n);
+}
+
+static struct bkey *key_find(const uint8_t *a) {
+    if (!keys_loaded) keys_load();
+    for (int i = 0; i < nkeys; i++) if (!memcmp(keys[i].addr, a, 6)) return &keys[i];
+    return 0;
+}
+
+static void say(int state, const char *m) { pst.state = state; strncpy0(pst.msg, m, sizeof pst.msg); }
+
+/* Pair with a Classic device found by a scan. Blocks until done (run it in its own task). */
+void bt_pair_run(const uint8_t *addr) {
+    memset(&pst, 0, sizeof pst);
+    memcpy(pst.addr, addr, 6);
+    struct found *f = 0;
+    for (int i = 0; i < nfound; i++) if (!memcmp(found[i].addr, addr, 6) && !found[i].le) f = &found[i];
+    strncpy0(pst.name, f && f->name[0] ? f->name : "the device", sizeof pst.name);
+    pair_answer = -1;
+    if (!bdev || !info_ok) { say(BTP_FAILED, "No working Bluetooth adapter."); return; }
+    say(BTP_CONNECTING, "Connecting...");
+    uint8_t all[8] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x3F};
+    hci_cmd(0x0C01, all, 8, 0, 0);                              /* Set_Event_Mask: everything */
+    uint8_t on = 1; hci_cmd(0x0C56, &on, 1, 0, 0);              /* Write_Simple_Pairing_Mode */
+    uint8_t cc[13]; memcpy(cc, addr, 6);
+    cc[6] = 0x18; cc[7] = 0xCC;                                  /* packet types DM1..DH5 */
+    cc[8] = f ? f->pscan : 1; cc[9] = 0;
+    uint16_t clk = f ? (f->clk | 0x8000) : 0; cc[10] = clk & 0xFF; cc[11] = clk >> 8; cc[12] = 1;
+    if (hci_cmd(0x0405, cc, 13, 0, 0) != 0) { say(BTP_FAILED, "The adapter refused to connect."); return; }   /* Create_Connection */
+    int handle = -1; bool authed = false; uint8_t newkey[16]; bool havekey = false;
+    uint64_t end = uptime_ms() + 60000;
+    while (uptime_ms() < end && pst.state != BTP_DONE && pst.state != BTP_FAILED) {
+        if (pst.state == BTP_CONFIRM && pair_answer >= 0) {     /* the user answered the code question */
+            hci_cmd(pair_answer ? 0x042C : 0x042D, addr, 6, 0, 0);
+            if (!pair_answer) { say(BTP_FAILED, "Pairing cancelled."); break; }
+            say(BTP_WORKING, "Finishing...");
+        }
+        uint8_t *e = next_event();
+        if (!e) { kyield(); continue; }
+        uint8_t code = e[0], *p = e + 2;
+        switch (code) {
+        case 0x03:                                              /* Connection_Complete */
+            if (memcmp(p + 3, addr, 6)) break;
+            if (p[0]) { say(BTP_FAILED, p[0] == 0x04 ? "The device didn't answer. Is it switched on and visible?" : "The connection failed."); break; }
+            handle = p[1] | (p[2] & 0x0F) << 8;
+            say(BTP_WORKING, "Connected. Pairing...");
+            { uint8_t h[2] = { handle & 0xFF, handle >> 8 }; hci_cmd(0x0411, h, 2, 0, 0); }   /* Authentication_Requested */
+            break;
+        case 0x17: {                                            /* Link_Key_Request */
+            struct bkey *k = key_find(p);
+            if (k) { uint8_t r[22]; memcpy(r, p, 6); memcpy(r + 6, k->key, 16); hci_cmd(0x040B, r, 22, 0, 0); }
+            else hci_cmd(0x040C, p, 6, 0, 0);
+            break;
+        }
+        case 0x31: {                                            /* IO_Capability_Request: we can show a number and ask yes/no */
+            uint8_t r[9]; memcpy(r, p, 6); r[6] = 1; r[7] = 0; r[8] = 0x03;
+            hci_cmd(0x042B, r, 9, 0, 0);
+            break;
+        }
+        case 0x33:                                              /* User_Confirmation_Request: show the number */
+            pst.code = p[6] | p[7] << 8 | p[8] << 16 | (uint32_t)p[9] << 24;
+            say(BTP_CONFIRM, "Check that the same number is shown on the device.");
+            break;
+        case 0x34: hci_cmd(0x042F, p, 6, 0, 0); break;           /* User_Passkey_Request: we have no keyboard role here */
+        case 0x3B:                                              /* User_Passkey_Notification: type this on the device */
+            pst.code = p[6] | p[7] << 8 | p[8] << 16 | (uint32_t)p[9] << 24;
+            say(BTP_TYPE_CODE, "Type this number on the device's keyboard, then press Enter on it.");
+            break;
+        case 0x16: {                                            /* PIN_Code_Request (older devices): the usual 0000 */
+            uint8_t r[23] = {0}; memcpy(r, p, 6); r[6] = 4; memcpy(r + 7, "0000", 4);
+            hci_cmd(0x040D, r, 23, 0, 0);
+            break;
+        }
+        case 0x18:                                              /* Link_Key_Notification: remember it */
+            if (!memcmp(p, addr, 6)) { memcpy(newkey, p + 6, 16); havekey = true; }
+            break;
+        case 0x36:                                              /* Simple_Pairing_Complete */
+            if (p[0]) say(BTP_FAILED, p[0] == 0x05 ? "The number wasn't confirmed on the device." : "Pairing failed.");
+            break;
+        case 0x06:                                              /* Authentication_Complete */
+            if ((p[1] | (p[2] & 0x0F) << 8) != handle) break;
+            if (p[0]) { say(BTP_FAILED, p[0] == 0x05 ? "Pairing was refused." : "Pairing failed."); break; }
+            authed = true;
+            break;
+        case 0x05:                                              /* Disconnection_Complete */
+            if ((p[1] | (p[2] & 0x0F) << 8) == handle && !authed) say(BTP_FAILED, "The device disconnected.");
+            break;
+        default: handle_async(e);
+        }
+        if (authed && pst.state != BTP_FAILED) {
+            if (havekey) {
+                struct bkey *k = key_find(addr);
+                if (!k && nkeys < MAXKEYS) k = &keys[nkeys++];
+                if (k) { memcpy(k->addr, addr, 6); memcpy(k->key, newkey, 16); strncpy0(k->name, pst.name, sizeof k->name); keys_save(); }
+            }
+            char m[96]; ksnprintf(m, sizeof m, "Paired with %s.", pst.name);
+            say(BTP_DONE, m);
+        }
+    }
+    if (pst.state != BTP_DONE && pst.state != BTP_FAILED) say(BTP_FAILED, "Pairing timed out.");
+    if (handle >= 0) { uint8_t d[3] = { handle & 0xFF, handle >> 8, 0x13 }; hci_cmd(0x0406, d, 3, 0, 0); }   /* Disconnect */
+}
+
+void bt_pair_confirm(int yes) { pair_answer = yes ? 1 : 0; }
+void bt_pair_status(struct bt_pair *out) { *out = pst; }
+int bt_paired(struct bt_paired *out, int max) {
+    if (!keys_loaded) keys_load();
+    int n = 0;
+    for (int i = 0; i < nkeys && n < max; i++, n++) { memcpy(out[n].addr, keys[i].addr, 6); strncpy0(out[n].name, keys[i].name, sizeof out[n].name); }
+    return n;
+}
+void bt_forget(const uint8_t *addr) {
+    if (!keys_loaded) keys_load();
+    for (int i = 0; i < nkeys; i++) if (!memcmp(keys[i].addr, addr, 6)) { keys[i] = keys[--nkeys]; keys_save(); return; }
+}
+
+#ifndef BT_TEST
+static void pair_task(void *arg) { bt_pair_run(pair_addr); task_exit(0); }
+int bt_pair_start(const uint8_t *addr) {
+    if (pst.state > BTP_IDLE && pst.state < BTP_DONE) return -1;
+    memcpy(pair_addr, addr, 6);
+    memset(&pst, 0, sizeof pst); pst.state = BTP_CONNECTING;
+    task_create_kernel("Bluetooth pairing", pair_task, 0);
+    return 0;
+}
+#endif
 
 /* ---------------- public API ---------------- */
 

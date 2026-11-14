@@ -111,7 +111,7 @@ clean:
 
 test:
 	@mkdir -p build/test
-	gcc -std=gnu17 -O1 -w -fno-builtin -o build/test/test_bt tests/test_bt.c src/bt.c common/str.c && build/test/test_bt | tail -4
+	gcc -std=gnu17 -O1 -w -fno-builtin -DBT_TEST -o build/test/test_bt tests/test_bt.c src/bt.c common/str.c && build/test/test_bt | tail -8
 	gcc -std=gnu17 -O1 -w -fno-builtin -Isrc -o build/test/test_fat tests/test_fat.c src/fat.c common/str.c
 	rm -f build/test/fat.img && truncate -s 64M build/test/fat.img && mkfs.fat -F 32 -n DUNCTEST build/test/fat.img >/dev/null
 	printf 'written by mtools on Linux\n' > build/test/hello.txt && MTOOLS_SKIP_CHECK=1 mcopy -i build/test/fat.img build/test/hello.txt "::/Hello From Linux.txt"
