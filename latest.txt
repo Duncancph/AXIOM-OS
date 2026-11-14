@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 65
-notes Choose the dock's apps; AXIOM menu in groups; up to 64 cores
-file kernel b65/thane.elf.gz 14583216 f0e3f16bed242d05c58d49faff2cc2e7f32b5247254f7ea7fdb0fc289277d33d
-file initrd b65/initrd.tar.gz 1269760 5ad68b63f2ab86d893e44d92c3d961a1412a6c957eaa9652d31b94cbfe6aab54
-file bootx64 b65/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b65/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 30450220598ea04c443d77b2b0f187bb689df916fdf6b2db1e9b2d40ce1c4da1fa32e5af0221008b9f3b10604f2397c06e9192f07cb09c078f5c61398a80c11589812e845c1fb4
+build 66
+notes Settings > Display shows the graphics setup and monitor (step one to native resolution)
+file kernel b66/thane.elf.gz 14614600 9ffa8072f3ad0951c7a115e5a4b254d4cbec952bf0dbffcdfdb416eb4712c488
+file initrd b66/initrd.tar.gz 1269760 d4a627476e9c20a4b2312b4fbc3de2247e46644ba1fd236562d9e180a188fdf2
+file bootx64 b66/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b66/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304502200d23b73a0760677a8b28871400c7284d224246c40a33b0e2a322421ff2a87774022100fe4f0e6b42e5afede9b2034595550492f014251b524c309f858a07802f6ad043
