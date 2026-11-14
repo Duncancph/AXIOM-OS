@@ -274,6 +274,29 @@ uint64_t syscall_dispatch(struct frame *f) {
         memcpy((void *)a, tmp, n * sizeof tmp[0]);
         return n;
     }
+    case SYS_MEM_GROW: {                     /* a: bytes more; returns the start of the new memory, or 0 */
+        uint64_t len = (a + 4095) & ~4095ull;
+        if (!current->heap_top) current->heap_top = USER_HEAP;
+        uint64_t used = current->heap_top - USER_HEAP;
+        if (!len || len > (512ull << 20) || used + len > (1024ull << 20)) return 0;     /* 1 GiB per app */
+        if (mem_used() + len + (32ull << 20) > mem_total()) return 0;                 /* keep 32 MiB for the system */
+        long n = vm_alloc(current->pml4, current->heap_top, len);
+        if (n < 0) return 0;
+        current->pages += n;
+        uint64_t start = current->heap_top;
+        current->heap_top += len;
+        return start;
+    }
+    case SYS_SETTING_GET: {
+        char key[32];
+        if (!copy_str(key, a, sizeof key) || !c || c > 8192 || !UOK(b, c, true)) return (uint64_t)-1;
+        return settings_syscall_get(key, (char *)b, (int)c);
+    }
+    case SYS_SETTING_SET: {
+        char key[32], val[112];
+        if (!copy_str(key, a, sizeof key) || !copy_str(val, b, sizeof val)) return (uint64_t)-1;
+        return (uint64_t)(int64_t)settings_set(key, val);
+    }
     case SYS_DISK_INSTALL: return (uint64_t)(int64_t)disk_install((int)a, (int)b);
     case SYS_DISK_STATUS:
         if (!UOK(a, sizeof(struct dunc_install), true)) return (uint64_t)-1;
@@ -284,7 +307,7 @@ uint64_t syscall_dispatch(struct frame *f) {
         return (uint64_t)-1;
     case SYS_RTC:
         if (!UOK(a, sizeof(struct rtc_time), true)) return (uint64_t)-1;
-        rtc_read((struct rtc_time *)a);
+        rtc_read_local((struct rtc_time *)a);
         return 0;
     case SYS_NOTIFY: {
         char t[64], m[160];

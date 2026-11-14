@@ -3,8 +3,8 @@
  * Works without heap memory: filtered bytes are recomputed from the pixels. */
 #include "img_int.h"
 
-#define RING   4096          /* rows whose filter type is remembered */
-#define HBITS  12
+#define RING   2048          /* rows whose filter type is remembered */
+#define HBITS  11
 #define LA     512           /* lookahead cache (power of two, > 258) */
 
 struct bitw {

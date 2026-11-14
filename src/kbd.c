@@ -6,14 +6,6 @@ bool ps2_present, mouse_present;
 static int q[256]; static uint8_t qh, qt;
 static struct { int16_t dx, dy; uint8_t b; int8_t w; } mq[64]; static uint8_t mh, mt;
 static uint8_t mpkt[4]; static int midx;
-static bool shift, ctrl, caps, ext;
-
-static const char sc_lo[128] = {
-    0,27,'1','2','3','4','5','6','7','8','9','0','-','=','\b','\t','q','w','e','r','t','y','u','i','o','p','[',']','\n',0,
-    'a','s','d','f','g','h','j','k','l',';','\'','`',0,'\\','z','x','c','v','b','n','m',',','.','/',0,'*',0,' '};
-static const char sc_hi[128] = {
-    0,27,'!','@','#','$','%','^','&','*','(',')','_','+','\b','\t','Q','W','E','R','T','Y','U','I','O','P','{','}','\n',0,
-    'A','S','D','F','G','H','J','K','L',':','"','~',0,'|','Z','X','C','V','B','N','M','<','>','?',0,'*',0,' '};
 
 void input_push(int c) { if ((uint8_t)(qh + 1) != qt) { q[qh++] = c; } }
 
@@ -83,32 +75,7 @@ void ps2_poll(void) {
         if (!(st & 1)) return;
         uint8_t sc = inb(0x60);
         if (st & 0x20) { ps2_mouse_byte(sc); continue; }
-        if (sc == 0xE0) { ext = true; continue; }
-        bool up = sc & 0x80; sc &= 0x7F;
-        if (ext) {
-            ext = false;
-            if (sc == 0x1D) { ctrl = !up; continue; }
-            if (up) continue;
-            switch (sc) {
-            case 0x48: input_push(KEY_UP); break;     case 0x50: input_push(KEY_DOWN); break;
-            case 0x4B: input_push(KEY_LEFT); break;   case 0x4D: input_push(KEY_RIGHT); break;
-            case 0x47: input_push(KEY_HOME); break;   case 0x4F: input_push(KEY_END); break;
-            case 0x53: input_push(KEY_DEL); break;    case 0x1C: input_push('\n'); break;
-            case 0x5B: case 0x5C: input_push(KEY_SUPER); break;
-            case 0x49: input_push(KEY_PGUP); break;   case 0x51: input_push(KEY_PGDN); break;
-            }
-            continue;
-        }
-        if (sc == 0x2A || sc == 0x36) { shift = !up; continue; }
-        if (sc == 0x1D) { ctrl = !up; continue; }
-        if (up) continue;
-        if (sc == 0x3A) { caps = !caps; continue; }
-        char c = (shift ? sc_hi : sc_lo)[sc];
-        if (!c) continue;
-        if (caps && c >= 'a' && c <= 'z') c -= 32;
-        else if (caps && c >= 'A' && c <= 'Z') c += 32;
-        if (ctrl && ((c | 32) >= 'a' && (c | 32) <= 'z')) c = (c | 32) - 'a' + 1;
-        input_push(c);
+        kbd_ps2_scancode(sc);
     }
 }
 

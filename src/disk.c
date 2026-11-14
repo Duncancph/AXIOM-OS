@@ -114,6 +114,7 @@ static bool mount_system(struct disk *d, struct part *pt) {
     for (int i = 0; i < 4; i++) vfs_mkdir(homedirs[i]);
     d->sysvol = vol; sysdisk = d;
     apps_refresh();
+    settings_load();
     LOG_OK("Your files are saved on %s (%s)\n", d->bd->name, kind_name(d->kind));
     if (booted) desktop_notify("DuncOS drive connected", "Your files and settings are saved on it again.");
     return true;

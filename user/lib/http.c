@@ -18,7 +18,7 @@ static int64_t unix_now(void) {
     unsigned yoe = (unsigned)(y - era * 400), m = t.mon;
     unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + t.day - 1;
     unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    return (era * 146097 + (int64_t)doe - 719468) * 86400 + t.hour * 3600 + t.min * 60 + t.sec;
+    return (era * 146097 + (int64_t)doe - 719468) * 86400 + t.hour * 3600 + t.min * 60 + t.sec - t.utc_offset_min * 60LL;   /* to UTC */
 }
 
 static void load_roots(void) {

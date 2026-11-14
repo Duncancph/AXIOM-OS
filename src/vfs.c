@@ -157,7 +157,7 @@ static int ram_write(struct vnode *dirv, const char *name, const void *buf, uint
 
 void vfs_init(void) {
     root = mknode(0, "", true);
-    static const char *dirs[] = { "/home", "/home/Documents", "/home/Projects", "/home/Downloads", "/home/Trash", "/apps", "/system" };
+    static const char *dirs[] = { "/home", "/home/Documents", "/home/Projects", "/home/Downloads", "/home/Trash", "/apps", "/system", "/system/config" };
     for (unsigned i = 0; i < sizeof dirs / sizeof dirs[0]; i++) vfs_mkdir(dirs[i]);
 }
 

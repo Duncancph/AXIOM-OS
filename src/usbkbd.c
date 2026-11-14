@@ -4,40 +4,19 @@
 static uint8_t prev[8];
 static int kbd_dci;
 
-static const char lo[] = "abcdefghijklmnopqrstuvwxyz1234567890\n\x1b\b\t -=[]\\#;'`,./";
-static const char hi[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()\n\x1b\b\t _+{}|~:\"~<>?";
-static bool caps;
-
 static void on_report(struct usb_dev *d, int dci, int cc, uint32_t len) {
     if (cc != CC_SUCCESS && cc != CC_SHORT) return;   /* device gone / error: stop polling */
     uint8_t *r = d->ep_buf[dci];
     if (len >= 3 && r[2] != 1) {   /* 1 = rollover error */
-        bool shift = r[0] & 0x22, ctrl = r[0] & 0x11;
+        if ((r[0] & 0x88) && !(prev[0] & 0x88)) kbd_super(true);
+        if (!(r[0] & 0x88) && (prev[0] & 0x88)) kbd_super(false);
         for (int i = 2; i < 8 && i < (int)len; i++) {
             uint8_t k = r[i];
             if (!k) continue;
             bool seen = false;
             for (int j = 2; j < 8; j++) if (prev[j] == k) seen = true;
-            if (seen) continue;
-            if (k >= 0x04 && k <= 0x38) {
-                char c = (shift ? hi : lo)[k - 4];
-                if (caps && c >= 'a' && c <= 'z') c -= 32; else if (caps && c >= 'A' && c <= 'Z') c += 32;
-                if (ctrl && (c | 32) >= 'a' && (c | 32) <= 'z') c = (c | 32) - 'a' + 1;
-                input_push(c);
-            } else if (k == 0x39) caps = !caps;
-            else if (k == 0x4F) input_push(KEY_RIGHT);
-            else if (k == 0x50) input_push(KEY_LEFT);
-            else if (k == 0x51) input_push(KEY_DOWN);
-            else if (k == 0x52) input_push(KEY_UP);
-            else if (k == 0x4A) input_push(KEY_HOME);
-            else if (k == 0x4D) input_push(KEY_END);
-            else if (k == 0x4C) input_push(KEY_DEL);
-            else if (k == 0x4B) input_push(KEY_PGUP);
-            else if (k == 0x4E) input_push(KEY_PGDN);
-            else if (k == 0x58) input_push('\n');
-            else if (k == 0xE3 || k == 0xE7) input_push(KEY_SUPER);
+            if (!seen) kbd_hid_key(k, r[0]);
         }
-        if ((r[0] & 0x88) && !(prev[0] & 0x88)) input_push(KEY_SUPER);
         memcpy(prev, r, 8);
     }
     usb_queue_in(d, dci, on_report);

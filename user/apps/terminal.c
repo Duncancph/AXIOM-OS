@@ -133,7 +133,8 @@ static void cmd_cat(const char *arg) {
     long n = fs_read(path, buf, 0, sizeof buf - 1);
     if (n < 0) { puts_c(fs_strerror(n), C_RED); putch('\n'); return; }
     buf[n] = 0;
-    for (long i = 0; i < n; i++) if (buf[i] == '\n' || (buf[i] >= 32 && buf[i] < 127) || buf[i] == '\t') putch(buf[i]); else putch('.');
+    n = utf8_to_cp1252(buf, n);
+    for (long i = 0; i < n; i++) { unsigned char c = buf[i]; if (c == '\n' || c == '\t' || (c >= 32 && c != 127)) putch(c); else putch('.'); }
     if (n == (long)sizeof buf - 1) puts_c("\n... (truncated; open it with 'edit')", C_DIM);
     if (cx) putch('\n');
 }
@@ -245,7 +246,8 @@ static void cmd_get(const char *arg, bool save) {
         static char body[16384];
         long n = http_get(url, body, sizeof body, &status, ct, sizeof ct, 0, 0);
         if (n < 0) { puts_c(http_strerror(n), C_RED); putch('\n'); return; }
-        for (long i = 0; i < n; i++) { char c = body[i]; if (c == '\n' || c == '\t' || (c >= 32 && c < 127)) putch(c); }
+        n = utf8_to_cp1252(body, n);
+        for (long i = 0; i < n; i++) { unsigned char c = body[i]; if (c == '\n' || c == '\t' || (c >= 32 && c != 127)) putch(c); }
         if (cx) putch('\n');
         print("-- HTTP %d, %ld bytes%s\n", status, n, n == (long)sizeof body ? " (cut short; use wget to save it)" : "");
         if (http_sec.addr[0]) print("-- server address %s\n", http_sec.addr);
@@ -372,6 +374,19 @@ static void run(char *line) {
                 }
             }
         }
+    }
+    else if (!strcmp(line, "settings")) {
+        static const char *keys[] = { "keyboard.layout", "time.zone", "time.rtc_local", "time.24h", "display.mode", "display.current",
+                                      "sound.volume", "lock.password", "lock.idle_min", "screen.off_min" };
+        for (unsigned i = 0; i < sizeof keys / sizeof keys[0]; i++) { char v[112]; sys_setting_get(keys[i], v, sizeof v); print("  %-16s %s\n", keys[i], v); }
+    }
+    else if (!strcmp(line, "set")) {
+        char key[32]; int k = 0; const char *v = arg;
+        while (*v && *v != ' ' && k < 31) key[k++] = *v++;
+        key[k] = 0; while (*v == ' ') v++;
+        if (!k) puts_c("usage: set <setting> <value>   (see 'settings')\n", C_RED);
+        else if (sys_setting_set(key, v)) puts_c("No such setting.\n", C_RED);
+        else print("%s = %s\n", key, !strcmp(key, "lock.password") ? (*v ? "(set)" : "(none)") : v);
     }
     else if (!strcmp(line, "disks")) {
         struct dunc_disk d[8]; int n = sys_disks(d, 8);
@@ -526,7 +541,7 @@ int main(void) {
                 show_input();
             }
         } else if (k == 12) { nlines = 1; memset(text, 0, sizeof text); cx = 0; fetch_line = -100; prompt(); }   /* Ctrl+L */
-        else if (k >= 32 && k < 127 && ilen < (int)sizeof input - 1 && prompt_len + ilen < COLS - 1) { input[ilen++] = k; show_input(); }
+        else if (key_is_char(k) && ilen < (int)sizeof input - 1 && prompt_len + ilen < COLS - 1) { input[ilen++] = k; show_input(); }
         draw();
     }
     return 0;

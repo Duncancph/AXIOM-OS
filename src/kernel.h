@@ -95,12 +95,26 @@ void timer_init(void);
 uint64_t uptime_ms(void);
 uint64_t uptime_us(void);
 void sleep_ms(uint64_t ms);
-void udelay(uint64_t us);                  /* busy-wait */
+void udelay(uint64_t us);
+/* keymap.c */
+void kbd_hid_key(uint8_t usage, uint8_t mods);
+void kbd_super(bool down);
+void kbd_ps2_scancode(uint8_t sc);
+void kbd_set_layout(const char *id);
+const char *kbd_layout(void);
+int  kbd_layouts(char *out, int n);
+/* settings.c */
+const char *settings_get(const char *key);
+int  settings_int(const char *key);
+int  settings_set(const char *key, const char *val);
+int  settings_syscall_get(const char *key, char *out, int n);
+void settings_load(void);
+bool settings_check_password(const char *pw);
+void rtc_read_local(struct rtc_time *t);                  /* busy-wait */
 const uint8_t *bootmod(const char *name, uint64_t *len);   /* a GRUB module by its name, or 0 */
 uint64_t tsc_hz(void);
 
 /* ---- input (kbd.c) ---- */
-#define KEY_SUPER 0x90
 void ps2_init(void);
 void ps2_poll(void);
 void input_push(int c);
@@ -185,6 +199,7 @@ struct task {
     uint8_t *kstack;
     uint64_t *pml4;
     uint64_t wake_at, ticks, pages;
+    uint64_t heap_top;         /* end of the app's heap (starts at USER_HEAP) */
     struct dunc_event evq[EVQ_SIZE]; int evh, evt;
     int nwin;
     char *capture; size_t cap_len, cap_max;

@@ -5,6 +5,7 @@
 #define USER_BASE      0x0000008000000000ULL   /* programs are loaded here */
 #define USER_STACK_TOP 0x0000008040000000ULL
 #define USER_WIN_BASE  0x0000008080000000ULL   /* window pixel buffers are mapped here */
+#define USER_HEAP      0x0000008100000000ULL   /* grows upwards with SYS_MEM_GROW */
 #define USER_END       0x0000010000000000ULL
 
 enum {
@@ -14,12 +15,20 @@ enum {
     SYS_FS_LIST, SYS_FS_READ, SYS_FS_WRITE, SYS_FS_MKDIR, SYS_FS_DELETE, SYS_FS_RENAME, SYS_FS_STAT,
     SYS_FS_VOLUMES, SYS_GETARG, SYS_WIN_RESIZE, SYS_APPS, SYS_FS_COPY,
     SYS_RANDOM, SYS_FS_APPEND, SYS_NET_INFO, SYS_NET_CONFIG, SYS_NET_PING, SYS_NET_RESOLVE, SYS_TCP_CONNECT, SYS_TCP_SEND, SYS_TCP_RECV, SYS_TCP_CLOSE,
-    SYS_DISK_LIST, SYS_DISK_INSTALL, SYS_DISK_STATUS,
+    SYS_DISK_LIST, SYS_DISK_INSTALL, SYS_DISK_STATUS, SYS_MEM_GROW, SYS_SETTING_GET, SYS_SETTING_SET,
     SYS_COUNT
 };
 
 /* keys (besides printable ASCII, '\n', '\b', '\t', 27 = Esc) */
-enum { KEY_UP = 0x80, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_HOME, KEY_END, KEY_DEL, KEY_PGUP, KEY_PGDN };
+/* Keys: characters are 1..255 (Windows-1252; Ctrl+A..Z = 1..26); special keys from 0x100.
+ * Shift/Ctrl/Alt/Super held with a special key, or Ctrl+Shift / Alt / Super with a character, add KEYMOD_* bits. */
+enum { KEY_UP = 0x100, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_HOME, KEY_END, KEY_DEL, KEY_PGUP, KEY_PGDN, KEY_INS, KEY_PRTSC,
+       KEY_F1, KEY_F2, KEY_F3, KEY_F4, KEY_F5, KEY_F6, KEY_F7, KEY_F8, KEY_F9, KEY_F10, KEY_F11, KEY_F12, KEY_SUPER };
+#define KEYMOD_SHIFT 0x1000
+#define KEYMOD_CTRL  0x2000
+#define KEYMOD_ALT   0x4000
+#define KEYMOD_SUPER 0x8000
+#define KEY_CODE(k)  ((k) & 0xFFF)
 
 enum { EV_NONE, EV_KEY, EV_MOUSE_DOWN, EV_MOUSE_UP, EV_MOUSE_MOVE, EV_CLOSE, EV_FOCUS, EV_BLUR, EV_MOUSE_LEAVE, EV_WHEEL,
        EV_RESIZE /* x,y = new content size: call sys_win_resize */, EV_FILES_CHANGED };
@@ -41,7 +50,7 @@ enum { BT_INFO, BT_SCAN, BT_RESULTS };
 struct bt_adapter { int present, ok, le; char maker[32], version[16], addr[18], name[64], usb[96]; };
 struct bt_device { uint8_t addr[6]; int le, rssi; uint32_t cod; char name[64]; char kind[16]; };
 
-struct rtc_time { int year, mon, day, hour, min, sec; };
+struct rtc_time { int year, mon, day, hour, min, sec, utc_offset_min; };   /* SYS_RTC: local time; UTC = local - offset */
 
 /* ---- files ---- */
 #define PATH_MAX_ 256

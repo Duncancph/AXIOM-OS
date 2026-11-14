@@ -174,7 +174,7 @@ int main(void) {
                 if (k == 27) { dialog = 0; closing = false; }
                 else if (k == '\n') dialog_choose(0);
                 else if (dialog == 1 && k == '\b') { if (ilen) input[--ilen] = 0; }
-                else if (dialog == 1 && k >= 32 && k < 127 && ilen < 50) { input[ilen++] = k; input[ilen] = 0; }
+                else if (dialog == 1 && key_is_char(k) && ilen < 50) { input[ilen++] = k; input[ilen] = 0; }
                 draw();
             }
             continue;
@@ -211,7 +211,7 @@ int main(void) {
             insert(ind, n);
         }
         else if (k == '\t') insert("    ", 4);
-        else if (k >= 32 && k < 127) { char ch = (char)k; insert(&ch, 1); }
+        else if (key_is_char(k)) { char ch = (char)k; insert(&ch, 1); }
         if (!vert) want_col = -1;
         keep_visible();
         set_title();

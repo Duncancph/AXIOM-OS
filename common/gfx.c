@@ -126,7 +126,7 @@ int gfx_text(struct canvas *c, const struct font *f, int x, int base, uint32_t c
     int sx = x;
     for (; *s; s++) {
         unsigned ch = (unsigned char)*s;
-        if (ch < 32 || ch > 126) ch = '?';
+        if (ch < 32 || ch == 127) ch = '?';
         const struct glyph *g = &f->g[ch - 32];
         int gx = x + g->xoff, gy = base + g->yoff;
         if (gx + g->w > c->cx0 && gx < c->cx1 && gy + g->h > c->cy0 && gy < c->cy1) {
@@ -149,7 +149,7 @@ int gfx_text(struct canvas *c, const struct font *f, int x, int base, uint32_t c
 
 int gfx_text_width(const struct font *f, const char *s) {
     int w = 0;
-    for (; *s; s++) { unsigned ch = (unsigned char)*s; if (ch < 32 || ch > 126) ch = '?'; w += f->g[ch - 32].adv; }
+    for (; *s; s++) { unsigned ch = (unsigned char)*s; if (ch < 32 || ch == 127) ch = '?'; w += f->g[ch - 32].adv; }
     return w;
 }
 
@@ -157,7 +157,8 @@ void gfx_text_center(struct canvas *c, const struct font *f, int x, int w, int b
     gfx_text(c, f, x + (w - gfx_text_width(f, s)) / 2, base, col, s);
 }
 
-void gfx_mono(struct canvas *c, int x, int y, char ch, uint32_t fg) {
+void gfx_mono(struct canvas *c, int x, int y, char chs, uint32_t fg) {
+    unsigned ch = (unsigned char)chs;
     if (ch < FONT_FIRST || ch > FONT_LAST) return;
     const uint8_t *g = font8x16[ch - FONT_FIRST];
     for (int r = 0; r < 16; r++) {

@@ -103,6 +103,7 @@ void kmain(uint32_t magic, uint64_t mbi) {
     LOG_OK("PCI: %d devices\n", pci_count);
     ahci_init_all();
     nvme_init_all();
+    settings_load();
     boot_progress(35);
     xhci_init_all();
     boot_progress(70);

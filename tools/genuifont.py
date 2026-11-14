@@ -9,8 +9,10 @@ for name, file, size in FONTS:
     f = ImageFont.truetype(D + file, size)
     asc, desc = f.getmetrics()
     bits, glyphs = [], []
-    for c in range(32, 127):
-        ch = chr(c)
+    for c in range(32, 256):                                  # Windows-1252, the DuncOS text encoding
+        try: ch = bytes([c]).decode("cp1252")
+        except UnicodeDecodeError: ch = "?"
+        if c in (127, 160): ch = " "
         adv = int(round(f.getlength(ch)))
         if ch == " ":
             glyphs.append((0, 0, 0, 0, adv, len(bits))); continue
@@ -24,7 +26,7 @@ for name, file, size in FONTS:
     for i in range(0, len(bits), 32):
         out.append("  " + ",".join(str(b) for b in bits[i:i+32]) + ",")
     out.append("};")
-    out.append("static const struct glyph %s_glyphs[95] = {" % name)
+    out.append("static const struct glyph %s_glyphs[224] = {" % name)
     for g in glyphs:
         out.append("  {%d,%d,%d,%d,%d,%d}," % g)
     out.append("};")

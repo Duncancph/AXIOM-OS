@@ -64,6 +64,8 @@ extern struct http_security http_sec;
 int http_trusted_roots(void);
 int http_trust_pem(const char *pem, long n);   /* trust these CA certificates in this program too */
 static inline void sys_random(void *b, long n) { sys_call(SYS_RANDOM, (long)b, n, 0, 0, 0); }
+static inline int sys_setting_get(const char *key, char *out, int n) { return sys_call(SYS_SETTING_GET, (long)key, (long)out, n, 0, 0); }
+static inline int sys_setting_set(const char *key, const char *val) { return sys_call(SYS_SETTING_SET, (long)key, (long)val, 0, 0, 0); }
 static inline int sys_disks(struct dunc_disk *out, int max) { return sys_call(SYS_DISK_LIST, (long)out, max, 0, 0, 0); }
 static inline int sys_install(int disk_id, int mode) { return sys_call(SYS_DISK_INSTALL, disk_id, mode, 0, 0, 0); }
 static inline void sys_install_status(struct dunc_install *st) { sys_call(SYS_DISK_STATUS, (long)st, 0, 0, 0, 0); }
@@ -88,7 +90,12 @@ void app_flush_rect(struct app *a, int x, int y, int w, int h);
 static inline void app_title(struct app *a, const char *t) { sys_call(SYS_WIN_TITLE, a->wi.id, (long)t, 0, 0, 0); }
 
 /* memory */
+/* a key event that types a character (Windows-1252) */
+static inline bool key_is_char(int k) { return k >= 32 && k <= 255 && k != 127; }
 void *malloc(size_t n);
+void free(void *p);
+void *realloc(void *p, size_t n);
+void *calloc(size_t a, size_t b);
 
 /* theme */
 /* Highland theme (common/theme_highland.h) */

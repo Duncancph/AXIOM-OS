@@ -133,13 +133,14 @@ static void pixel_icon(struct canvas *c, const char **rows, int nrows, int x, in
 static void bar_text(char *app, int na, char *clk, int nc) {
     int t = top_window();
     strncpy0(app, t >= 0 ? wins[t].owner->name : "Desktop", na);
-    struct rtc_time tm; rtc_read(&tm);
+    struct rtc_time tm; rtc_read_local(&tm);
     static const char *wd[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
     static const int mt[] = { 0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4 };
     int y = tm.year - (tm.mon < 3);
     int dow = (y + y / 4 - y / 100 + y / 400 + mt[(tm.mon - 1) % 12] + tm.day) % 7;
     int h12 = tm.hour % 12 ? tm.hour % 12 : 12;
-    ksnprintf(clk, nc, "%s %d:%02d %s", wd[dow], h12, tm.min, tm.hour < 12 ? "AM" : "PM");
+    if (settings_int("time.24h")) ksnprintf(clk, nc, "%s %02d:%02d", wd[dow], tm.hour, tm.min);
+    else ksnprintf(clk, nc, "%s %d:%02d %s", wd[dow], h12, tm.min, tm.hour < 12 ? "AM" : "PM");
 }
 
 /* ---------------- composition ---------------- */

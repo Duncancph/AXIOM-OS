@@ -22,16 +22,6 @@ bool app_open_ex(struct app *a, int w, int h, const char *title, int flags) {
 void app_flush(struct app *a) { sys_call(SYS_WIN_FLUSH, a->wi.id, 0, 0, a->wi.w, a->wi.h); }
 void app_flush_rect(struct app *a, int x, int y, int w, int h) { sys_call(SYS_WIN_FLUSH, a->wi.id, x, y, w, h); }
 
-static uint8_t heap[512 << 10];
-static size_t heap_pos;
-void *malloc(size_t n) {
-    n = (n + 15) & ~(size_t)15;
-    if (heap_pos + n > sizeof heap) return 0;
-    void *p = heap + heap_pos;
-    heap_pos += n;
-    return p;
-}
-
 void ui_card(struct canvas *c, int x, int y, int w, int h) {
     gfx_rrect(c, x, y, w, h, 10, UI_PANEL, 255);
     gfx_rrect_outline(c, x, y, w, h, 10, UI_BORDER, 255);

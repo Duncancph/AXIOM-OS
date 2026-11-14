@@ -273,7 +273,7 @@ static int find_slots(struct fatvol *v, uint32_t dclus, int n, uint32_t *sc, uin
 }
 
 static void fat_time(uint16_t *t, uint16_t *d) {
-    struct rtc_time tm; rtc_read(&tm);
+    struct rtc_time tm; rtc_read_local(&tm);
     *t = (tm.hour << 11) | (tm.min << 5) | (tm.sec / 2);
     *d = ((tm.year - 1980) << 9) | (tm.mon << 5) | tm.day;
 }

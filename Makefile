@@ -1,7 +1,7 @@
 CC      := gcc
 LD      := ld
 NASM    := nasm
-COMMON  := -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -ffreestanding -fno-builtin \
+COMMON  := -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -Wno-type-limits -ffreestanding -fno-builtin \
            -fno-stack-protector -fno-pic -fno-pie -mgeneral-regs-only -m64 -nostdlib -fno-tree-loop-distribute-patterns
 KCFLAGS := $(COMMON) -mno-red-zone -mcmodel=small -Icommon
 UCFLAGS := $(COMMON) -mcmodel=large
@@ -12,7 +12,7 @@ APPS    := files about terminal monitor bluetooth network calc sandbox
 REPO_APPS := editor clock web
 K_SRCS  := $(filter-out src/desktop_highland.c,$(wildcard src/*.c)) common/gfx.c common/str.c common/inet.c user/lib/crypto/sha2.c user/lib/crypto/aead.c
 K_OBJS  := $(patsubst %.c,build/k/%.o,$(K_SRCS)) build/k/boot.o build/k/isr.o build/k/apps.o
-U_LIB   := build/u/crt0.o build/u/libdunc.o build/u/gfx.o build/u/str.o build/u/inet.o
+U_LIB   := build/u/crt0.o build/u/libdunc.o build/u/malloc.o build/u/gfx.o build/u/str.o build/u/inet.o
 CRYPTO  := sha2 aead x25519 bn rsa ecc x509 tls
 NETLIB  := build/u/libnet.a
 U_ELFS  := $(patsubst %,build/user/%.elf,$(APPS))
@@ -36,6 +36,9 @@ build/u/crt0.o: user/lib/crt0.asm
 	@mkdir -p $(dir $@)
 	$(NASM) -f elf64 $< -o $@
 build/u/libdunc.o: user/lib/libdunc.c $(HDRS)
+	@mkdir -p $(dir $@)
+	$(CC) $(UCFLAGS) -c $< -o $@
+build/u/malloc.o: user/lib/malloc.c $(HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(UCFLAGS) -c $< -o $@
 build/u/http.o: user/lib/http.c $(HDRS) $(wildcard user/lib/crypto/*.h)
@@ -109,6 +112,8 @@ test:
 	fsck.fat -n build/test/fat.img && echo "fsck.fat: clean"
 	gcc -std=gnu17 -O1 -w -fno-builtin -o build/test/test_inet tests/test_inet.c common/inet.c common/str.c
 	python3 tests/test_inet.py build/test/test_inet
+	gcc -std=gnu17 -O1 -DTZ_TEST -o build/test/test_tz tests/test_tz.c src/tz.c && python3 tests/test_tz.py build/test/test_tz
+	gcc -std=gnu17 -O1 -g -fsanitize=address,undefined -DMALLOC_TEST -o build/test/test_malloc tests/test_malloc.c user/lib/malloc.c && build/test/test_malloc
 	gcc -std=gnu17 -O2 -w -fno-builtin -o build/test/test_crypto tests/test_crypto.c $(addprefix user/lib/crypto/,sha2.c aead.c x25519.c bn.c rsa.c ecc.c) common/str.c
 	python3 tests/test_crypto.py build/test/test_crypto
 	gcc -std=gnu17 -O2 -w -DX509_TESTING -fno-builtin -o build/test/test_roots tests/test_roots.c $(addprefix user/lib/crypto/,x509.c sha2.c bn.c rsa.c ecc.c) common/str.c common/inet.c
