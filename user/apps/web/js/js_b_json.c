@@ -40,6 +40,8 @@ static jsval jp_error(JP *p, const char *what) {
         JSString *m = sb_finish(&sb);
         return throw_error(rt, E_SYNTAX, "%S", m);
     }
+    if (what[0] == '+') /* message without the "in JSON" part */
+        return throw_error(rt, E_SYNTAX, "%s at position %u (line %u column %u)", what + 1, pos, line, col);
     return throw_error(rt, E_SYNTAX, "%s in JSON at position %u (line %u column %u)", what, pos, line, col);
 }
 static void jp_ws(JP *p) {
@@ -134,6 +136,7 @@ static jsval jp_number(JP *p) {
     if (str_at(p->s, p->i) == '0') {
         buf[k++] = '0';
         p->i++;
+        if (p->i < p->n && str_at(p->s, p->i) >= '0' && str_at(p->s, p->i) <= '9') return jp_error(p, "Unexpected number");
     } else
         while (p->i < p->n && str_at(p->s, p->i) >= '0' && str_at(p->s, p->i) <= '9') {
             if (k < 390) buf[k++] = (char)str_at(p->s, p->i);
@@ -313,7 +316,7 @@ NATIVE(json_parse) {
     jsval v = jp_value(&p, 0);
     TRY(v);
     jp_ws(&p);
-    if (p.i < p.n) return jp_error(&p, "Unexpected non-whitespace character after JSON");
+    if (p.i < p.n) return jp_error(&p, "+Unexpected non-whitespace character after JSON");
     if (is_callable(ARG(1))) {
         push_tmp(rt, v);
         JSObject *root = new_plain(rt);
@@ -989,7 +992,7 @@ static JSString *ins_obj(IC *c, JSObject *o, int rec) {
     }
     JSString *base = vstr(ATOM(empty));
     const char *b0 = "{", *b1 = "}";
-    bool arr = o->cls == CLS_ARRAY || o->cls == CLS_ARGUMENTS || o->cls == CLS_TYPEDARRAY;
+    bool arr = o->cls == CLS_ARRAY || o->cls == CLS_TYPEDARRAY;
     bool callable = (o->oflags & OF_CALLABLE) != 0;
     JSObject *keys = own_keys(rt, o, KEYS_STR | KEYS_SYM | KEYS_ENUM_ONLY);
     if (!keys) {
@@ -1039,9 +1042,7 @@ static JSString *ins_obj(IC *c, JSObject *o, int rec) {
         if (arr) {
             b0 = "[";
             b1 = "]";
-            if (o->cls == CLS_ARGUMENTS)
-                sb_puts(&pre, "[Arguments] ");
-            else if (o->cls == CLS_TYPEDARRAY) {
+            if (o->cls == CLS_TYPEDARRAY) {
                 sb_putstr(&pre, cname ? cname : vstr(ATOM(empty)));
                 sb_puts(&pre, "(");
                 sb_putstr(&pre, num_to_str(rt, ta_length(o)));
@@ -1056,6 +1057,8 @@ static JSString *ins_obj(IC *c, JSObject *o, int rec) {
                 sb_putstr(&pre, num_to_str(rt, o->u.arr.len));
                 sb_puts(&pre, "): null prototype] ");
             }
+        } else if (o->cls == CLS_ARGUMENTS) {
+            sb_puts(&pre, "[Arguments] ");
         } else if (o->cls == CLS_MAP || o->cls == CLS_SET) {
             sb_puts(&pre, o->cls == CLS_MAP ? "Map(" : "Set(");
             jsval sz = get_p(rt, mkobj(o), ATOM(size));
@@ -1167,7 +1170,7 @@ static JSString *ins_obj(IC *c, JSObject *o, int rec) {
     array_push(rt, c->seen, mkobj(o));
     c->cur_depth = rec;
     bool has_more = false;
-    if (o->cls == CLS_ARRAY || o->cls == CLS_ARGUMENTS || o->cls == CLS_TYPEDARRAY) {
+    if (o->cls == CLS_ARRAY || o->cls == CLS_TYPEDARRAY) {
         uint32_t len = o->cls == CLS_TYPEDARRAY ? ta_length(o) : o->u.arr.len;
         uint32_t shown = 0, i = 0;
         while (i < len && shown < 100) {
@@ -1530,6 +1533,5 @@ void init_console(js_rt *rt) {
     def_method(rt, c, "timeEnd", console_time, 0, 1);
     def_method(rt, c, "timeLog", console_time, 0, 2);
     console_counts = new_object(rt, 0, CLS_OBJECT);
-    add_prop(rt, c, atom_c(rt, "%counts"), mkobj(console_counts), 0);
     group_indent = 0;
 }

@@ -38,7 +38,7 @@ typedef void *js_jmp_buf[5];
 /* how much C stack (bytes, measured from the outermost API call) the engine may use before it
  * throws RangeError / SyntaxError instead of recursing further. The AXIOM user stack is 256 KiB. */
 #ifndef JS_C_STACK_LIMIT
-#define JS_C_STACK_LIMIT (176 * 1024)
+#define JS_C_STACK_LIMIT (192 * 1024)
 #endif
 
 static inline double js_sqrt(double x) {

@@ -35,6 +35,9 @@ struct Regex {
     RClass *classes;
     int nclasses, clcap;
     int refs;
+    /* set of characters a match can start with (fs_valid): bitmap for c < 256, fs_wide for c >= 256 */
+    bool fs_valid, fs_wide;
+    uint8_t fset[32];
 };
 
 int re_ncaps(Regex *re) { return re->ncaps; }
@@ -1049,6 +1052,77 @@ static void relocate(int32_t *code, int from, int to, int delta) {
     }
 }
 
+/* first-character analysis: adds the characters a match starting at pc can begin with to re->fset;
+ * false when unknown (the match may be empty or start with an assertion) */
+static void fs_add(Regex *re, uint32_t c) {
+    if (c < 256)
+        re->fset[c >> 3] |= (uint8_t)(1u << (c & 7));
+    else
+        re->fs_wide = true;
+}
+static bool fs_single(Regex *re, int op, int32_t arg) {
+    bool ic = (re->flags & RF_I) != 0, u = (re->flags & (RF_U | RF_V)) != 0;
+    switch (op) {
+    case R_CHAR: fs_add(re, (uint32_t)arg); return true;
+    case R_CHARI:
+        for (uint32_t c = 0; c < 256; c++)
+            if (canon(c, u) == (uint32_t)arg) fs_add(re, c);
+        re->fs_wide = true;
+        return true;
+    case R_ANY:
+        for (uint32_t c = 0; c < 256; c++)
+            if (c != '\n' && c != '\r') fs_add(re, c);
+        re->fs_wide = true;
+        return true;
+    case R_CLASS:
+    case R_NCLASS: {
+        RClass *cl = &re->classes[arg];
+        for (uint32_t c = 0; c < 256; c++) {
+            bool in = class_has(cl, c);
+            if (!in && ic) {
+                uint32_t l = uc_lower(c), up = uc_upper(c);
+                in = (l != c && class_has(cl, l)) || (up != c && class_has(cl, up));
+                if (!in && u) {
+                    uint32_t cc = canon(c, true);
+                    in = cc != c && class_has(cl, cc);
+                }
+            }
+            if (op == R_NCLASS) in = !in;
+            if (in) fs_add(re, c);
+        }
+        re->fs_wide = true;
+        return true;
+    }
+    default: return false;
+    }
+}
+static bool first_set(Regex *re, int pc, int depth) {
+    int32_t *code = re->code;
+    if (depth > 40) return false;
+    for (;;) {
+        switch (code[pc]) {
+        case R_CHAR: case R_CHARI: case R_ANY: case R_CLASS: case R_NCLASS: return fs_single(re, code[pc], code[pc + 1]);
+        case R_SAVE: pc += 2; continue;
+        case R_RESET: pc += 3; continue;
+        case R_REP_START: case R_REP_POS: pc += 2; continue;
+        case R_JMP: pc = code[pc + 1]; continue;
+        case R_SPLIT: return first_set(re, code[pc + 1], depth + 1) && first_set(re, code[pc + 2], depth + 1);
+        case R_REP_TEST:
+            if (code[pc + 2] >= 1) {
+                pc += 6;
+                continue;
+            }
+            return first_set(re, pc + 6, depth + 1) && first_set(re, code[pc + 5], depth + 1);
+        case R_GREEDY1: case R_LAZY1:
+            if (!fs_single(re, code[pc + 3], code[pc + 4])) return false;
+            if (code[pc + 1] >= 1) return true;
+            pc += 5;
+            continue;
+        default: return false;
+        }
+    }
+}
+
 Regex *re_compile(js_rt *rt, JSString *src, uint32_t flags, JSString **err) {
     str_flat(rt, src);
     RC c;
@@ -1103,10 +1177,20 @@ Regex *re_compile(js_rt *rt, JSString *src, uint32_t flags, JSString **err) {
     emit(&c, R_SAVE);
     emit(&c, 1);
     emit(&c, R_MATCH);
+    re->fs_valid = first_set(re, 0, 0);
     re->ncaps = c.ngroups + 1;
     if (c.has_named) {
         re->names = (JSString **)calloc((size_t)re->ncaps, sizeof(JSString *));
-        for (int i = 1; i < re->ncaps && i < c.gncap; i++) re->names[i] = c.gnames[i];
+        for (int i = 1; i < re->ncaps && i < c.gncap; i++) {
+            /* compiled regexes are shared through a cache that the GC does not see: group names are
+             * atomized and kept for the lifetime of the runtime */
+            JSString *nm = c.gnames[i];
+            if (nm) {
+                nm = vstr(atomize(rt, nm));
+                nm->h.flags |= STR_PERM;
+            }
+            re->names[i] = nm;
+        }
     }
     free(c.gnames);
     return re;
@@ -1539,11 +1623,20 @@ int re_exec(js_rt *rt, Regex *re, JSString *s, uint32_t start, int32_t *caps) {
     bool sticky = (re->flags & RF_Y) != 0;
     int result = 0;
     /* quick first-char filter */
-    int first_op = re->code[2], first_arg = re->code[3];
-    bool first_char = first_op == R_CHAR && first_arg < 0x10000 && !sticky;
+    bool filt = re->fs_valid && !sticky;
     for (uint32_t p = start; p <= m.n; p++) {
-        if (first_char) {
-            while (p < m.n && str_at(s, p) != (uint32_t)first_arg) p++;
+        if (filt) {
+            if (s->h.flags & STR_WIDE) {
+                const uint16_t *d = s->s16;
+                while (p < m.n) {
+                    uint32_t ch = d[p];
+                    if (ch < 256 ? (re->fset[ch >> 3] >> (ch & 7)) & 1 : re->fs_wide) break;
+                    p++;
+                }
+            } else {
+                const uint8_t *d = s->s8;
+                while (p < m.n && !((re->fset[d[p] >> 3] >> (d[p] & 7)) & 1)) p++;
+            }
             if (p >= m.n) break;
         }
         for (int i = 0; i < re->ncaps * 2; i++) caps[i] = -1;

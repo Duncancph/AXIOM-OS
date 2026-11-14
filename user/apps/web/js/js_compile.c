@@ -569,6 +569,14 @@ static void describe(FS *fs, SB *b, Node *n, int depth) {
     case N_TRUE: sb_puts(b, "true"); return;
     case N_FALSE: sb_puts(b, "false"); return;
     case N_OBJECT: sb_puts(b, n->a ? "{(intermediate value)}" : "{}"); return;
+    case N_ARRAY:
+        sb_puts(b, "[");
+        for (Node *e = n->a; e; e = e->next) {
+            if (e->kind != N_HOLE) describe(fs, b, e, depth + 1);
+            if (e->next) sb_puts(b, ",");
+        }
+        sb_puts(b, "]");
+        return;
     default: sb_puts(b, "(intermediate value)"); return;
     }
 }

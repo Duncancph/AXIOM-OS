@@ -50,7 +50,7 @@ NATIVE(number_to_string) {
     if (!is_undef(ARG(0))) {
         double r;
         if (to_int(rt, argv[0], &r) < 0) return JS_EXC;
-        if (r < 2 || r > 36) return throw_error(rt, E_RANGE, "toString() radix must be between 2 and 36");
+        if (r < 2 || r > 36) return throw_error(rt, E_RANGE, "toString() radix argument must be between 2 and 36");
         radix = (int)r;
     }
     if (radix == 10) return mkstr(num_to_str(rt, d));
@@ -550,15 +550,16 @@ int big_cmp_num(JSBig *a, double d) {
         n = 40;
         while (n && !tmp[n - 1]) n--;
     }
-    struct {
-        GCHdr h;
-        uint32_t n;
-        uint32_t d[40];
-    } fb;
-    fb.h.flags = (neg && n) ? 1 : 0;
-    fb.n = n;
-    memcpy(fb.d, tmp, sizeof tmp);
-    int c = big_cmp(a, (JSBig *)&fb);
+    union {
+        JSBig b;
+        uint8_t raw[sizeof(JSBig) + 40 * 4];
+    } fbu;
+    JSBig *fb = &fbu.b;
+    memset(&fbu, 0, sizeof fbu);
+    fb->h.flags = (neg && n) ? 1 : 0;
+    fb->n = n;
+    memcpy(fb->d, tmp, sizeof tmp);
+    int c = big_cmp(a, fb);
     if (c == 0 && fl != d) return -1;
     return c;
 }
@@ -832,7 +833,7 @@ NATIVE(bigint_to_string) {
     if (!is_undef(ARG(0))) {
         double r;
         if (to_int(rt, argv[0], &r) < 0) return JS_EXC;
-        if (r < 2 || r > 36) return throw_error(rt, E_RANGE, "toString() radix must be between 2 and 36");
+        if (r < 2 || r > 36) return throw_error(rt, E_RANGE, "toString() radix argument must be between 2 and 36");
         radix = (int)r;
     }
     return mkstr(big_to_string(rt, (JSBig *)vptr(b), radix));

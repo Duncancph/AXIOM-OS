@@ -948,8 +948,19 @@ int define_own(js_rt *rt, JSObject *o, jsval key, PropDesc *d, bool th) {
         } else if (o->cls == CLS_ARGUMENTS) {
             int64_t ix = key_index(rt, key);
             if (ix >= 0 && ix < o->u.arr.len && o->u.arr.elems[ix] != JS_HOLE) {
-                /* move element to an ordinary property (and unmap it) */
                 uint16_t *pm = o->u.arr.pmap;
+                bool mapped = pm && ix < pm[0] && pm[1 + ix] != 0xFFFF;
+                if (!(d->has & (HAS_GET | HAS_SET)) && (!(d->has & HAS_W) || (d->flags & P_W)) &&
+                    (!(d->has & HAS_E) || (d->flags & P_E)) && (!(d->has & HAS_C) || (d->flags & P_C))) {
+                    /* stays an ordinary writable element: just update the value (and the parameter) */
+                    if (d->has & HAS_VALUE) {
+                        o->u.arr.elems[ix] = d->value;
+                        if (mapped) o->u.arr.menv->slots[pm[1 + ix]] = d->value;
+                    }
+                    return 1;
+                }
+                if (mapped && (d->has & HAS_VALUE)) o->u.arr.menv->slots[pm[1 + ix]] = d->value;
+                /* move element to an ordinary property (and unmap it) */
                 jsval v = (pm && ix < pm[0] && pm[1 + ix] != 0xFFFF) ? o->u.arr.menv->slots[pm[1 + ix]] : o->u.arr.elems[ix];
                 if (pm && ix < pm[0]) pm[1 + ix] = 0xFFFF;
                 o->u.arr.elems[ix] = JS_HOLE;

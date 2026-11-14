@@ -108,7 +108,7 @@ NATIVE(array_from) {
     if (mapping && !is_callable(mapfn)) THROW_TYPE("%S is not a function", val_brief(rt, mapfn));
     jsval c = this_;
     bool use_ctor = is_ctor(c) && c != mkobj(rt->intr[I_Array]);
-    if (is_nullish(items)) THROW_TYPE("%S is not iterable (cannot read property Symbol(Symbol.iterator))", val_brief(rt, items));
+    if (is_nullish(items)) THROW_TYPE("%s is not iterable (cannot read property Symbol(Symbol.iterator))", is_null(items) ? "object null" : "undefined");
     jsval usingIter = get_v(rt, items, SYM(iterator));
     TRY(usingIter);
     if (!is_nullish(usingIter)) {

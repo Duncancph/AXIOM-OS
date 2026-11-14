@@ -11,6 +11,9 @@ void *gc_alloc(js_rt *rt, size_t size, int type) {
     rt->gc_list = h;
     rt->bytes += size + 16;
     if (rt->bytes > rt->threshold) rt->gc_pending = true;
+#ifdef JS_GC_STRESS /* host testing: request a collection at every safe point */
+    rt->gc_pending = true;
+#endif
     return h;
 }
 

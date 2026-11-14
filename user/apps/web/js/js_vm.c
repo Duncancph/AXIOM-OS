@@ -486,6 +486,34 @@ static JS_NOINLINE jsval get_field_slow(js_rt *rt, jsval o, jsval key, uint8_t *
 }
 
 static JS_NOINLINE int put_field_slow(js_rt *rt, jsval o, jsval key, jsval v, uint8_t *icp, bool strict) {
+    if (is_obj(o)) {
+        /* fast path: adding a new property to an ordinary extensible object whose prototype chain
+         * has no setter / read-only property of that name */
+        JSObject *ob = vobj(o);
+        if ((ob->oflags & (OF_EXOTIC | OF_EXTENSIBLE)) == OF_EXTENSIBLE && !find_own(rt, ob, key)) {
+            bool ok = true;
+            for (JSObject *q = ob->proto; q; q = q->proto) {
+                if (q->oflags & OF_EXOTIC) {
+                    ok = false;
+                    break;
+                }
+                Prop *p = find_own(rt, q, key);
+                if (p) {
+                    if ((p->flags & (P_W | P_ACC)) != P_W) ok = false;
+                    break;
+                }
+            }
+            if (ok) {
+                Prop *p = add_prop(rt, ob, key, v, P_DEFAULT);
+                if (!p) {
+                    throw_error(rt, E_RANGE, "out of memory");
+                    return -1;
+                }
+                wr32(icp, (uint32_t)(p - ob->props));
+                return 1;
+            }
+        }
+    }
     int r = set_prop(rt, o, key, v, o, strict);
     if (r > 0 && is_obj(o)) {
         JSObject *ob = vobj(o);
@@ -2852,7 +2880,7 @@ jsval eval_code(js_rt *rt, JSString *src, const char *file, bool is_fn_ctor) {
     char *u = str_to_utf8(rt, src, &n);
     if (!u) return throw_error(rt, E_RANGE, "out of memory");
     JSString *err = 0;
-    FuncProto *fp = compile_script(rt, u, n, file, 0, &err);
+    FuncProto *fp = compile_script(rt, u, n, file, is_fn_ctor ? 0 : CS_EVAL, &err);
     free(u);
     if (!fp) {
         return throw_val(rt, mkobj(make_error(rt, rt->compile_errtype == E_RANGE ? E_RANGE : E_SYNTAX, err)));

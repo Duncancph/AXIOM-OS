@@ -21,16 +21,22 @@ typedef struct MData {
 
 static MData *md(JSObject *o) { return (MData *)o->u.data.p; }
 
+static uint32_t mix64(uint64_t u) {
+    u ^= u >> 33;
+    u *= 0xff51afd7ed558ccdull;
+    u ^= u >> 33;
+    u *= 0xc4ceb9fe1a85ec53ull;
+    u ^= u >> 33;
+    return (uint32_t)u;
+}
 static uint32_t hash_key(js_rt *rt, jsval k) {
     if (is_num(k)) {
         double d = vnum(k);
         if (d == 0) d = 0;
-        uint64_t u = d != d ? JS_NAN_BITS : dbits(d);
-        return (uint32_t)(u ^ (u >> 32)) * 2654435761u;
+        return mix64(d != d ? JS_NAN_BITS : dbits(d));
     }
-    if (is_str(k)) return str_hash(rt, vstr(k));
-    uint64_t u = k;
-    return (uint32_t)((u >> 4) ^ (u >> 20)) * 2654435761u;
+    if (is_str(k)) return mix64(str_hash(rt, vstr(k)));
+    return mix64(k);
 }
 static jsval norm_key(jsval k) {
     if (is_num(k) && vnum(k) == 0) return mknum(0);

@@ -3028,7 +3028,16 @@ int js_parse(js_rt *rt, const char *src, size_t len, const char *file, int flags
         grow(p, (void ***)&p->funcs, &p->cfuncs, p->nfuncs);
         p->funcs[p->nfuncs++] = fn;
         next(p);
-        fn->body = parse_body(p, true);
+        if (flags & CS_EVAL) {
+            /* eval code: let/const/class declarations are local to this evaluation */
+            Node *blk = mk(p, N_BLOCK);
+            blk->scope = new_scope(p, SC_BLOCK);
+            p->sc = blk->scope;
+            blk->a = parse_body(p, true);
+            p->sc = s;
+            fn->body = blk;
+        } else
+            fn->body = parse_body(p, true);
         if (!is(p, T_EOF)) unexpected(p);
         fn->src_end = (uint32_t)len;
         out->script = fn;

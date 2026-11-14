@@ -111,7 +111,7 @@ jsval get_iterator(js_rt *rt, jsval obj, jsval *next_out, bool async) {
     } else {
         if (is_nullish(obj)) {
             rt->sp = root;
-            return throw_error(rt, E_TYPE, "%S is not iterable (cannot read property Symbol(Symbol.iterator))", val_brief(rt, obj));
+            return throw_error(rt, E_TYPE, "%s is not iterable (cannot read property Symbol(Symbol.iterator))", is_null(obj) ? "object null" : "undefined");
         }
         m = get_v(rt, obj, SYM(iterator));
         if (m == JS_EXC) {
