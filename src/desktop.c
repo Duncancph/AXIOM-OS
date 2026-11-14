@@ -853,6 +853,7 @@ static void handle_key(int k) {
     if (locked) { lock_key(k); return; }
     if (k == (KEYMOD_SUPER | 'l')) { desktop_lock(); return; }
     if (KEY_CODE(k) == KEY_PRTSC) { take_screenshot(); return; }
+    if (k == (KEYMOD_ALT | KEY_F4)) { int t = top_window(); if (t >= 0) close_window_clicked(&wins[t]); return; }
     if (k == KEY_SUPER) { toggle_menu(!menu_open); return; }
     if (menu_open && k == 27) { toggle_menu(false); return; }
     int t = top_window();

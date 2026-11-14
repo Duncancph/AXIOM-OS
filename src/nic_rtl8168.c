@@ -23,12 +23,22 @@ static void w8(struct rtl *t, int o, uint8_t v) { *(volatile uint8_t *)(t->r + o
 static void w16(struct rtl *t, int o, uint16_t v) { *(volatile uint16_t *)(t->r + o) = v; }
 static uint16_t r16(struct rtl *t, int o) { return *(volatile uint16_t *)(t->r + o); }
 static void w32(struct rtl *t, int o, uint32_t v) { *(volatile uint32_t *)(t->r + o) = v; }
+static uint32_t r32(struct rtl *t, int o) { return *(volatile uint32_t *)(t->r + o); }
+
+/* MAC "OCP" registers of the RTL8168G and later */
+static uint16_t mac_ocp_r(struct rtl *t, uint32_t reg) { w32(t, 0xB0, reg << 15); return r32(t, 0xB0) & 0xFFFF; }
+static void mac_ocp_w(struct rtl *t, uint32_t reg, uint16_t v) { w32(t, 0xB0, 1u << 31 | reg << 15 | v); }
+static void wait_ll_ready(struct rtl *t) { for (int i = 0; i < 1000 && !(r8(t, 0xD3) & 2); i++) udelay(100); }   /* MCU: LINK_LIST_RDY */
 
 static int r_send(struct netif *n, const void *frame, int len) {
     struct rtl *t = n->priv;
     if (len > 1514) return -1;
     struct desc *d = &t->tx[t->tx_cur];
-    if (d->opts1 & OWN) return -1;
+    if (d->opts1 & OWN) {
+        static bool told;
+        if (!told) { told = true; LOG_WARN("rtl8168: the card isn't sending (ISR %04x, cmd %02x, TxConfig %08x)\n", r16(t, 0x3E), r8(t, 0x37), r32(t, 0x40)); }
+        return -1;
+    }
     memcpy(t->txbuf[t->tx_cur], frame, len);
     if (len < 60) { memset(t->txbuf[t->tx_cur] + len, 0, 60 - len); len = 60; }
     d->addr = (uint64_t)t->txbuf[t->tx_cur];
@@ -81,7 +91,21 @@ struct netif *rtl8168_probe(struct pci_dev *p) {
     uint16_t cmd = pci_read16(p->bus, p->dev, p->fn, 4);
     pci_write16(p->bus, p->dev, p->fn, 4, (cmd | 0x6) & ~0x400);
 
+    uint32_t xid = r32(t, 0x40) & 0x7CF00000;            /* chip generation */
+    bool gen_g = xid >= 0x4C000000 && xid != 0x7C800000; /* RTL8168G/H/EP and later need extra start-up steps */
     w16(t, 0x3C, 0);                     /* no interrupts */
+    if (gen_g) {
+        /* As Linux does for these chips: stop, leave the firmware's out-of-band (network boot / management)
+         * mode, re-enable the shared FIFO, and open the receive gate. */
+        w32(t, 0xF0, r32(t, 0xF0) | (1u << 19));         /* MISC: RXDV gate on while resetting */
+        for (int i = 0; i < 100 && (r32(t, 0x40) & (1u << 11)) == 0; i++) udelay(100);   /* TXCFG_EMPTY */
+        w8(t, 0x37, 0); udelay(1000);
+        w8(t, 0xD3, r8(t, 0xD3) & ~0x80);                /* MCU: NOW_IS_OOB off */
+        mac_ocp_w(t, 0xE8DE, mac_ocp_r(t, 0xE8DE) & ~(1u << 14));
+        wait_ll_ready(t);
+        mac_ocp_w(t, 0xE8DE, mac_ocp_r(t, 0xE8DE) | (1u << 15));
+        wait_ll_ready(t);
+    }
     w8(t, 0x37, 0x10);                   /* reset */
     for (int i = 0; i < 1000 && (r8(t, 0x37) & 0x10); i++) sleep_ms(1);
     for (int i = 0; i < 6; i++) t->nif.mac[i] = r8(t, i);
@@ -102,10 +126,12 @@ struct netif *rtl8168_probe(struct pci_dev *p) {
     w32(t, 0x20, (uint32_t)(uint64_t)t->tx); w32(t, 0x24, (uint64_t)t->tx >> 32);
     w32(t, 0xE4, (uint32_t)(uint64_t)t->rx); w32(t, 0xE8, (uint64_t)t->rx >> 32);
     w8(t, 0x37, 0x0C);                   /* enable RX + TX */
-    w32(t, 0x40, 0x03000700);            /* TX config: standard IFG, unlimited DMA burst */
+    w32(t, 0x40, 0x03000700 | (gen_g ? 1u << 7 : 0));   /* TX config: standard IFG, unlimited DMA burst (+ auto FIFO on G and later) */
     w32(t, 0x44, 0x0000E70E);            /* RX config: broadcast + multicast + my MAC, unlimited burst */
     w32(t, 0x08, 0xFFFFFFFF); w32(t, 0x0C, 0xFFFFFFFF);   /* multicast filter: accept all */
+    if (gen_g) w32(t, 0xF0, r32(t, 0xF0) & ~(1u << 19));   /* MISC: open the receive gate */
     w8(t, 0x50, 0x00);                   /* lock */
+    LOG_INFO("rtl8168: chip %08x%s, MCU %02x, MISC %08x\n", xid, gen_g ? " (G or later)" : "", r8(t, 0xD3), r32(t, 0xF0));
     w16(t, 0x3E, 0xFFFF);
 
     ksnprintf(t->nif.adapter, sizeof t->nif.adapter, "Realtek RTL%04x", id);
