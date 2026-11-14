@@ -7,7 +7,9 @@
  * IPv4 addresses held as uint32_t are in network byte order. */
 #include "net.h"
 
-static struct netif *nif;
+static struct netif *nif;                 /* the adapter in use */
+static struct netif *nifs[4]; static int nnifs;
+static struct netif *switch_to;           /* change adapters at the next chance (network thread) */
 static const uint8_t BCAST[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
 static inline uint16_t g16(const uint8_t *p) { return (uint16_t)(p[0] << 8 | p[1]); }
@@ -1105,24 +1107,61 @@ void net_rx(struct netif *n, const uint8_t *f, int len) {
 
 /* ---------------- setup, thread, info ---------------- */
 void net_init(void) {
-    for (int i = 0; i < pci_count && !nif; i++) {
+    for (int i = 0; i < pci_count; i++) {
         struct pci_dev *p = &pci_devs[i];
         if (p->class_code != 0x02) continue;
-        nif = e1000_probe(p);
-        if (!nif) nif = rtl8168_probe(p);
+        struct netif *n = e1000_probe(p);
+        if (!n) n = rtl8168_probe(p);
+        if (!n) continue;
+        LOG_OK("Network: %s (%s), MAC %02x:%02x:%02x:%02x:%02x:%02x\n", n->adapter, n->driver,
+               n->mac[0], n->mac[1], n->mac[2], n->mac[3], n->mac[4], n->mac[5]);
+        net_add_netif(n);
     }
-    if (!nif) { LOG_INFO("No supported wired network adapter found\n"); return; }
-    LOG_OK("Network: %s (%s), MAC %02x:%02x:%02x:%02x:%02x:%02x\n", nif->adapter, nif->driver,
-           nif->mac[0], nif->mac[1], nif->mac[2], nif->mac[3], nif->mac[4], nif->mac[5]);
+    if (!nnifs) LOG_INFO("No wired network adapter found (USB adapters and phone tethering work when plugged in)\n");
+}
+
+/* forget everything learnt on the previous adapter */
+static void net_reset(void) {
+    configured = false; dh_state = DH_INIT; dh_next = 0;
+    v6_stop();
+    memset(nb, 0, sizeof nb); memset(dcache, 0, sizeof dcache);
+    for (int i = 0; i < 8; i++) pend[i].used = false;
+    for (int i = 0; i < TCP_MAX; i++)
+        if (tcbs[i].state != T_FREE && tcbs[i].state != T_CLOSED) { tcbs[i].err = NET_ERESET; tcbs[i].state = T_CLOSED; }
+}
+
+static void activate(struct netif *n) {
+    if (nif == n) return;
+    if (nif) nif->link = false;
+    net_reset();
+    nif = n;
+    if (n) { n->link = false; kprintf("[net] using %s (%s)\n", n->adapter, n->driver); }   /* the link check starts DHCP/IPv6 */
+}
+
+void net_add_netif(struct netif *n) {
+    if (nnifs < 4) nifs[nnifs++] = n;
+    if (!nif) activate(n);
+    else if (!nif->link) switch_to = n;             /* the current one has no cable: try the new one */
+    if (n != nifs[0] && nif == n) desktop_notify("Network adapter connected", n->adapter);
+}
+
+void net_remove_netif(struct netif *n) {
+    for (int i = 0; i < nnifs; i++) if (nifs[i] == n) { nifs[i] = nifs[--nnifs]; break; }
+    if (switch_to == n) switch_to = 0;
+    if (nif == n) {
+        activate(nnifs ? nifs[0] : 0);
+        desktop_notify("Network adapter removed", n->adapter);
+    }
 }
 
 bool net_present(void) { return nif != 0; }
 bool net_ready(void) { return nif && nif->link && (configured || v6_ready()); }
 
 void net_thread(void *arg) {
-    if (!nif) for (;;) task_sleep(60000);
     uint64_t last_link = 0;
     for (;;) {
+        if (switch_to) { activate(switch_to); switch_to = 0; }
+        if (!nif) { task_sleep(50); continue; }
         nif->poll(nif);
         uint64_t now = uptime_ms();
         if (now - last_link > 500) {
@@ -1135,6 +1174,8 @@ void net_thread(void *arg) {
                 kprintf("[net] link down\n");
                 desktop_notify("Network disconnected", "The network cable was unplugged.");
             }
+            if (!up)                                    /* another adapter with a working link? use it */
+                for (int i = 0; i < nnifs; i++) if (nifs[i] != nif && nifs[i]->link_up(nifs[i])) { switch_to = nifs[i]; break; }
             for (int i = 0; i < 8; i++) if (pend[i].used && now - pend[i].t > 3000) pend[i].used = false;
         }
         if (nif->link) { dhcp_tick(); v6_tick(); }

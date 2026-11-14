@@ -63,10 +63,10 @@ static void draw(void) {
 
     if (!ni.present) {
         ui_card(c, 20, 104, WW - 40, 140);
-        gfx_text(c, &font_ui_bold, 40, 136, UI_TEXT, "No wired network adapter detected");
-        gfx_text(c, &font_ui, 40, 162, UI_MUTED, "DuncOS supports Intel (e1000, e1000e, I217-I219) and");
-        gfx_text(c, &font_ui, 40, 182, UI_MUTED, "Realtek (RTL8111/8168) Ethernet. Wi-Fi isn't supported yet:");
-        gfx_text(c, &font_ui, 40, 202, UI_MUTED, "plug in a network cable, or a USB Ethernet adapter later on.");
+        gfx_text(c, &font_ui_bold, 40, 136, UI_TEXT, "No network adapter detected");
+        gfx_text(c, &font_ui, 40, 162, UI_MUTED, "Plug in a network cable (Intel or Realtek Ethernet), a USB");
+        gfx_text(c, &font_ui, 40, 182, UI_MUTED, "Ethernet adapter, or an Android phone with USB tethering on.");
+        gfx_text(c, &font_ui, 40, 202, UI_MUTED, "Wi-Fi isn't supported yet.");
         app_flush(&a);
         return;
     }

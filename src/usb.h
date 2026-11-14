@@ -61,4 +61,6 @@ int usb_queue_in(struct usb_dev *d, int dci, usb_xfer_cb cb);
 const uint8_t *usb_find_endpoint(struct usb_dev *d, int iface, int type, bool in, const uint8_t **ss_comp);
 
 void usbkbd_attach(struct usb_dev *d, int iface);
+void usbnet_attach(struct usb_dev *d, int ctrl_if, uint8_t cls, uint8_t sub, uint8_t proto);
+void usb_get_string(struct usb_dev *d, uint8_t idx, char *out, int n);
 void usbmouse_attach(struct usb_dev *d, int iface);

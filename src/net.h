@@ -19,6 +19,8 @@ struct netif *rtl8168_probe(struct pci_dev *p);
 
 /* stack */
 void net_init(void);
+void net_add_netif(struct netif *n);      /* a network adapter appeared (PCI at start-up, USB any time) */
+void net_remove_netif(struct netif *n);   /* it was unplugged */
 void net_rx(struct netif *n, const uint8_t *frame, int len);
 void net_thread(void *arg);
 void net_task_exit(struct task *t);

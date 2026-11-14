@@ -285,6 +285,8 @@ int usb_configure_ep(struct usb_dev *d, const uint8_t *ep, const uint8_t *ss) {
     return cc == CC_SUCCESS ? dci : -1;
 }
 
+static void get_string(struct usb_dev *d, uint8_t idx, char *out, int n);
+void usb_get_string(struct usb_dev *d, uint8_t idx, char *out, int n) { get_string(d, idx, out, n); }
 static void get_string(struct usb_dev *d, uint8_t idx, char *out, int n) {
     out[0] = 0;
     if (!idx) return;
@@ -305,6 +307,20 @@ static const char *speed_name(int s) {
 
 static void hub_attach(struct usb_dev *h);
 
+/* how well DuncOS can use a configuration: standard network (ECM/NCM) > RNDIS > other known classes */
+static int config_score(const uint8_t *c, int len) {
+    int s = 0;
+    for (int i = 0; i + 8 < len && c[i]; i += c[i]) {
+        const uint8_t *p = c + i;
+        if (p[1] != 4) continue;
+        uint8_t ic = p[5], is = p[6], ip = p[7];
+        if (ic == 0x02 && (is == 0x06 || is == 0x0D)) s = s > 30 ? s : 30;
+        else if ((ic == 0x02 && is == 0x02 && ip == 0xFF) || (ic == 0xE0 && is == 1 && ip == 3)) s = s > 20 ? s : 20;
+        else if (ic == 0x03 || ic == 0x08 || ic == 0x09 || (ic == 0xE0 && is == 1 && ip == 1)) s = s > 10 ? s : 10;
+    }
+    return s;
+}
+
 static void attach_drivers(struct usb_dev *d) {
     int cur_if = -1; uint8_t ic = 0, is = 0, ip = 0;
     if (d->dclass == 9) { hub_attach(d); return; }
@@ -316,6 +332,9 @@ static void attach_drivers(struct usb_dev *d) {
         if (ic == 0x03 && is == 1 && ip == 1) usbkbd_attach(d, cur_if);
         else if (ic == 0x03 && is == 1 && ip == 2) usbmouse_attach(d, cur_if);
         else if (ic == 0x08 && is == 0x06 && ip == 0x50 && !d->driver) msc_attach(d, cur_if);
+        else if (!d->driver && ((ic == 0x02 && (is == 0x06 || is == 0x0D)) || (ic == 0x02 && is == 0x02 && ip == 0xFF) ||
+                                (ic == 0xE0 && is == 0x01 && ip == 0x03) || (ic == 0xEF && is == 0x04 && ip == 0x01)))
+            usbnet_attach(d, cur_if, ic, is, ip);           /* network: CDC-ECM, CDC-NCM, RNDIS */
         else if (ic == 0xE0 && is == 1 && ip == 1 && !d->driver) {
             const uint8_t *ss;
             const uint8_t *ep = usb_find_endpoint(d, cur_if, 3, true, &ss);
@@ -391,12 +410,26 @@ static struct usb_dev *enumerate_device(struct xhci *x, struct usb_dev *parent, 
     get_string(d, dd[14], d->manufacturer, sizeof d->manufacturer);
     get_string(d, dd[15], d->product, sizeof d->product);
 
-    uint8_t ch[9];
-    if (usb_control(d, 0x80, 6, 0x0200, 0, 9, ch) < 0) goto fail;
-    uint16_t total = ch[2] | ch[3] << 8;
-    if (total > sizeof d->config) total = sizeof d->config;
-    if (usb_control(d, 0x80, 6, 0x0200, 0, total, d->config) < 0) goto fail;
-    d->config_len = total;
+    /* Several configurations (e.g. a USB Ethernet adapter's vendor mode and its standard CDC mode):
+     * use the one DuncOS has the best driver for. */
+    int nconf = dd[17] ? (dd[17] > 4 ? 4 : dd[17]) : 1, best = 0, best_score = -1;
+    for (int ci = 0; ci < nconf; ci++) {
+        uint8_t ch[9];
+        if (usb_control(d, 0x80, 6, 0x0200 | ci, 0, 9, ch) < 0) { if (ci == 0) goto fail; break; }
+        uint16_t total = ch[2] | ch[3] << 8;
+        if (total > sizeof d->config) total = sizeof d->config;
+        if (usb_control(d, 0x80, 6, 0x0200 | ci, 0, total, d->config) < 0) { if (ci == 0) goto fail; break; }
+        int score = config_score(d->config, total);
+        if (score > best_score) { best_score = score; best = ci; }
+    }
+    {
+        uint8_t ch[9];
+        if (usb_control(d, 0x80, 6, 0x0200 | best, 0, 9, ch) < 0) goto fail;
+        uint16_t total = ch[2] | ch[3] << 8;
+        if (total > sizeof d->config) total = sizeof d->config;
+        if (usb_control(d, 0x80, 6, 0x0200 | best, 0, total, d->config) < 0) goto fail;
+        d->config_len = total;
+    }
     if (usb_control(d, 0x00, 9, d->config[5], 0, 0, 0) < 0) { LOG_WARN("USB: set configuration failed\n"); goto fail; }
 
     LOG_OK("USB %04x:%04x %s %s [%s]%s\n", d->vid, d->pid, d->manufacturer, d->product, speed_name(speed),
