@@ -43,6 +43,7 @@ struct node {
     char *text; int tlen;             /* text nodes: entity-decoded Windows-1252 text */
     const char *style_attr;
     struct style *st;                 /* computed style (null: not rendered) */
+    struct style *st_mem;             /* its memory, kept for the next cascade */
     struct fctl *fc;                  /* form control state */
     struct imgent *img;               /* <img> */
     int link;                         /* index into the page's links, or -1 */

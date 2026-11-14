@@ -656,40 +656,56 @@ static void flow_children(struct fctx *c, struct node *e, struct ictx ic) {
 #define MAXCOLS 64
 #define MAXROWS 4000
 struct trow { struct node *tr; struct node **cells; int nc; };
-struct tinfo { struct trow *rows; int nr; struct node *caps[4]; int ncap; int ncols; };
+struct tinfo { struct trow *rows; int nr; struct node *caps[4]; int ncap; int ncols; struct node **pool; int used, anon_n; bool anon; };
 static int colspan(struct node *cell) { int s = attr_px(cell, "colspan"); return s < 1 ? 1 : s > MAXCOLS ? MAXCOLS : s; }
 
-static void row_cells(struct trow *r, struct node *e, int d) {
+static int count_cells(struct node *e, int d) {
+    int n = 0;
+    for (struct node *c = e->first; c && n < MAXCOLS; c = c->next) {
+        if (c->type != N_ELEM || !c->st || c->st->display == D_NONE) continue;
+        n += c->st->display == D_CELL || d >= 2 ? 1 : count_cells(c, d + 1);
+    }
+    return n < MAXCOLS ? n : MAXCOLS;
+}
+static void row_cells(struct trow *r, struct node *e, int d, int cap) {
     for (struct node *c = e->first; c; c = c->next) {
         if (c->type != N_ELEM || !c->st || c->st->display == D_NONE) continue;
-        if (c->st->display == D_CELL || d >= 2) { if (r->nc < MAXCOLS) r->cells[r->nc++] = c; }
-        else row_cells(r, c, d + 1);
+        if (c->st->display == D_CELL || d >= 2) { if (r->nc < cap) r->cells[r->nc++] = c; }
+        else row_cells(r, c, d + 1, cap);
     }
 }
+/* two passes: count rows and cells (rows == 0), then fill them in */
 static void gather(struct tinfo *t, struct node *e, int d) {
     for (struct node *c = e->first; c; c = c->next) {
         if (c->type != N_ELEM || !c->st || c->st->display == D_NONE) continue;
         int dsp = c->st->display;
-        if (dsp == D_ROW && t->nr < MAXROWS) {
-            struct trow *r = &t->rows[t->nr++];
-            r->tr = c; r->cells = ar_alloc(&L->ar, MAXCOLS * sizeof(struct node *)); r->nc = 0;
-            if (r->cells) row_cells(r, c, 0); else t->nr--;
+        if (dsp == D_ROW) {
+            if (t->nr >= MAXROWS) continue;
+            t->anon = false;
+            int cap = count_cells(c, 0);
+            if (t->rows) { struct trow *r = &t->rows[t->nr]; r->tr = c; r->cells = t->pool + t->used; r->nc = 0; row_cells(r, c, 0, cap); }
+            t->nr++; t->used += cap;
         } else if (dsp == D_CELL) {
-            struct trow *r = t->nr ? &t->rows[t->nr - 1] : 0;
-            if (!r || r->tr) {
+            if (!t->anon) {
                 if (t->nr >= MAXROWS) continue;
-                r = &t->rows[t->nr++]; r->tr = 0; r->nc = 0; r->cells = ar_alloc(&L->ar, MAXCOLS * sizeof(struct node *));
-                if (!r->cells) { t->nr--; continue; }
+                if (t->rows) { struct trow *r = &t->rows[t->nr]; r->tr = 0; r->nc = 0; r->cells = t->pool + t->used; }
+                t->nr++; t->anon = true; t->anon_n = 0;
             }
-            if (r->nc < MAXCOLS) r->cells[r->nc++] = c;
+            if (t->anon_n >= MAXCOLS) continue;
+            if (t->rows) { struct trow *r = &t->rows[t->nr - 1]; r->cells[r->nc++] = c; }
+            t->used++; t->anon_n++;
         } else if (dsp == D_CAPTION) { if (t->ncap < 4) t->caps[t->ncap++] = c; }
         else if (d < 3) gather(t, c, d + 1);
     }
 }
 static bool table_info(struct node *e, struct tinfo *t) {
     memset(t, 0, sizeof *t);
-    t->rows = ar_alloc(&L->ar, MAXROWS * sizeof(struct trow));
-    if (!t->rows) return false;
+    gather(t, e, 0);
+    int nr = t->nr, used = t->used;
+    memset(t, 0, sizeof *t);
+    t->rows = ar_alloc(&L->ar, (nr ? nr : 1) * sizeof(struct trow));
+    t->pool = ar_alloc(&L->ar, (used ? used : 1) * sizeof(struct node *));
+    if (!t->rows || !t->pool) return false;
     gather(t, e, 0);
     for (int i = 0; i < t->nr; i++) {
         int n = 0; for (int k = 0; k < t->rows[i].nc; k++) n += colspan(t->rows[i].cells[k]);

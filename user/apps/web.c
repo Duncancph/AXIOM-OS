@@ -619,9 +619,24 @@ static void find_charset(const char *s, long n, char *cs, int max) {
     }
 }
 
+/* window titles are drawn with the 8x16 font by the desktop, which shows only ASCII there: spell accents out */
+static void title_ascii(const char *in, char *out, int max) {
+    static const char hi[] = "AAAAAAACEEEEIIIIDNOOOOOxOUUUUYPsaaaaaaaceeeeiiiidnooooo/ouuuuypy";
+    int k = 0;
+    for (; *in && k < max - 1; in++) {
+        unsigned c = (unsigned char)*in;
+        if (c >= 0xC0) c = hi[c - 0xC0];
+        else if (c >= 0x80) c = c == 0x80 ? 'E' : c == 0x91 || c == 0x92 ? '\'' : c == 0x93 || c == 0x94 ? '"' : c == 0x96 || c == 0x97 ? '-' :
+                                c == 0x85 ? '.' : c == 0xA0 ? ' ' : c == 0xAB ? '<' : c == 0xBB ? '>' : c == 0x95 || c == 0xB7 ? '*' : '?';
+        out[k++] = (char)c;
+    }
+    out[k] = 0;
+}
+
 static void set_title(void) {
     char t[64];
-    const char *tt = doc && doc->title[0] ? doc->title : url;
+    char tbuf[160]; title_ascii(doc && doc->title[0] ? doc->title : url, tbuf, sizeof tbuf);
+    const char *tt = tbuf;
     int n = strlen(tt);
     if (n > 50) { char s[48]; memcpy(s, tt, 47); s[47] = 0; ksnprintf(t, sizeof t, "%s... - Web", s); }
     else ksnprintf(t, sizeof t, "%s - Web", tt);

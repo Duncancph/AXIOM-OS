@@ -871,12 +871,12 @@ static const char *lookup_var(struct style *st, const char *name, int nl) {
     return 0;
 }
 static const char *subst_vars(struct style *st, const char *v, int *vl, int depth) {
-    if (depth > 6 || *vl > 4000) return 0;
+    if (depth > 6 || *vl > 4000) return 0;              /* depth 0..6 use bufs[0..6] */
     bool any = false;
     for (int i = 0; i + 4 <= *vl; i++) if (pre_ci(v + i, *vl - i, "var(")) { any = true; break; }
     if (!any) return v;
-    char *out = ar_alloc(sar, 4096);
-    if (!out) return 0;
+    static char bufs[8][4096];                        /* one per nesting level; the caller copies what it keeps */
+    char *out = bufs[depth];
     int o = 0;
     for (int i = 0; i < *vl;) {
         if (i + 4 <= *vl && pre_ci(v + i, *vl - i, "var(")) {
@@ -1259,8 +1259,10 @@ static struct node *const_cast(const struct node *n) { return (struct node *)n; 
 
 static int cascade_depth;
 static void style_elem(struct node *e, const struct style *ps) {
-    struct style *st = ar_alloc(sar, sizeof *st);
+    struct style *st = e->st_mem;                    /* reused when the styles are worked out again (window resized) */
+    if (!st) st = e->st_mem = ar_alloc(sar, sizeof *st);
     if (!st) return;
+    memset(st, 0, sizeof *st);
     /* inherited */
     st->color = ps->color; st->fsize = ps->fsize; st->bold = ps->bold; st->italic = ps->italic; st->mono = ps->mono;
     st->align = ps->align; st->ws = ps->ws; st->list = ps->list; st->list_inside = ps->list_inside; st->vis = ps->vis;
