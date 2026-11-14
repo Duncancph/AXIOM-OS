@@ -8,8 +8,8 @@ UCFLAGS := $(COMMON) -mcmodel=large
 LDFLAGS := -n -T src/linker.ld -nostdlib -z max-page-size=0x1000 --no-warn-rwx-segments -z noexecstack
 LIBGCC  := $(shell $(CC) -print-libgcc-file-name)
 
-APPS    := files about terminal monitor bluetooth network calc sandbox settings viewer
-REPO_APPS := editor clock web
+APPS    := files about terminal monitor bluetooth network calc sandbox settings viewer web
+REPO_APPS := editor clock
 K_SRCS  := $(filter-out src/desktop_highland.c,$(wildcard src/*.c)) common/gfx.c common/str.c common/inet.c user/lib/crypto/sha2.c user/lib/crypto/aead.c user/lib/img/pngenc.c user/lib/img/inflate.c
 K_OBJS  := $(patsubst %.c,build/k/%.o,$(K_SRCS)) build/k/boot.o build/k/isr.o build/k/apps.o
 U_LIB   := build/u/crt0.o build/u/libdunc.o build/u/malloc.o build/u/gfx.o build/u/str.o build/u/inet.o

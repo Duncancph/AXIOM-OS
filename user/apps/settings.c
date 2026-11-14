@@ -5,8 +5,8 @@
 #define WH 580
 #define SIDE 190
 static struct app a;
-enum { S_KEYB, S_TIME, S_DISPLAY, S_SOUND, S_LOCK, S_POWER, S_STORAGE, S_ABOUT, NSECT };
-static const char *sect_names[NSECT] = { "Keyboard", "Date & time", "Display", "Sound", "Lock screen", "Power", "Storage", "About" };
+enum { S_KEYB, S_MOUSE, S_TIME, S_DISPLAY, S_SOUND, S_LOCK, S_POWER, S_STORAGE, S_ABOUT, NSECT };
+static const char *sect_names[NSECT] = { "Keyboard", "Mouse", "Date & time", "Display", "Sound", "Lock screen", "Power", "Storage", "About" };
 static int sect, hover = -1;
 
 /* ---- clickable regions, rebuilt on every draw ---- */
@@ -18,9 +18,9 @@ enum { H_SECT = 0, H_LIST = 100, H_TOGGLE = 300, H_BTN = 400, H_FIELD = 500, H_D
 
 static char sv[16][112];                       /* cached setting values */
 static const char *keys[16] = { "keyboard.layout", "time.zone", "time.rtc_local", "time.24h", "display.mode", "display.current",
-                                "sound.volume", "lock.password", "lock.idle_min", "screen.off_min" };
-static const char *get(const char *k) { for (int i = 0; i < 10; i++) if (!strcmp(keys[i], k)) return sv[i]; return ""; }
-static void reload(void) { for (int i = 0; i < 10; i++) sys_setting_get(keys[i], sv[i], sizeof sv[i]); }
+                                "sound.volume", "lock.password", "lock.idle_min", "screen.off_min", "mouse.speed", "mouse.natural", "mouse.left" };
+static const char *get(const char *k) { for (int i = 0; i < 13; i++) if (!strcmp(keys[i], k)) return sv[i]; return ""; }
+static void reload(void) { for (int i = 0; i < 13; i++) sys_setting_get(keys[i], sv[i], sizeof sv[i]); }
 static void set(const char *k, const char *v) { sys_setting_set(k, v); reload(); }
 
 /* "id=Name;id=Name" lists from the kernel */
@@ -101,6 +101,21 @@ static void draw_keyboard(void) {
     label(SIDE + 360, 258, UI_MUTED, "the next letter: ^ then e = \xea");
 }
 
+static void draw_mouse(void) {
+    heading("Mouse and touchpad", "Changes take effect straight away.");
+    int sp = (int)katoi(get("mouse.speed")); if (sp < 1 || sp > 10) sp = 5;
+    label(SIDE + 32, 104, UI_TEXT, "Pointer speed");
+    int x = SIDE + 32, y = 120, w = 400;
+    gfx_rrect(&a.c, x, y + 8, w, 6, 3, 0x2A3654, 255);
+    gfx_rrect(&a.c, x, y + 8, w * (sp - 1) / 9, 6, 3, UI_ACCENT, 255);
+    for (int i = 0; i < 10; i++) gfx_fill(&a.c, x + w * i / 9, y + 18, 1, 5, UI_MUTED);
+    gfx_circle(&a.c, x + w * (sp - 1) / 9, y + 11, 9, UI_TEXT, 255);
+    add_hit(x - 10, y - 4, w + 20, 30, H_TOGGLE + 20);
+    label(x, y + 42, UI_MUTED, "Slow"); label(x + w - gfx_text_width(&font_ui, "Fast"), y + 42, UI_MUTED, "Fast");
+    toggle(SIDE + 32, 196, "Natural scrolling (the page follows your fingers, as on phones)", !strcmp(get("mouse.natural"), "1"), H_TOGGLE + 21);
+    toggle(SIDE + 32, 230, "Left-handed (swap the left and right buttons)", !strcmp(get("mouse.left"), "1"), H_TOGGLE + 22);
+}
+
 static void draw_time(void) {
     struct rtc_time t; sys_rtc(&t);
     char b[64];
@@ -141,8 +156,8 @@ static void draw_display(void) {
     }
     label(SIDE + 32, 316, UI_MUTED, "DuncOS picks this size if your screen and graphics card offer it,");
     label(SIDE + 32, 336, UI_MUTED, "otherwise the next best. It applies when DuncOS starts from a disk it is");
-    label(SIDE + 32, 356, UI_MUTED, "installed on (Settings > Storage). Started from the USB stick image,");
-    label(SIDE + 32, 376, UI_MUTED, "choose \"safe graphics\" in the start menu if the screen looks wrong.");
+    label(SIDE + 32, 356, UI_MUTED, "installed on (Settings > Storage). Started from the USB stick, choose");
+    label(SIDE + 32, 376, UI_MUTED, "a size under \"Screen size...\" in its start menu instead.");
 }
 
 static void draw_sound(void) {
@@ -255,7 +270,7 @@ static void draw(void) {
         add_hit(12, y, SIDE - 24, 36, H_SECT + i);
     }
     switch (sect) {
-    case S_KEYB: draw_keyboard(); break; case S_TIME: draw_time(); break; case S_DISPLAY: draw_display(); break;
+    case S_KEYB: draw_keyboard(); break; case S_MOUSE: draw_mouse(); break; case S_TIME: draw_time(); break; case S_DISPLAY: draw_display(); break;
     case S_SOUND: draw_sound(); break; case S_LOCK: draw_lock(); break; case S_POWER: draw_power(); break;
     case S_STORAGE: draw_storage(); break; case S_ABOUT: draw_about(); break;
     }
@@ -314,6 +329,12 @@ static void click(int id, int mx) {
     }
     if (id == H_TOGGLE + 0) set("time.24h", strcmp(get("time.24h"), "1") ? "1" : "0");
     if (id == H_TOGGLE + 1) set("time.rtc_local", strcmp(get("time.rtc_local"), "1") ? "1" : "0");
+    if (id == H_TOGGLE + 20) {
+        int v = 1 + ((mx - (SIDE + 32)) * 9 + 200) / 400; if (v < 1) v = 1; if (v > 10) v = 10;
+        char b[8]; ksnprintf(b, sizeof b, "%d", v); set("mouse.speed", b);
+    }
+    if (id == H_TOGGLE + 21) set("mouse.natural", strcmp(get("mouse.natural"), "1") ? "1" : "0");
+    if (id == H_TOGGLE + 22) set("mouse.left", strcmp(get("mouse.left"), "1") ? "1" : "0");
     if (id == H_TOGGLE + 10) {
         int v = (mx - (SIDE + 32)) * 100 / 400; if (v < 0) v = 0; if (v > 100) v = 100;
         char b[8]; ksnprintf(b, sizeof b, "%d", v); set("sound.volume", b);

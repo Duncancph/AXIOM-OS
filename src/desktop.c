@@ -750,6 +750,13 @@ static void click(int button) {
 static void handle_mouse(int dx, int dy, int b, int wheel) {
     random_event((uint64_t)(dx & 0xFFFF) | (uint64_t)(dy & 0xFFFF) << 16 | (uint64_t)b << 32);
     last_input = uptime_ms();
+    /* Settings > Mouse: speed 1..10 (5 = normal), natural scrolling, left-handed buttons */
+    static int fx, fy;
+    int sp = settings_int("mouse.speed"); if (sp < 1 || sp > 10) sp = 5;
+    fx += dx * sp; fy += dy * sp;
+    dx = fx / 5; dy = fy / 5; fx -= dx * 5; fy -= dy * 5;      /* keep the remainder: slow speeds stay smooth */
+    if (settings_int("mouse.natural")) wheel = -wheel;
+    if (settings_int("mouse.left")) b = (b & ~3) | ((b & 1) << 1) | ((b >> 1) & 1);
     if (screen_off) { screen_off = false; damage(0, 0, W, H); }
     if (locked) {                                           /* only the pointer moves; nothing is clicked */
         int ox = mx, oy = my;

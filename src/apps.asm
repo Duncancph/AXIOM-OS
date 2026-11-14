@@ -17,8 +17,9 @@ app_images:
     APP sandbox, "Protection Test", 0
     APP settings, "Settings", 0
     APP viewer, "Viewer", 0
+    APP web, "Web", 0
     APP about, "About DuncOS", 0
-app_count: dd 10
+app_count: dd 11
 
 id_files: db "files", 0
 title_files: db "Files", 0
@@ -40,6 +41,8 @@ id_settings: db "settings", 0
 title_settings: db "Settings", 0
 id_viewer: db "viewer", 0
 title_viewer: db "Viewer", 0
+id_web: db "web", 0
+title_web: db "Web", 0
 
 align 16
 bin_files: incbin "build/user/files.elf"
@@ -71,3 +74,6 @@ bin_settings_end:
 align 16
 bin_viewer: incbin "build/user/viewer.elf"
 bin_viewer_end:
+align 16
+bin_web: incbin "build/user/web.elf"
+bin_web_end:

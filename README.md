@@ -80,7 +80,8 @@ with true multitasking and memory protection between apps.
 |---|---|
 | Files | Your Highland mockup made real: places sidebar, USB drives, folder grid; open (pictures in Viewer, web pages in Web, text in Editor, installing the app if needed), new folder, rename, copy/paste (also to and from USB drives), delete to Trash, empty Trash |
 | Terminal (castle shell) | `ls`, `cd`, `cat`, `mkdir`, `rm`, `mv`, `cp`, `touch`, `echo ... > file`, `edit`, `df`, `disks`, `install`, `settings`, `set`, `ip`, `ping` (`-4`/`-6`, `ping6`), `host`, `wget`, `curl` (http and https), `dns`, `trust`, `fetch`, `apps`, `open <app or file>`, `ps`, `kill`, `date`, `clan`, plus `sysinfo`, `pci`, `usb`, `bt`, `bt scan`, `log`, `reboot`, `poweroff`. Scroll back with the mouse wheel or PgUp/PgDn; select with the mouse to copy (Ctrl+C or Ctrl+Shift+C), paste with Ctrl+V or a right click |
-| Settings | Keyboard layout, date & time (time zone, 24-hour clock), display size, sound volume, lock screen password, screen-off time, restart / shut down, storage (install or update DuncOS on a disk), about |
+| Settings | Keyboard layout, mouse (pointer speed, natural scrolling, left-handed), date & time (time zone, 24-hour clock), display size, sound volume, lock screen password, screen-off time, restart / shut down, storage (install or update DuncOS on a disk), about |
+| Web 0.3 | Web browser for `https://`, `http://` and `file://` pages: style sheets (CSS selectors, cascade, `@media`, the box model, colours, borders, lists, tables, simple flex rows), pictures (PNG, JPEG, GIF, BMP, loaded after the text), forms (GET and POST), cookies that survive restarts, gzip, UTF-8 pages, back and forward, a resizable window. A padlock and the status bar show the encryption and who the certificate belongs to; sites that fail the security checks are blocked with an explanation. No JavaScript |
 | Viewer | Pictures (PNG, JPEG, GIF, BMP): fit to window, zoom, drag, previous/next in the folder |
 | System Monitor | Live CPU and memory graphs, every process with CPU % and memory, End task |
 | Bluetooth | Adapter details, scan for nearby Classic + Low Energy devices with names and signal strength, pair with Classic devices (number check), paired devices kept and forgettable |
@@ -94,14 +95,14 @@ with true multitasking and memory protection between apps.
 |---|---|
 | editor 0.4 | Text editor: line numbers, selection (Shift+arrows, mouse), copy/cut/paste, select all, save / save as, UTF-8 files, unsaved-changes prompt (`edit <file>` in castle, or double-click a file in Files) |
 | clock 1.0 | Analog and digital clock |
-| web 0.3 | Web browser for `https://`, `http://` and `file://` pages: style sheets (CSS selectors, cascade, `@media`, the box model, colours, borders, lists, tables, simple flex rows), pictures (PNG, JPEG, GIF, BMP, loaded after the text), forms (GET and POST), cookies that survive restarts, gzip, UTF-8 pages, back and forward, a resizable window. A padlock and the status bar show the encryption and who the certificate belongs to; sites that fail the security checks are blocked with an explanation. No JavaScript |
 
 ## Put it on a PC
 
 1. Write `duncos.iso` to a USB stick with [balenaEtcher](https://etcher.balena.io/) or Rufus ("DD image" mode).
 2. In the PC's firmware settings, **disable Secure Boot** (DuncOS isn't signed).
 3. Boot from the stick using the boot menu key (usually F12, F11, F8, Esc or F10).
-   If the screen looks wrong, pick **DuncOS (safe graphics 1024x768)** in the boot menu.
+   If the screen looks wrong or stretched, pick a size under **Screen size...** in the boot menu
+   (or **DuncOS (safe graphics 1024x768)**).
 4. Nothing on the computer's disk is touched. Remove the stick and restart to get your normal OS back.
 5. To keep DuncOS and your files: Settings > Storage > **Install here...** on a disk or another USB stick.
    This erases that whole disk. The installed system starts on UEFI PCs (pick the disk in the boot menu,
