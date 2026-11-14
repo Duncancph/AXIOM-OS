@@ -573,7 +573,7 @@ int set_prop(js_rt *rt, jsval obj, jsval key, jsval val, jsval receiver, bool th
             return -1;
         }
         o = proto_of_prim(rt, obj);
-        if (is_str(obj) && (key == ATOM(length) || key_index(rt, key) >= 0 && key_index(rt, key) < vstr(obj)->len))
+        if (is_str(obj) && (key == ATOM(length) || (key_index(rt, key) >= 0 && key_index(rt, key) < vstr(obj)->len)))
             return fail_set(rt, th, key, "Cannot assign to read only property '%S' of string");
     } else {
         o = vobj(obj);
