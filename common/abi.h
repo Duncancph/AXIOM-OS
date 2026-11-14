@@ -64,7 +64,10 @@ struct dunc_stat { int is_dir, volume; uint64_t size; };
 struct dunc_volume { char path[16], label[32], kind[16]; uint64_t total, free; int writable; };
 /* ---- disks (SATA, NVMe, USB) and the installer ---- */
 /* SYS_SOUND operations */
-enum { SOUND_TEST, SOUND_PLAY_PCM, SOUND_INFO, SOUND_EVENT };
+enum { SOUND_TEST, SOUND_PLAY_PCM, SOUND_INFO, SOUND_EVENT,
+       /* streaming (music): START(rate 44100 or 48000), WRITE(16-bit stereo samples, bytes) -> bytes taken (0: buffer full, try
+        * again shortly), STATUS -> milliseconds of sound still queued, STOP, PAUSE(1/0) */
+       SOUND_STREAM_START, SOUND_STREAM_WRITE, SOUND_STREAM_STATUS, SOUND_STREAM_STOP, SOUND_STREAM_PAUSE };
 
 enum { DISK_SATA = 1, DISK_NVME, DISK_USB };
 struct dunc_disk {

@@ -8,7 +8,7 @@ UCFLAGS := $(COMMON) -mcmodel=large
 LDFLAGS := -n -T src/linker.ld -nostdlib -z max-page-size=0x1000 --no-warn-rwx-segments -z noexecstack
 LIBGCC  := $(shell $(CC) -print-libgcc-file-name)
 
-APPS    := files about terminal monitor bluetooth network calc sandbox settings viewer web notes calendar
+APPS    := files about terminal monitor bluetooth network calc sandbox settings viewer web notes calendar music
 REPO_APPS := editor clock
 K_SRCS  := $(filter-out src/desktop_highland.c,$(wildcard src/*.c)) common/gfx.c common/str.c common/inet.c user/lib/crypto/sha2.c user/lib/crypto/aead.c user/lib/crypto/bn.c user/lib/crypto/ecc.c user/lib/img/pngenc.c user/lib/img/inflate.c
 K_OBJS  := $(patsubst %.c,build/k/%.o,$(K_SRCS)) build/k/boot.o build/k/isr.o build/k/apps.o
@@ -91,6 +91,14 @@ build/user/%.elf: build/u/app_%.o $(U_LIB) $(NETLIB) $(IMGLIB) user/user.ld
 build/u/js_%.o: user/apps/web/js/%.c $(wildcard user/apps/web/js/*.h)
 	@mkdir -p $(dir $@)
 	$(CC) $(UCFLAGS_FP) -c $< -o $@
+# the MP3 decoder (music) uses floating point too
+AUDIO_OBJS := $(patsubst user/lib/audio/%.c,build/u/aud_%.o,$(wildcard user/lib/audio/*.c))
+build/u/aud_%.o: user/lib/audio/%.c $(wildcard user/lib/audio/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(UCFLAGS_FP) -c $< -o $@
+build/user/music.elf: build/u/app_music.o $(AUDIO_OBJS) $(U_LIB) $(NETLIB) $(IMGLIB) user/user.ld
+	@mkdir -p $(dir $@)
+	$(LD) -n -T user/user.ld -nostdlib -z max-page-size=0x1000 -z noexecstack --no-warn-rwx-segments -o $@ $(U_LIB) $< $(AUDIO_OBJS) $(NETLIB) $(IMGLIB) $(LIBGCC)
 build/gen/dom_prelude.h: user/apps/web/dom_prelude.js tools/embed.py
 	@mkdir -p $(dir $@)
 	python3 tools/embed.py $< $@ dom_prelude
@@ -156,6 +164,7 @@ clean:
 test:
 	@mkdir -p build/test
 	gcc -std=gnu17 -O1 -w -fno-builtin -DBT_TEST -o build/test/test_bt tests/test_bt.c src/bt.c common/str.c && build/test/test_bt | tail -8
+	@if command -v ffmpeg >/dev/null && python3 -c 'import numpy' 2>/dev/null; then python3 tests/mp3/run.py --quick > build/test/mp3.log 2>&1; r=$$?; tail -3 build/test/mp3.log; [ $$r = 0 ] || exit 1; else echo 'mp3: skipped (needs ffmpeg and numpy)'; fi
 	gcc -std=gnu17 -O1 -w -fno-builtin -Isrc -o build/test/test_fat tests/test_fat.c src/fat.c common/str.c
 	rm -f build/test/fat.img && truncate -s 64M build/test/fat.img && mkfs.fat -F 32 -n DUNCTEST build/test/fat.img >/dev/null
 	printf 'written by mtools on Linux\n' > build/test/hello.txt && MTOOLS_SKIP_CHECK=1 mcopy -i build/test/fat.img build/test/hello.txt "::/Hello From Linux.txt"
