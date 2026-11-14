@@ -116,7 +116,15 @@ build/bootx64.efi: tools/grub-embed.cfg
 	grub-mkstandalone -O x86_64-efi -o $@ --modules="$(GRUB_MODS)" --install-modules="$(GRUB_MODS)" \
 	    --locales= --fonts= --themes= "boot/grub/grub.cfg=tools/grub-embed.cfg"
 
-duncos.iso: build/thane.elf build/initrd.tar build/bootx64.efi iso/boot/grub/grub.cfg
+# ... and for PCs started in legacy BIOS mode: GRUB's MBR code (boot.img) followed by its core image, which
+# the installer writes into the gap between the partition table and the first partition
+build/biosboot.img: tools/grub-embed.cfg
+	@mkdir -p build
+	grub-mkimage -O i386-pc -o build/core.img -p /duncos -c tools/grub-embed.cfg biosdisk $(GRUB_MODS)
+	cat /usr/lib/grub/i386-pc/boot.img build/core.img > $@
+
+duncos.iso: build/thane.elf build/initrd.tar build/bootx64.efi build/biosboot.img iso/boot/grub/grub.cfg
+	cp build/biosboot.img iso/boot/biosboot.img
 	cp build/thane.elf iso/boot/thane.elf
 	cp build/initrd.tar iso/boot/initrd.tar
 	cp build/bootx64.efi iso/boot/bootx64.efi
@@ -129,7 +137,7 @@ run-uefi: duncos.iso
 	$(QEMU) -bios /usr/share/ovmf/OVMF.fd -cdrom $<
 
 clean:
-	rm -rf build iso/boot/thane.elf iso/boot/initrd.tar iso/boot/bootx64.efi duncos.iso
+	rm -rf build iso/boot/thane.elf iso/boot/initrd.tar iso/boot/bootx64.efi iso/boot/biosboot.img duncos.iso
 
 test:
 	@mkdir -p build/test

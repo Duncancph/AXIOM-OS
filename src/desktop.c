@@ -33,6 +33,11 @@ static struct window wins[MAX_WIN];
 static int zorder[MAX_WIN], nz, next_wid = 1;
 static uint32_t *fb32, *bb, *wall;
 static int W, H, fb_stride;
+/* Scaling: when Settings > Display asks for a smaller size than the graphics card gave us (old firmware often
+ * can't switch), the desktop is drawn at that size (W x H) and stretched to the screen (PW x PH), keeping its shape. */
+static bool scaled;
+static int PW, PH, ox, oy, dw, dh;
+static uint16_t *sx_i, *sy_i; static uint8_t *sx_f, *sy_f;     /* for each screen column/row: source pixel and fraction */
 static bool fb_xrgb, splash_shown, desktop_ok;
 static struct canvas cv;
 static struct framebuffer full;
@@ -161,26 +166,57 @@ static const char *cursor_resize[] = {   /* diagonal resize, hotspot at the cent
 static const char **cur_img = cursor_img;
 static int cur_rows = 19, cur_hx, cur_hy;
 
+/* a screen pixel of the stretched desktop (bilinear) */
+static uint32_t scaled_px(int px, int py) {
+    int x = sx_i[px], y = sy_i[py]; uint32_t fx = sx_f[px], fy = sy_f[py];
+    int x1 = x + 1 < W ? x + 1 : x, y1 = y + 1 < H ? y + 1 : y;
+    uint32_t a = bb[y * W + x], b = bb[y * W + x1], c = bb[y1 * W + x], d = bb[y1 * W + x1], out = 0;
+    for (int sh = 0; sh < 24; sh += 8) {
+        uint32_t top = (a >> sh & 255) * (256 - fx) + (b >> sh & 255) * fx, bot = (c >> sh & 255) * (256 - fx) + (d >> sh & 255) * fx;
+        out |= ((top * (256 - fy) + bot * fy) >> 16) << sh;
+    }
+    return out;
+}
+
 /* The cursor is drawn straight onto the screen (save-under), so moving it never recomposes. */
 static void cursor_paint(int cx, int cy, bool show) {
+    if (scaled) { cx = ox + cx * dw / W; cy = oy + cy * dh / H; }
     cx -= cur_hx; cy -= cur_hy;
+    int SW = scaled ? PW : W, SH = scaled ? PH : H;
     for (int j = 0; j < cur_rows; j++) {
         int y = cy + j;
-        if (y >= H) break;
+        if (y >= SH) break;
         if (y < 0) continue;
         for (int i = 0; cur_img[j][i]; i++) {
             int x = cx + i;
-            if (x >= W) break;
+            if (x >= SW) break;
             if (x < 0) continue;
             char ch = cur_img[j][i];
             if (ch == ' ') continue;
-            uint32_t c = !show ? bb[y * W + x] : ch == 'X' ? 0x000000 : 0xFFFFFF;
+            uint32_t c;
+            if (show) c = ch == 'X' ? 0x000000 : 0xFFFFFF;
+            else if (!scaled) c = bb[y * W + x];
+            else c = x >= ox && x < ox + dw && y >= oy && y < oy + dh ? scaled_px(x - ox, y - oy) : 0;
             fb32[(size_t)y * fb_stride + x] = fbcol(c);
         }
     }
 }
 
 static void flush_rect(struct rect r) {
+    if (scaled) {
+        int x0 = r.x * dw / W - 1, x1 = ((r.x + r.w) * dw + W - 1) / W + 1, y0 = r.y * dh / H - 1, y1 = ((r.y + r.h) * dh + H - 1) / H + 1;
+        if (x0 < 0) x0 = 0;
+        if (y0 < 0) y0 = 0;
+        if (x1 > dw) x1 = dw;
+        if (y1 > dh) y1 = dh;
+        for (int py = y0; py < y1; py++) {
+            volatile uint32_t *d = fb32 + (size_t)(oy + py) * fb_stride + ox;
+            for (int px = x0; px < x1; px++) d[px] = fbcol(scaled_px(px, py));
+        }
+        int cx = mx * dw / W - cur_hx - 2, cy = my * dh / H - cur_hy - 2;
+        if (cx < x1 && cx + 17 > x0 && cy < y1 && cy + 23 > y0) cursor_paint(mx, my, true);
+        return;
+    }
     for (int j = r.y; j < r.y + r.h; j++) {
         uint32_t *s = bb + j * W + r.x;
         volatile uint32_t *d = fb32 + (size_t)j * fb_stride + r.x;
@@ -902,11 +938,28 @@ void desktop_init(void) {
     struct bootinfo *b = &bootinfo;
     W = b->fb_w; H = b->fb_h; fb_stride = b->fb_pitch / 4;
     fb32 = mmio_virt(b->fb_addr);
+    /* a smaller size chosen in Settings > Display that the graphics card didn't switch to: draw at that size and stretch */
+    const char *m = settings_get("display.mode");
+    int rw = (int)katoi(m), rh = 0;
+    for (const char *p = m; *p; p++) if (*p == 'x') { rh = (int)katoi(p + 1); break; }
+    if (rw >= 800 && rh >= 600 && rw <= W && rh <= H && (rw != W || rh != H)) {
+        PW = W; PH = H;
+        if ((long)PW * rh <= (long)PH * rw) { dw = PW; dh = (int)((long)PW * rh / rw); } else { dh = PH; dw = (int)((long)PH * rw / rh); }
+        ox = (PW - dw) / 2; oy = (PH - dh) / 2;
+        sx_i = kmalloc(dw * 2); sy_i = kmalloc(dh * 2); sx_f = kmalloc(dw); sy_f = kmalloc(dh);
+        if (sx_i && sy_i && sx_f && sy_f) {
+            W = rw; H = rh; scaled = true;
+            for (int i = 0; i < dw; i++) { long v = ((2L * i + 1) * W * 128) / dw - 128; if (v < 0) v = 0; sx_i[i] = (uint16_t)(v >> 8); sx_f[i] = (uint8_t)(v & 255); }
+            for (int i = 0; i < dh; i++) { long v = ((2L * i + 1) * H * 128) / dh - 128; if (v < 0) v = 0; sy_i[i] = (uint16_t)(v >> 8); sy_f[i] = (uint8_t)(v & 255); }
+            for (int y = 0; y < PH; y++) for (int x = 0; x < PW; x++) fb32[(size_t)y * fb_stride + x] = fbcol(0);   /* black borders */
+            kprintf("[desktop] %dx%d, stretched to the %dx%d screen\n", W, H, PW, PH);
+        }
+    }
     fb_xrgb = b->r_pos == 16 && b->g_pos == 8 && b->b_pos == 0;
     int pages = (W * H * 4 + 4095) / 4096;
     bb = page_alloc(pages); wall = page_alloc(pages);
     if (!bb || !wall) { kprintf("[desktop] not enough memory for the desktop\n"); return; }
-    fb_write_combining(b->fb_addr, (uint64_t)b->fb_pitch * H);
+    fb_write_combining(b->fb_addr, (uint64_t)b->fb_pitch * b->fb_h);
     gfx_init(&cv, bb, W, H, W);
     full = (struct framebuffer){ bb, W, H, W * 4 };
     struct framebuffer wf = { wall, W, H, W * 4 };
@@ -914,6 +967,8 @@ void desktop_init(void) {
     mx = W / 2; my = H / 2;
     desktop_ok = true;
 }
+
+void desktop_size(int *w, int *h, bool *is_scaled) { *w = W; *h = H; if (is_scaled) *is_scaled = scaled; }
 
 void desktop_thread(void *arg) {
     damage(0, 0, W, H);

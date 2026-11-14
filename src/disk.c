@@ -229,28 +229,58 @@ static const char *GRUBCFG_FMT =
     "menuentry \"AXIOM\" {\n"
     "    set gfxpayload=%s1920x1080x32,1920x1200x32,1680x1050x32,1600x900x32,1440x900x32,1366x768x32,1280x800x32,1280x720x32,1024x768x32,auto\n"
     "    multiboot2 /duncos/thane.elf\n    module2 /duncos/initrd.tar initrd\n"
-    "    module2 /duncos/thane.elf kernel\n    module2 /EFI/BOOT/BOOTX64.EFI bootx64\n    boot\n}\n"
+    "    module2 /duncos/thane.elf kernel\n    module2 /EFI/BOOT/BOOTX64.EFI bootx64\n%s    boot\n}\n"
     "menuentry \"AXIOM (safe graphics 1024x768)\" {\n"
     "    set gfxpayload=1024x768x32,auto\n"
     "    multiboot2 /duncos/thane.elf\n    module2 /duncos/initrd.tar initrd\n"
-    "    module2 /duncos/thane.elf kernel\n    module2 /EFI/BOOT/BOOTX64.EFI bootx64\n    boot\n}\n";
+    "    module2 /duncos/thane.elf kernel\n    module2 /EFI/BOOT/BOOTX64.EFI bootx64\n%s    boot\n}\n";
 
 static char gfx_pref[32];
 
 static int write_grubcfg(const char *dir) {
     char cfg[1200], first[40] = "", path[64];
     if (gfx_pref[0]) ksnprintf(first, sizeof first, "%s,", gfx_pref);
-    int n = ksnprintf(cfg, sizeof cfg, GRUBCFG_FMT, first);
+    struct dunc_stat st; char bp[64]; ksnprintf(bp, sizeof bp, "%s/biosboot.img", dir);
+    const char *bios = vfs_stat(bp, &st) == FS_OK ? "    module2 /duncos/biosboot.img biosboot\n" : "";   /* only if it's there */
+    int n = ksnprintf(cfg, sizeof cfg, GRUBCFG_FMT, first, bios, bios);
     ksnprintf(path, sizeof path, "%s/grub.cfg", dir);
     long r = vfs_write(path, cfg, n);
     return r < 0 ? (int)r : FS_OK;
 }
 
-static const uint8_t *src_data[3]; static uint64_t src_len[3];     /* an update's files, else the running ones */
+static const uint8_t *src_data[4]; static uint64_t src_len[4];     /* an update's files, else the running ones */
+/* Make the disk start in legacy BIOS mode too: GRUB's boot code goes in the MBR (the partition table is kept)
+ * and its core image right after the GPT entries (LBA 34), before the first partition. */
+static int write_biosboot(struct blockdev *bd, uint64_t first_part) {
+    uint64_t len; const uint8_t *img = bootmod("biosboot", &len);
+    if (!img || len < 1024 || bd->bsize != 512) return FS_ENOENT;
+    uint64_t core_lba = 34, core_sect = (len - 512 + 511) / 512;
+    if (core_lba + core_sect > first_part) { LOG_WARN("installer: no room for the BIOS boot loader\n"); return FS_ENOSPC; }
+    uint8_t *b = kmalloc(core_sect * 512 > 512 ? core_sect * 512 : 512);
+    if (!b) return FS_ENOSPC;
+    int r = FS_OK;
+    if (bd->read(bd->ctx, 0, 1, b)) r = FS_EIO;
+    else {
+        memcpy(b, img, 440);                                 /* boot code only: keep the disk signature and partitions */
+        w64(b + 0x5C, core_lba);                             /* where the core image starts */
+        b[0x64] = 0xFF;                                      /* boot from the drive the BIOS started */
+        if (bd->write(bd->ctx, 0, 1, b)) r = FS_EIO;
+    }
+    if (r == FS_OK) {
+        memset(b, 0, core_sect * 512);
+        memcpy(b, img + 512, len - 512);
+        w64(b + 512 - 12, core_lba + 1);                     /* the core image loads its remaining sectors from here */
+        b[512 - 4] = (uint8_t)(core_sect - 1); b[512 - 3] = (uint8_t)((core_sect - 1) >> 8);
+        if (bd->write(bd->ctx, core_lba, (uint32_t)core_sect, b)) r = FS_EIO;
+    }
+    kfree(b);
+    return r;
+}
+
 static int put(const char *path, const char *mod) {
     uint64_t len; const uint8_t *data;
-    int which = !strcmp(mod, "kernel") ? 0 : !strcmp(mod, "initrd") ? 1 : 2;
-    if (src_data[which]) { data = src_data[which]; len = src_len[which]; }
+    int which = !strcmp(mod, "kernel") ? 0 : !strcmp(mod, "initrd") ? 1 : !strcmp(mod, "bootx64") ? 2 : !strcmp(mod, "biosboot") ? 3 : -1;
+    if (which >= 0 && src_data[which]) { data = src_data[which]; len = src_len[which]; }
     else data = bootmod(mod, &len);
     if (!data) return FS_ENOENT;
     long r = vfs_write(path, data, len);
@@ -296,6 +326,12 @@ static void installer(void *arg) {
     kyield();
     progress(40, "Copying the system files");
     if ((r = put("/install/duncos/initrd.tar", "initrd"))) { strncpy0(why, "the system files aren't available", sizeof why); goto unmount; }
+    if (put("/install/duncos/biosboot.img", "biosboot") == FS_OK) {      /* legacy BIOS start-up as well as UEFI */
+        uint64_t pf = 0;
+        for (int i = 0; i < d->nparts; i++) if (d->p[i].duncos) pf = d->p[i].first;
+        if (inst_mode == INSTALL_ERASE) pf = 2048 * 512 / bd->bsize;
+        if (pf && write_biosboot(bd, pf) == FS_OK) LOG_INFO("installer: the disk can also start in legacy BIOS mode\n");
+    }
     if ((r = write_grubcfg("/install/duncos"))) { strncpy0(why, "the boot menu couldn't be written", sizeof why); goto unmount; }
     if (inst_mode == INSTALL_ERASE) {
         static const char *from[] = { "/home", "/apps", "/system/config" }, *to[] = { "/install/home", "/install/apps", "/install/config" };
@@ -348,9 +384,9 @@ void disk_install_status(struct dunc_install *out) { *out = inst; }
 
 int disk_system_id(void) { return sysdisk ? sysdisk->id : -1; }
 
-int disk_update_from(int id, const uint8_t *const data[3], const uint64_t len[3]) {
+int disk_update_from(int id, const uint8_t *const data[4], const uint64_t len[4]) {
     if (inst.state == 1) return FS_EINVAL;
-    for (int i = 0; i < 3; i++) { src_data[i] = data[i]; src_len[i] = len[i]; }
+    for (int i = 0; i < 4; i++) { src_data[i] = data[i]; src_len[i] = len[i]; }
     return disk_install(id, INSTALL_UPDATE);
 }
 

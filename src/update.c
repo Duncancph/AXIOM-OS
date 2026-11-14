@@ -19,7 +19,7 @@
 #include "update_key.h"
 #include "../user/lib/crypto/crypto.h"
 
-static const char *ROLES[UPD_FILES] = { "kernel", "initrd", "bootx64" };
+static const char *ROLES[UPD_FILES] = { "kernel", "initrd", "bootx64", "biosboot" };   /* biosboot is optional */
 
 struct manifest { long build; long size[UPD_FILES]; uint8_t sha[UPD_FILES][32]; bool have[UPD_FILES]; };
 
@@ -59,7 +59,7 @@ static int check_manifest(const char *m, long n, struct manifest *out) {
         p = le + 1;
     }
     if (!sigline || out->build < 0) return UPD_EFORMAT;
-    for (int i = 0; i < UPD_FILES; i++) if (!out->have[i]) return UPD_EFORMAT;
+    for (int i = 0; i < 3; i++) if (!out->have[i]) return UPD_EFORMAT;
     uint8_t sig[80], h[32];
     const char *we, *w = word(sigline, e, &we); (void)w;
     const char *le = we; while (le < e && *le != '\n') le++;
@@ -94,12 +94,14 @@ long update_syscall(int op, const void *a, long b, bool (*user_ok_fn)(const void
     struct dunc_install st; disk_install_status(&st);
     if (st.state == 1) return UPD_EBUSY;
     for (int i = 0; i < UPD_FILES; i++) {
+        if (!mf.have[i]) { if (u.len[i]) return UPD_EHASH; continue; }
         if (u.len[i] != mf.size[i] || !user_ok_fn(u.data[i], (size_t)u.len[i])) return UPD_EHASH;
         uint8_t h[32];
         hash(H_SHA256, u.data[i], (size_t)u.len[i], h);
         if (ct_memcmp(h, mf.sha[i], 32)) return UPD_EHASH;
     }
     for (int i = 0; i < UPD_FILES; i++) {                   /* copy into the kernel, then check again: the app can't change them now */
+        if (!mf.have[i]) { staged_len[i] = 0; continue; }
         size_t pages = ((size_t)u.len[i] + 4095) / 4096;
         if (staged[i]) { for (uint64_t k = 0; k < (staged_len[i] + 4095) / 4096; k++) page_free(staged[i] + k * 4096); staged[i] = 0; }
         staged[i] = page_alloc(pages);
@@ -111,7 +113,7 @@ long update_syscall(int op, const void *a, long b, bool (*user_ok_fn)(const void
         if (ct_memcmp(h, mf.sha[i], 32)) return UPD_EHASH;
     }
     LOG_INFO("update: installing build %ld (this is build %d)\n", mf.build, OS_BUILD);
-    const uint8_t *const d[3] = { staged[0], staged[1], staged[2] };
+    const uint8_t *const d[UPD_FILES] = { staged[0], staged[1], staged[2], mf.have[3] ? staged[3] : 0 };
     r = disk_update_from(id, d, staged_len);
     return r ? UPD_EBUSY : 0;
 }

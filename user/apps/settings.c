@@ -155,10 +155,10 @@ static void draw_display(void) {
         int col = i / 5, row = i % 5;
         option(SIDE + 32 + col * 260, 116 + row * 36, 240, i ? modes[i] : "Automatic (best available)", !strcmp(get("display.mode"), modes[i]), H_LIST + i);
     }
-    label(SIDE + 32, 316, UI_MUTED, "AXIOM picks this size if your screen and graphics card offer it,");
-    label(SIDE + 32, 336, UI_MUTED, "otherwise the next best. It applies when AXIOM starts from a disk it is");
-    label(SIDE + 32, 356, UI_MUTED, "installed on (Settings > Storage). Started from the USB stick, choose");
-    label(SIDE + 32, 376, UI_MUTED, "a size under \"Screen size...\" in its start menu instead.");
+    label(SIDE + 32, 316, UI_MUTED, "It applies when AXIOM next starts. If the graphics card can't switch to");
+    label(SIDE + 32, 336, UI_MUTED, "that size (common on older PCs), AXIOM draws the desktop at that size and");
+    label(SIDE + 32, 356, UI_MUTED, "stretches it to fill the screen, so everything looks bigger. A size larger");
+    label(SIDE + 32, 376, UI_MUTED, "than the screen can show is ignored.");
 }
 
 static void draw_sound(void) {
@@ -276,7 +276,7 @@ static void check_updates(void) {
 static void *ia(void *c, size_t n) { return malloc(n); }
 static void if_(void *c, void *p) { free(p); }
 static void install_update(void) {
-    static const char *roles[UPD_FILES] = { "kernel", "initrd", "bootx64" };
+    static const char *roles[UPD_FILES] = { "kernel", "initrd", "bootx64", "biosboot" };
     struct dunc_update u = { mtext, mlen, { 0 }, { 0 } };
     char url[120]; sys_setting_get("update.url", url, sizeof url);
     ustate = U_DOWNLOADING;
@@ -284,6 +284,7 @@ static void install_update(void) {
         char name[24], line[200], path[100] = ""; long size = 0;
         ksnprintf(name, sizeof name, "file %s", roles[i]);
         manifest_field(name, line, sizeof line);             /* "<path> <size> <sha>" */
+        if (!line[0] && i >= 3) continue;                   /* optional file not in this update */
         int k = 0; while (line[k] && line[k] != ' ' && k < 99) { path[k] = line[k]; k++; } path[k] = 0;
         size = katoi(line + k + 1);
         char full[240]; url_of(url, path, full, sizeof full);
@@ -329,8 +330,8 @@ static void draw_updates(void) {
         label(x + 16, y + 78, UI_MUTED, "Your files, apps and settings are kept. Restart afterwards to use it.");
         if (ustate == U_AVAILABLE) button(x + 16, y + 98, 200, "Download and install", BTN_PRIMARY, H_BTN + 30, false);
         if (ustate == U_DOWNLOADING) {
-            static const char *what[] = { "the kernel", "the system files", "the boot loader" };
-            ksnprintf(b, sizeof b, "Downloading %s (%d of 3): %ld KB", what[dl_file], dl_file + 1, dl_got >> 10);
+            static const char *what[] = { "the kernel", "the system files", "the boot loader", "the BIOS boot loader" };
+            ksnprintf(b, sizeof b, "Downloading %s: %ld KB", what[dl_file], dl_got >> 10);
             label(x + 16, y + 112, UI_TEXT, b);
         }
         if (ustate == U_INSTALLING && !installing) label(x + 16, y + 112, UI_TEXT, "Checking the signature and files...");

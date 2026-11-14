@@ -79,7 +79,7 @@ enum { INSTALL_ERASE = 1, INSTALL_UPDATE };   /* update: new system files, keep 
 struct dunc_install { int state, percent; char msg[120]; };
 /* signed system updates (SYS_UPDATE): op 0 = this system's build number, 1 = check a manifest, 2 = install */
 enum { UPDATE_BUILD, UPDATE_VERIFY, UPDATE_APPLY };
-enum { UPD_FILES = 3 };                         /* kernel, initrd, bootx64 (in that order) */
+enum { UPD_FILES = 4 };                         /* kernel, initrd, bootx64, biosboot (optional), in that order */
 struct dunc_update { const char *manifest; long mlen; const unsigned char *data[UPD_FILES]; long len[UPD_FILES]; };
 enum { UPD_EFORMAT = -20, UPD_ESIG = -21, UPD_EOLD = -22, UPD_EHASH = -23, UPD_ENODISK = -24, UPD_ENOMEM = -25, UPD_EBUSY = -26 };   /* state: 0 idle, 1 working, 2 done, 3 failed */
 enum { FS_OK = 0, FS_ENOENT = -1, FS_EEXIST = -2, FS_ENOTDIR = -3, FS_EISDIR = -4, FS_ENOSPC = -5,

@@ -4,3 +4,4 @@ iso/boot/initrd.tar
 duncos.iso
 iso/boot/bootx64.efi
 release/
+iso/boot/biosboot.img

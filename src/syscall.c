@@ -274,7 +274,7 @@ uint64_t syscall_dispatch(struct frame *f) {
         struct sysinfo *s = (struct sysinfo *)a;
         memset(s, 0, sizeof *s);
         s->mem_total = mem_total(); s->mem_used = mem_used(); s->uptime_ms = uptime_ms(); s->cpu_clock_us = cpu_time_us();
-        s->fb_w = bootinfo.fb_w; s->fb_h = bootinfo.fb_h; s->uefi = bootinfo.uefi;
+        { int w, h; desktop_size(&w, &h, 0); s->fb_w = w; s->fb_h = h; } s->uefi = bootinfo.uefi;
         for (int i = 0; i < MAX_TASKS; i++) if (tasks[i].state && tasks[i].state != PS_ZOMBIE) s->nprocs++;
         uint32_t r[12], x, y, z, w;
         cpuid(0x80000000, 0, &x, &y, &z, &w);

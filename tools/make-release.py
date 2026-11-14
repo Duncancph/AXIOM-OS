@@ -11,7 +11,7 @@ version = re.search(r'#define OS_VERSION "([^"]+)"', open("src/kernel.h").read()
 pub = key.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
 built_in = bytes(int(x, 16) for x in re.findall(r"0x([0-9a-f]{2})", open("src/update_key.h").read().split("{", 1)[1]))
 if pub != built_in: sys.exit("this key doesn't match the public key in src/update_key.h: AXIOM would reject the update")
-files = [("kernel", "iso/boot/thane.elf"), ("initrd", "iso/boot/initrd.tar"), ("bootx64", "iso/boot/bootx64.efi")]
+files = [("kernel", "iso/boot/thane.elf"), ("initrd", "iso/boot/initrd.tar"), ("bootx64", "iso/boot/bootx64.efi"), ("biosboot", "iso/boot/biosboot.img")]
 os.makedirs("release/b%d" % build, exist_ok=True)
 lines = ["AXIOM update 1", "version " + version, "build %d" % build, "notes " + notes]
 for role, path in files:

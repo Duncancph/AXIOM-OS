@@ -125,7 +125,11 @@ void rtc_read_local(struct rtc_time *t) {
 int settings_syscall_get(const char *key, char *out, int n) {
     if (!strcmp(key, "keyboard.layouts")) return kbd_layouts(out, n);
     if (!strcmp(key, "time.zones")) return tz_list(out, n);
-    if (!strcmp(key, "display.current")) return ksnprintf(out, n, "%ux%u", bootinfo.fb_w, bootinfo.fb_h);
+    if (!strcmp(key, "display.current")) {
+        int w, h; bool sc; desktop_size(&w, &h, &sc);
+        if (sc) return ksnprintf(out, n, "%dx%d (stretched to the %ux%u screen)", w, h, bootinfo.fb_w, bootinfo.fb_h);
+        return ksnprintf(out, n, "%dx%d", w, h);
+    }
     if (!strcmp(key, "lock.password")) return ksnprintf(out, n, "%s", settings_get(key)[0] ? "set" : "");
     return ksnprintf(out, n, "%s", settings_get(key));
 }
