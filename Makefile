@@ -165,6 +165,7 @@ test:
 	fsck.fat -n build/test/fmt.img && echo "fsck.fat after fat_format: clean"
 	gcc -std=gnu17 -O1 -w -fno-builtin -o build/test/test_inet tests/test_inet.c common/inet.c common/str.c
 	python3 tests/test_inet.py build/test/test_inet
+	gcc -O1 -g -fsanitize=address,undefined -DJS_HOST_TEST -o build/test/jsrun tests/js/jsrun.c user/apps/web/js/*.c && python3 tests/js/run.py --no-perf | tail -1
 	gcc -std=gnu17 -O1 -g -fsanitize=address,undefined -DJSON_TEST -o build/test/test_json tests/test_json.c user/lib/json.c && python3 tests/test_json.py build/test/test_json
 	gcc -std=gnu17 -O1 -DTZ_TEST -o build/test/test_tz tests/test_tz.c src/tz.c && python3 tests/test_tz.py build/test/test_tz
 	gcc -std=gnu17 -O1 -g -fsanitize=address,undefined -DMALLOC_TEST -o build/test/test_malloc tests/test_malloc.c user/lib/malloc.c && build/test/test_malloc

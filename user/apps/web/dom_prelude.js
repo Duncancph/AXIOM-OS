@@ -128,7 +128,7 @@
   var P = Element.prototype, NP = Node.prototype, TP = Text.prototype;
 
   var FRAG = '#axiom-fragment';
-  function isFrag(n) { return n && n.nodeType === 1 && D.tag(n) === FRAG; }
+  function isFrag(n) { return n && D.type(n) === 1 && D.tag(n) === FRAG; }
   function kids(n) { var a = [], c = D.first(n); while (c) { a.push(c); c = D.next(c); } return a; }
   function elems(n) { return kids(n).filter(function (k) { return D.type(k) === 1; }); }
   function toNode(x) { return x && typeof x === 'object' && D.type(x) ? x : doc.createTextNode(String(x)); }

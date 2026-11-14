@@ -17,6 +17,7 @@ static bool page_on;
 /* ---------------- console (about:console) ---------------- */
 static char conlog[16384]; static long conlen;
 static void con_add(const char *pre, const char *s) {
+    if (pre[0] == '[' && pre[1] == 'e') { char l[300]; ksnprintf(l, sizeof l, "script %s%s", pre, s); sys_log(l); }   /* errors also go to the log */
     long n = strlen(pre) + strlen(s) + 1;
     if (n > (long)sizeof conlog / 2) n = sizeof conlog / 2;
     if (conlen + n >= (long)sizeof conlog) { long cut = conlen + n - (long)sizeof conlog / 2; memmove(conlog, conlog + cut, conlen - cut); conlen -= cut; }
@@ -53,6 +54,7 @@ static const struct js_class node_class = { "Node", 0, 0, 0, 0 };
 static jsval A(int argc, jsval *argv, int i) { return i < argc ? argv[i] : js_undefined(); }
 static struct node *N(jsval v) { return js_is_object(v) ? js_host_ptr(v, &node_class) : 0; }
 /* a JS string from page text (Windows-1252) */
+static void set_held(jsval arr, uint32_t i, jsval v) { js_root(rt, &v); js_set_index(rt, arr, i, v); js_unroot(rt, &v); }
 static jsval S(const char *s, long n) {
     if (n < 0) n = s ? strlen(s) : 0;
     char small[512]; char *b = n * 3 + 1 <= (long)sizeof small ? small : malloc(n * 3 + 1);
@@ -70,14 +72,19 @@ static char *T(jsval v, long *len) {
     s[n] = 0; if (len) *len = n;
     return s;
 }
+/* keep a value safe from the garbage collector while more engine calls are made */
+#define HOLD(v) js_root(rt, &(v))
+#define DROP(v) js_unroot(rt, &(v))
 static char *ardup(const char *s, long n) { return ar_strndup(&D->ar, s, n); }
 
 static jsval W(struct node *n) {                         /* the node's JS object */
     if (!n) return js_null();
     if (n->jsw) return js_get_index(rt, wrappers, n->jsw - 1);
     jsval o = js_host_object(rt, &node_class, n, n->type == N_TEXT ? proto_text : proto_elem);
+    HOLD(o);
     js_set_index(rt, wrappers, nwrappers, o);
     n->jsw = ++nwrappers;
+    DROP(o);
     return o;
 }
 
@@ -266,8 +273,9 @@ NATIVE(n_remove_attr) {
 }
 NATIVE(n_attr_names) {
     struct node *n = N(A(argc, argv, 0));
-    jsval arr = js_array(rt);
-    if (n) for (int i = 0; i < n->nattr; i++) js_set_index(rt, arr, i, js_str(rt, n->attrs[i].name, -1));
+    jsval arr = js_array(rt); HOLD(arr);
+    if (n) for (int i = 0; i < n->nattr; i++) { jsval v = js_str(rt, n->attrs[i].name, -1); HOLD(v); js_set_index(rt, arr, i, v); DROP(v); }
+    DROP(arr);
     return arr;
 }
 NATIVE(n_data) { struct node *n = N(A(argc, argv, 0)); return n && n->type == N_TEXT ? S(n->text, n->tlen) : js_null(); }
@@ -275,6 +283,7 @@ NATIVE(n_set_data) {
     struct node *n = N(A(argc, argv, 0)); if (!n || n->type != N_TEXT) return js_undefined();
     long l; char *t = T(A(argc, argv, 1), &l);
     n->text = ardup(t, l); n->tlen = l; free(t);
+    web_text_changed(n->parent);
     web_dom_changed(0);
     return js_undefined();
 }
@@ -297,6 +306,7 @@ NATIVE(n_set_text_content) {
         else if (l) { struct node *tx = new_node(N_TEXT, 0); if (tx) { tx->text = ardup(t, l); tx->tlen = l; insert_before(n, tx, 0); } }
     }
     free(t);
+    web_text_changed(n);
     web_dom_changed(0);
     return js_undefined();
 }
@@ -321,6 +331,7 @@ NATIVE(n_set_html) {
         while (n->first) detach(n->first);
         for (struct node *c = f, *nx; c; c = nx) { nx = c->next; insert_before(n, c, 0); web_dom_changed(c); }
     }
+    web_text_changed(outer ? n->parent : n);
     web_dom_changed(0);
     return js_undefined();
 }
@@ -347,11 +358,12 @@ NATIVE(n_insert) {
     struct node *p = N(A(argc, argv, 0)), *n = N(A(argc, argv, 1)), *ref = N(A(argc, argv, 2));
     if (!p || !n || contains(n, p)) return js_throw(rt, "Error", "HierarchyRequestError: can't insert a node inside itself");
     insert_before(p, n, ref);
+    web_text_changed(p);
     web_dom_changed(n);
     if (connected(n)) scripts_in(n, 0);
     return W(n);
 }
-NATIVE(n_remove) { struct node *n = N(A(argc, argv, 0)); if (n) { detach(n); web_dom_changed(0); } return js_undefined(); }
+NATIVE(n_remove) { struct node *n = N(A(argc, argv, 0)); if (n) { struct node *p = n->parent; detach(n); web_text_changed(p); web_dom_changed(0); } return js_undefined(); }
 NATIVE(n_clone) {
     struct node *n = N(A(argc, argv, 0)); if (!n) return js_null();
     struct sb b = { 0, 0, 0 };
@@ -372,9 +384,10 @@ static void query(struct node *e, const char *sel, int sl, jsval arr, long *cnt,
 NATIVE(n_query) {
     struct node *root = N(A(argc, argv, 0)); if (!root) root = D->root;
     long sl; char *sel = T(A(argc, argv, 1), &sl);
-    jsval arr = js_array(rt); long cnt = 0;
+    jsval arr = js_array(rt); long cnt = 0; HOLD(arr);
     query(root, sel, sl, arr, &cnt, js_truthy(A(argc, argv, 2)), 0);
     free(sel);
+    DROP(arr);
     return arr;
 }
 NATIVE(n_matches) {
@@ -454,15 +467,17 @@ NATIVE(n_rect) {
     struct node *n = N(A(argc, argv, 0));
     int x = 0, y = 0, w = 0, h = 0;
     if (n) web_node_rect(n, &x, &y, &w, &h);
-    jsval a = js_array(rt);
+    jsval a = js_array(rt); HOLD(a);
     js_set_index(rt, a, 0, js_int(x)); js_set_index(rt, a, 1, js_int(y)); js_set_index(rt, a, 2, js_int(w)); js_set_index(rt, a, 3, js_int(h));
+    DROP(a);
     return a;
 }
 NATIVE(n_display) { struct node *n = N(A(argc, argv, 0)); return js_int(n && n->st ? n->st->display : -1); }
 NATIVE(n_viewport) {
     int w, h, s, dh; web_viewport(&w, &h, &s, &dh);
-    jsval a = js_array(rt);
+    jsval a = js_array(rt); HOLD(a);
     js_set_index(rt, a, 0, js_int(w)); js_set_index(rt, a, 1, js_int(h)); js_set_index(rt, a, 2, js_int(s)); js_set_index(rt, a, 3, js_int(dh));
+    DROP(a);
     return a;
 }
 NATIVE(n_scroll_to) { web_scroll_to((int)js_to_int(rt, A(argc, argv, 0))); return js_undefined(); }
@@ -536,13 +551,14 @@ NATIVE(n_http) {
     char *out = 0, ctype[128] = "", final[600] = ""; int status = 0;
     long n = web_http(method ? method : "GET", abs, body, body ? strlen(body) : 0, hdr, &out, &status, ctype, sizeof ctype, final, sizeof final);
     free(method); free(u); free(body); free(hdr);
-    jsval a = js_array(rt);
+    jsval a = js_array(rt); HOLD(a);
     js_set_index(rt, a, 0, js_int(n < 0 ? 0 : status));
-    js_set_index(rt, a, 1, js_str(rt, out && n > 0 ? out : "", n > 0 ? n : 0));        /* the body as sent (UTF-8 for UTF-8 pages) */
-    js_set_index(rt, a, 2, js_str(rt, ctype, -1));
-    js_set_index(rt, a, 3, js_str(rt, final[0] ? final : abs, -1));
-    js_set_index(rt, a, 4, js_str(rt, n < 0 ? http_strerror(n) : "", -1));
+    set_held(a, 1, js_str(rt, out && n > 0 ? out : "", n > 0 ? n : 0));        /* the body as sent (UTF-8 for UTF-8 pages) */
+    set_held(a, 2, js_str(rt, ctype, -1));
+    set_held(a, 3, js_str(rt, final[0] ? final : abs, -1));
+    set_held(a, 4, js_str(rt, n < 0 ? http_strerror(n) : "", -1));
     free(out);
+    DROP(a);
     return a;
 }
 static void storage_path(char *p, int n) {
@@ -673,8 +689,10 @@ void js_page_start(struct doc *d) {
     for (int i = 0; i < MAXT; i++) { timers[i].used = false; timers[i].fn = js_undefined(); js_root(rt, &timers[i].fn); }
     jsval g = js_global(rt), dd = js_object(rt);
     js_root(rt, &dd);
-    for (unsigned i = 0; i < sizeof natives / sizeof natives[0]; i++)
-        js_define(rt, dd, natives[i].name, js_function(rt, natives[i].name, natives[i].fn, natives[i].n, 0), false);
+    for (unsigned i = 0; i < sizeof natives / sizeof natives[0]; i++) {
+        jsval f = js_function(rt, natives[i].name, natives[i].fn, natives[i].n, 0);
+        HOLD(f); js_define(rt, dd, natives[i].name, f, false); DROP(f);
+    }
     js_define(rt, g, "__d", dd, false);
     js_unroot(rt, &dd);
     run_code(dom_prelude, sizeof dom_prelude - 1, "web prelude");
@@ -699,8 +717,9 @@ void js_page_end(void) {
 
 bool js_event(struct node *target, const char *type, int x, int y, int key) {
     if (!page_on || !target) return false;
-    jsval args[5] = { W(target), js_str(rt, type, -1), js_int(x), js_int(y), js_int(key) };
+    jsval args[5] = { js_undefined(), js_undefined(), js_int(x), js_int(y), js_int(key) };
     for (int i = 0; i < 5; i++) js_root(rt, &args[i]);
+    args[0] = W(target); args[1] = js_str(rt, type, -1);
     jsval r = call_api("dispatch", 5, args);
     for (int i = 0; i < 5; i++) js_unroot(rt, &args[i]);
     after_task();

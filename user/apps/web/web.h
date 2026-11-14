@@ -180,6 +180,7 @@ bool css_query_match(const char *sel, int n, const struct node *e);   /* querySe
 extern struct doc *web_doc;
 void web_dom_changed(struct node *added);       /* the tree or styles changed (added: a new subtree to set up, or 0) */
 void web_navigate(const char *url);
+void web_text_changed(struct node *n);          /* text inside n changed (button labels follow it) */
 void web_page_url(char *out, int n);
 void web_set_title(const char *t);
 void web_viewport(int *w, int *h, int *scroll, int *doc_h);

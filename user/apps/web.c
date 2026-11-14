@@ -1354,6 +1354,16 @@ void web_dom_changed(struct node *added) {
     if (added && doc && added->type == N_ELEM) { init_node(doc, added); walk_init(doc, added, 0); }
     need_cascade = true; need_layout = true;
 }
+void web_text_changed(struct node *n) {                    /* a <button>'s label is drawn from its text */
+    for (int k = 0; n && k < 20; n = n->parent, k++)
+        if (n->type == N_ELEM && n->tag == T_BUTTON && n->fc && doc) {
+            char b[200]; int l = 0; text_content(n, b, sizeof b, &l, 0);
+            while (l && b[l - 1] == ' ') b[--l] = 0;
+            const char *t = b[0] == ' ' ? b + 1 : b;
+            n->fc->label = t[0] ? ar_strndup(&doc->ar, t, strlen(t)) : "Button";
+            return;
+        }
+}
 void web_navigate(const char *u) {                         /* later, from the main loop: a script may still be running */
     pend = true; strncpy0(pend_url, u, sizeof pend_url);
     free(pend_body); pend_body = 0; pend_blen = 0; pend_post = false; pend_mode = 0; pend_scroll = 0;
