@@ -227,7 +227,7 @@ static const char *GRUBCFG_FMT =
     "# AXIOM boot menu. Settings > Display changes the screen size here.\n"
     "set timeout=2\nset default=0\ninsmod all_video\ninsmod gfxterm\n"
     "menuentry \"AXIOM\" {\n"
-    "    set gfxpayload=%s1920x1080x32,1920x1200x32,1680x1050x32,1600x900x32,1440x900x32,1366x768x32,1280x800x32,1280x720x32,1024x768x32,auto\n"
+    "    set gfxpayload=%s1920x1200x32,1920x1080x32,1920x800x32,1680x1050x32,1600x900x32,1440x900x32,1366x768x32,1280x1024x32,1280x800x32,1280x720x32,1024x768x32,auto\n"
     "    multiboot2 /duncos/thane.elf\n    module2 /duncos/initrd.tar initrd\n"
     "    module2 /duncos/thane.elf kernel\n    module2 /EFI/BOOT/BOOTX64.EFI bootx64\n%s    boot\n}\n"
     "menuentry \"AXIOM (safe graphics 1024x768)\" {\n"
@@ -237,6 +237,9 @@ static const char *GRUBCFG_FMT =
 
 static char gfx_pref[32];
 
+bool boot_sizes_changed;
+static char *find(char *h, const char *n) { int l = strlen(n); for (; *h; h++) if (!strncmp(h, n, l)) return h; return 0; }
+static char *find_nl(char *p) { while (*p && *p != '\n') p++; return *p ? p : 0; }
 static int write_grubcfg(const char *dir) {
     char cfg[2400], first[40] = "", path[64];
     if (gfx_pref[0]) ksnprintf(first, sizeof first, "%s,", gfx_pref);
@@ -254,6 +257,11 @@ static int write_grubcfg(const char *dir) {
     ksnprintf(path, sizeof path, "%s/grub.cfg", dir);
     static char old[2400]; long on = vfs_read(path, old, 0, sizeof old);
     if (on == n && !memcmp(old, cfg, n)) return FS_OK;     /* unchanged: don't write */
+    if (!strcmp(dir, "/system/boot") && on > 0) {           /* the screen sizes asked for changed: they apply from the next start */
+        old[on < (long)sizeof old ? on : (long)sizeof old - 1] = 0;
+        char *a = find(old, "set gfxpayload="), *b = find(cfg, "set gfxpayload=");
+        if (a && b) { char *ae = find_nl(a), *be = find_nl(b); if (ae && be && (ae - a != be - b || memcmp(a, b, be - b))) boot_sizes_changed = true; }
+    }
     long r = vfs_write(path, cfg, n);
     return r < 0 ? (int)r : FS_OK;
 }

@@ -78,7 +78,12 @@ static void log_thread(void *arg) {
 }
 
 /* Watches for USB devices being plugged in or removed. */
-static void settle_thread(void *arg) { task_sleep(20000); smp_settled(); task_exit(0); }
+static void settle_thread(void *arg) {
+    extern bool boot_sizes_changed;
+    task_sleep(4000);
+    if (boot_sizes_changed) desktop_notify("Screen size", "This update can use more screen sizes. Restart once more to use the best one for your screen.");
+    task_sleep(16000); smp_settled(); task_exit(0);
+}
 
 static void usb_thread(void *arg) {
     for (;;) { xhci_service(); task_sleep(100); }

@@ -144,7 +144,7 @@ static void draw_time(void) {
     }
 }
 
-static const char *modes[] = { "", "1024x768", "1280x720", "1280x800", "1366x768", "1440x900", "1600x900", "1920x1080", "1920x1200", "2560x1440" };
+static const char *modes[] = { "", "1024x768", "1280x800", "1366x768", "1440x900", "1600x900", "1920x800", "1920x1080", "1920x1200", "2560x1440" };
 /* ---- Personalise: wallpaper, accent colour, name ---- */
 static const struct { const char *name; const char *hex; } accents[] = {
     { "Cream", "" }, { "Sky", "9CC9F5" }, { "Mint", "9FE0B6" }, { "Peach", "F5B88E" }, { "Rose", "F2A7C3" }, { "Lilac", "C9B6F5" } };
