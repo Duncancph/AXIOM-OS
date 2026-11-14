@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 66
-notes Settings > Display shows the graphics setup and monitor (step one to native resolution)
-file kernel b66/thane.elf.gz 14614600 9ffa8072f3ad0951c7a115e5a4b254d4cbec952bf0dbffcdfdb416eb4712c488
-file initrd b66/initrd.tar.gz 1269760 d4a627476e9c20a4b2312b4fbc3de2247e46644ba1fd236562d9e180a188fdf2
-file bootx64 b66/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b66/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 304502200d23b73a0760677a8b28871400c7284d224246c40a33b0e2a322421ff2a87774022100fe4f0e6b42e5afede9b2034595550492f014251b524c309f858a07802f6ad043
+build 68
+notes Uses your screen's wide 1920x800 mode (restart twice); busy pages like YouTube can't keep a core busy
+file kernel b68/thane.elf.gz 14620448 635fc3e14360112de513103eed00d64606e56e02462056cee9ab6c15fc3d4575
+file initrd b68/initrd.tar.gz 1269760 399ab03363a9110747d798a8c46b9b0aa0900def67dab8741386674c78a4be24
+file bootx64 b68/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b68/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022100ef0bdd3af831e99402e95e616e78d2e383588955c786d12794c2bbc9aa792eeb0220289398bd2ab456f2c4b4913c50e6c14f55bad76b994e36ac252f7c561aca7da6
