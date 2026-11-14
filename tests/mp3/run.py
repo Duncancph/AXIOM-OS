@@ -16,7 +16,7 @@ Usage: python3 tests/mp3/run.py [--quick] [--keep] [--out DIR]
    Valid files must reach SNR >= 60 dB and the same length. Damaged files must not crash and must decode
    the intact parts. Also: seeking accuracy, ID3 tags, a mutation fuzz pass under ASan, decode speed.
 Exits non-zero on any failure."""
-import ctypes, ctypes.util, os, random, re, struct, subprocess, sys, tempfile, time, wave
+import ctypes, ctypes.util, os, random, re, subprocess, sys, tempfile, threading, time, wave
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
@@ -147,10 +147,15 @@ def write_wav(path, pcm, sr):
 DUR = 2.5 if QUICK else 4.0
 
 
+_WAV_LOCK = threading.Lock()
+
+
 def wav_for(kind, sr, ch, dur=DUR):
     p = os.path.join(CORPUS, "src_%s_%d_%d_%g.wav" % (kind, sr, ch, dur))
-    if not os.path.exists(p):
-        write_wav(p, sig(kind, sr, ch, dur), sr)
+    with _WAV_LOCK:   # encoder jobs run in threads
+        if not os.path.exists(p):
+            write_wav(p + ".tmp", sig(kind, sr, ch, dur), sr)
+            os.replace(p + ".tmp", p)
     return p
 
 
@@ -253,12 +258,13 @@ def make_corpus():
     jobs.append(("l3_44100_joint_abr160_chord", "chord", 44100, 2, ["-c:a", "libmp3lame", "-b:a", "160k", "-abr", "1"]))
     jobs.append(("l3_44100_joint_cbr128_noxing_noise", "noise", 44100, 2, ["-c:a", "libmp3lame", "-b:a", "128k", "-write_xing", "0"]))
     # Layer II (ffmpeg's native encoder, and twolame)
-    l2 = [(48000, 2, "mp2", 192), (48000, 1, "mp2", 64), (44100, 2, "mp2", 128), (44100, 2, "mp2", 384), (32000, 1, "mp2", 48),
-          (32000, 2, "mp2", 64), (44100, 2, "mp2", 64), (24000, 2, "mp2", 96), (22050, 1, "mp2", 32), (16000, 2, "mp2", 64),
-          (48000, 2, "libtwolame", 256), (44100, 2, "libtwolame", 96), (22050, 2, "libtwolame", 64), (48000, 1, "libtwolame", 32)]
+    l2 = [(48000, 2, "mp2", 192, "chord"), (48000, 1, "mp2", 64, "noise"), (44100, 2, "mp2", 128, "sweep"),
+          (44100, 2, "mp2", 384, "clicks"), (32000, 1, "mp2", 48, "chord"), (32000, 2, "mp2", 64, "noise"),
+          (44100, 2, "mp2", 64, "clicks"), (24000, 2, "mp2", 96, "sweep"), (22050, 1, "mp2", 32, "chord"),
+          (16000, 2, "mp2", 64, "noise"), (48000, 2, "libtwolame", 256, "noise"), (44100, 2, "libtwolame", 96, "sweep"),
+          (22050, 2, "libtwolame", 64, "clicks"), (48000, 1, "libtwolame", 32, "chord")]
     if QUICK: l2 = l2[::2]
-    for sr, ch, enc, rate in l2:
-        kind = ["chord", "noise", "sweep", "clicks"][len(jobs) % 4]
+    for sr, ch, enc, rate, kind in l2:
         name = "l2_%d_%s_%s%d_%s" % (sr, "mono" if ch == 1 else "stereo", "tl" if enc == "libtwolame" else "ff", rate, kind)
         jobs.append((name, kind, sr, ch, ["-c:a", enc, "-b:a", "%dk" % rate, "-f", "mp2"]))
     jobs.append(("l2_44100_joint_tl128_chord", "chord", 44100, 2, ["-c:a", "libtwolame", "-b:a", "128k", "-mode", "joint_stereo", "-f", "mp2"]))
@@ -331,7 +337,9 @@ def make_corpus():
 
 # ---------------------------------------------------------------- compare
 def ffdecode(path, raw):
-    r = run(["ffmpeg", "-v", "error", "-y", "-i", path, "-f", "s16le", "-acodec", "pcm_s16le", raw])
+    # ffmpeg's default Layer I/II decoders are fixed point; use its float decoders like for Layer III
+    dec = {".mp2": ["-c:a", "mp2float"], ".mp1": ["-c:a", "mp1float"]}.get(os.path.splitext(path)[1], [])
+    r = run(["ffmpeg", "-v", "error", "-y"] + dec + ["-i", path, "-f", "s16le", "-acodec", "pcm_s16le", raw])
     return r.returncode == 0 or os.path.exists(raw)
 
 
@@ -528,11 +536,13 @@ def test_info():
 def test_seek():
     print("== seek")
     files = ["l3_44100_joint_cbr128_chord", "l3_44100_joint_vbrq0_chord", "l3_22050_joint_vbrq2_chord",
-             "l3_8000_mono_cbr8_noise", "l3_44100_joint_cbr128_noxing_noise", "l2_44100_stereo_ff128_sweep",
-             "lame_free_44100_joint_96_chord", "lame_short_48000_joint_192_chord"]
+             "l3_8000_mono_cbr8_noise", "l3_44100_joint_cbr128_noxing_noise", "l2_48000_stereo_ff192_chord",
+             "l2_22050_mono_ff32_chord", "synth_l1_48000_joint", "lame_free_44100_joint_96_chord",
+             "lame_short_48000_joint_192_chord", "lame_crc_8000_joint_vbr_sweep"]
     for name in files:
-        p = os.path.join(CORPUS, name + (".mp2" if name.startswith("l2") else ".mp3"))
-        if not os.path.exists(p): continue
+        c = [x for x in CASES if x[0] == name]
+        if not c: continue
+        p = c[0][1]
         full = os.path.join(OUT, name + ".out.raw")
         if not os.path.exists(full): mydecode(FAST, p, full)
         r = run([FAST, "open", p])
@@ -550,7 +560,7 @@ def test_seek():
         for line in r.stdout.splitlines():
             m = re.match(r"seek req=(-?\d+) got=(-?\d+) sample=(\d+) n=(\d+)", line)
             req, gms, smp, n = map(int, m.groups())
-            target = min(req, dur)
+            target = min(max(req, 0), dur)
             err_ms = abs(gms - target)
             frame_ms = spf * 1000.0 / sr
             if err_ms > frame_ms + 1: fail("%s seek %d -> %d ms (more than a frame off)" % (name, req, gms))
@@ -595,7 +605,8 @@ def test_tags():
 def test_fuzz():
     print("== mutation fuzz (ASan)")
     files = ["l3_44100_joint_cbr128_chord", "l3_22050_joint_vbrq2_chord", "lame_crc_44100_joint_128_chord",
-             "l2_48000_stereo_ff192_chord", "tag_id3v24_art_utf8", "synth_l3_mpeg1_mixed_is", "synth_l1_48000_joint"]
+             "l2_48000_stereo_ff192_chord", "tag_id3v24_art_utf8", "synth_l3_mpeg1_mixed_is", "synth_l3_mpeg2_is",
+             "synth_l2_24000_joint_lsf", "synth_l1_48000_joint", "lame_free_44100_joint_96_chord", "l3_8000_joint_vbrq3_sweep"]
     iters = 30 if QUICK else 120
     for name in files:
         c = [x for x in CASES if x[0] == name]
@@ -630,6 +641,7 @@ def test_speed():
 
 def main():
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    sys.dont_write_bytecode = True   # keep tests/mp3 free of __pycache__
     build()
     make_corpus()
     compare_all()

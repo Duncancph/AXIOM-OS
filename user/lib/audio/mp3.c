@@ -82,7 +82,7 @@ static int detect_free_size(const uint8_t *data, long end, long o, const struct 
         if (data[n] != 0xff) continue;
         struct mp3_hdr x;
         if (!mp3_parse_header(data + n, &x, 0)) continue;
-        if (((x.raw ^ h->raw) & 0xfffef000u) || x.channels != h->channels) continue;
+        if (((x.raw ^ h->raw) & 0xfffefc00u) || x.channels != h->channels) continue;
         int s = (int)(n - o) - h->padding * (h->layer == 1 ? 4 : 1);
         if (s >= 16) return s;
     }

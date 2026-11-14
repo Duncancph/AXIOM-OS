@@ -46,7 +46,7 @@ static const uint8_t lsf_nsfb[6][3][4] = {
 };
 
 /* ------------------------------------------------------------ tables built at init */
-#define HLUT_MAX 24576
+#define HLUT_MAX 5120     /* 4806 entries are used */
 static uint32_t hlut[HLUT_MAX];
 static int hlut_n;
 static int hroot[34], hrootbits[34];
