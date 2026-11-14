@@ -86,7 +86,7 @@ struct len { int16_t t; int32_t v; };
 struct cvar { const char *name, *value; struct cvar *next; };
 
 struct style {
-    uint8_t display, ws, align, deco, list, vis, bold, italic, mono, valign, valign_set, bsizing, floated, list_inside, tt, pos, flex_col, flex_wrap, justify;
+    uint8_t display, ws, align, deco, list, vis, bold, italic, mono, valign, valign_set, bsizing, floated, list_inside, tt, pos, flex_col, flex_wrap, justify, bcollapse, clear, bfc;
     int fsize;                        /* px */
     int lh;                           /* line height in px, 0: normal */
     int lh_num;                       /* line height as a factor * 100 (inherited as a factor), 0: not */

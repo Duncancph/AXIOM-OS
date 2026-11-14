@@ -1264,6 +1264,14 @@ static int btn_at(int x, int y) {
     return -1;
 }
 
+static void reset_form(struct node *e, struct node *form, int depth) {      /* back to the values in the page */
+    for (struct node *c = e->first; c && depth < 200; c = c->next) {
+        if (c->type != N_ELEM) continue;
+        if (c->fc && c->form == form) form_init_control(doc, c);
+        reset_form(c, form, depth + 1);
+    }
+}
+
 static void click_control(struct node *n, int mx, int my) {
     struct fctl *fc = n->fc;
     if (!fc || fc->disabled) return;
@@ -1273,6 +1281,7 @@ static void click_control(struct node *n, int mx, int my) {
     case FC_CHECKBOX: fc->checked = !fc->checked; break;
     case FC_RADIO: control_key(' '); break;
     case FC_SUBMIT: case FC_IMAGE: submit(n->form, n); break;
+    case FC_RESET: if (n->form) reset_form(doc->root, n->form, 0); break;
     case FC_SELECT: popup = n; popup_hover = fc->sel; popup_first = fc->sel > 6 ? fc->sel - 6 : 0;
         if (popup_first + 12 > fc->nopt) popup_first = fc->nopt > 12 ? fc->nopt - 12 : 0;
         break;

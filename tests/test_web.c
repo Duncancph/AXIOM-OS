@@ -93,6 +93,21 @@ static void unit_checks(void) {
     a = find_text("Alpha");
     CHECK(a >= 0 && lay.it[a].x < 100, "media query on narrow window");
     ar_reset(&d->ar); free(d);
+
+    /* floats: text wraps beside them, clear moves below */
+    char fpage[] = "<div style='float:right;width:200px;height:300px'>Floater</div><p>Wrapped text goes here</p>"
+                   "<div style='clear:both'>Cleared</div><p><img src=x width=50 height=50 align=left>Beside</p>";
+    d = calloc(1, sizeof *d);
+    html_parse(d, fpage, strlen(fpage));
+    css_reset(&d->ar);
+    css_cascade(d, 800);
+    layout_doc(d, &lay, 800);
+    int fl = find_text("Floater"), wr = find_text("Wrapped"), cl = find_text("Cleared"), be = find_text("Beside");
+    CHECK(fl >= 0 && lay.it[fl].x >= 590, "float right x %d", fl >= 0 ? lay.it[fl].x : -1);
+    CHECK(wr >= 0 && fl >= 0 && lay.it[wr].y < lay.it[fl].y + 30 && lay.it[wr].x + lay.it[wr].w < lay.it[fl].x, "text beside float");
+    CHECK(cl >= 0 && lay.it[cl].y >= 300, "clear: both %d", cl >= 0 ? lay.it[cl].y : -1);
+    CHECK(be >= 0 && lay.it[be].x >= 58, "align=left picture %d", be >= 0 ? lay.it[be].x : -1);
+    ar_reset(&d->ar); free(d);
 }
 
 static unsigned long rng = 12345;
@@ -112,7 +127,7 @@ int main(int argc, char **argv) {
         if (run(copy, n, 860, false, nm) <= 0) { printf("FAIL: %s has no height\n", nm); fails++; }
         /* mangled copies: cut, shuffled bytes, inserted markup */
         static const char *junk[] = { "<", ">", "</div>", "<table>", "<td>", "<li>", "{", "}", "<style>", "&#", "\"", "<!--", "<p", "/*", "@media", ":", ";",
-                                      "<b><i></b></i>", "<tr><td colspan=999>", "<select><option>", "<pre>", "\xC3", "<img src=x width=99999 height=0>" };
+                                      "<b><i></b></i>", "<tr><td colspan=999>", "<div style='float:left;width:30%'>", "<br clear=all>", "<span style='float:right'>", "<select><option>", "<pre>", "\xC3", "<img src=x width=99999 height=0>" };
         for (int round = 0; round < 60; round++) {
             long m = 0;
             for (long k = 0; k < n && m < (long)sizeof copy - 64; k++) {

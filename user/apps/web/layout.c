@@ -217,14 +217,15 @@ static void text_intrinsic(const struct style *st, const char *s, int n, int *li
         }
         if (is_ws(c)) {
             if (word) {
-                if (ws_pending && *line) *line += sw;
                 *line += word; if (word > *mn) *mn = word; word = 0;
                 if (nowrap && *line > *mn) *mn = *line;
             }
+            if (pre) { if (i < n) *line += c == '\t' ? sw * 4 : sw; }
+            else if (!ws_pending && *line && i < n) *line += sw;      /* one space for a run of white space */
             ws_pending = true;
-            if (pre && i < n) *line += c == '\t' ? sw * 4 : sw;
             continue;
         }
+        ws_pending = false;
         int ch = tchar(c, st->tt, &wstart);
         word += f ? glyph_w(f, ch) : MONO_W;
     }
@@ -298,16 +299,45 @@ static void intrinsic(struct node *e, int cbw, int *mn, int *mx) {
 }
 
 /* ---------------- flow context ---------------- */
+struct ictx { const struct style *st; int deco; int link; const struct style *bgst; bool hidden; };
+/* floats of one block formatting context, in its coordinates */
+#define MAXFLOATS 24
+struct flist { int n; struct { int x0, x1, top, bottom; uint8_t side; } f[MAXFLOATS]; };
 struct fctx {
     int left, width, y, pm;
     int x, line_first, asc, desc; bool has, space;
     const struct style *bst;
     int counter;
     int mark, mark_num; const struct style *mark_st;
-    int nowrap_until;
+    int ll, lr;                       /* the current line's left and right ends (beside floats) */
+    struct flist *fl;
+    struct node *pfloat; struct ictx pfic;    /* a float waiting for the end of the line */
     const struct style *last_bg; int last_bg_rect; int bg_pad_left;
 };
-struct ictx { const struct style *st; int deco; int link; const struct style *bgst; bool hidden; };
+
+static struct flist *new_flist(void) { return ar_alloc(&L->ar, sizeof(struct flist)); }
+static int fl_left(struct fctx *c, int y, int h) {
+    int l = c->left;
+    if (c->fl) for (int i = 0; i < c->fl->n; i++)
+        if (c->fl->f[i].side == 1 && c->fl->f[i].top < y + h && c->fl->f[i].bottom > y && c->fl->f[i].x1 > l) l = c->fl->f[i].x1;
+    return l;
+}
+static int fl_right(struct fctx *c, int y, int h) {
+    int r = c->left + c->width;
+    if (c->fl) for (int i = 0; i < c->fl->n; i++)
+        if (c->fl->f[i].side == 2 && c->fl->f[i].top < y + h && c->fl->f[i].bottom > y && c->fl->f[i].x0 < r) r = c->fl->f[i].x0;
+    return r;
+}
+static int fl_next_bottom(struct fctx *c, int y) {         /* the nearest float bottom below y, or -1 */
+    int b = -1;
+    if (c->fl) for (int i = 0; i < c->fl->n; i++) if (c->fl->f[i].bottom > y && (b < 0 || c->fl->f[i].bottom < b)) b = c->fl->f[i].bottom;
+    return b;
+}
+static int fl_clear(struct flist *fl, int sides) {
+    int b = 0;
+    if (fl) for (int i = 0; i < fl->n; i++) if ((fl->f[i].side & sides) && fl->f[i].bottom > b) b = fl->f[i].bottom;
+    return b;
+}
 
 static void flow_children(struct fctx *c, struct node *e, struct ictx ic);
 static void layout_block(struct fctx *c, struct node *n, struct ictx ic, int forced_w);
@@ -352,32 +382,49 @@ __attribute__((noinline)) static void draw_marker(struct fctx *c, int base) {
     it->x = c->left - 6 - w; it->w = w; it->asc = ga; it->h = ga + gd; it->y = base - ga; it->off = off; it->len = n; it->col = st->color;
 }
 
+static void do_float(struct fctx *c, struct node *n, struct ictx ic);
 static void flush_line(struct fctx *c, bool force) {
     if (!c->has && !force) {
         c->x = c->left; c->space = false; c->line_first = L->nit; c->asc = c->desc = 0; c->last_bg = 0;
+        if (c->pfloat) { struct node *f = c->pfloat; c->pfloat = 0; do_float(c, f, c->pfic); }
         return;
     }
     int sa, sd; metrics(c->bst, &sa, &sd, 0, 0);
     int asc = c->asc > sa ? c->asc : sa, desc = c->desc > sd ? c->desc : sd;
     int base = c->y + asc;
-    int used = c->x - c->left, shift = 0;
-    if (c->bst->align == TA_CENTER) shift = (c->width - used) / 2;
-    else if (c->bst->align == TA_RIGHT) shift = c->width - used;
+    int used = c->x - c->ll, room = c->lr - c->ll, shift = 0;
+    if (!c->has) used = room = 0;
+    if (c->bst->align == TA_CENTER) shift = (room - used) / 2;
+    else if (c->bst->align == TA_RIGHT) shift = room - used;
     if (shift < 0) shift = 0;
     for (int i = c->line_first; i < L->nit; i++) { L->it[i].x += shift; L->it[i].y += base; }
     if (c->mark) draw_marker(c, base);
     last_base = base; nflush++;
     c->y = base + desc;
     c->x = c->left; c->has = false; c->space = false; c->line_first = L->nit; c->asc = c->desc = 0; c->last_bg = 0;
+    if (c->pfloat) { struct node *f = c->pfloat; c->pfloat = 0; do_float(c, f, c->pfic); }
 }
 
-static int line_right(struct fctx *c) { return c->left + c->width; }
+static int line_right(struct fctx *c) { return c->has ? c->lr : fl_right(c, c->y, 16); }
+/* a new line starts: find its ends beside the floats, moving below them if need is too wide */
+static void begin_line(struct fctx *c, int need) {
+    if (c->has) return;
+    for (int k = 0; k < MAXFLOATS + 1; k++) {
+        c->ll = fl_left(c, c->y, 16); c->lr = fl_right(c, c->y, 16);
+        if (need <= c->lr - c->ll || (c->ll == c->left && c->lr == c->left + c->width)) break;
+        int b = fl_next_bottom(c, c->y);
+        if (b < 0) break;
+        c->y = b;
+    }
+    if (c->x < c->ll) c->x = c->ll;
+}
 
 /* place one word (already transformed) */
 static void add_word(struct fctx *c, const struct ictx *ic, const char *w, int n, int ww, bool wrap) {
     const struct style *st = ic->st;
     int sw = c->space && c->has ? space_w(st) : 0;
     if (c->has && wrap && c->x + sw + ww > line_right(c)) { flush_line(c, false); sw = 0; }
+    if (!c->has) begin_line(c, wrap ? ww : 0);
     int ga, gd, a, d; metrics(st, &a, &d, &ga, &gd);
     int dy = st->valign == VA_SUPER ? -st->fsize / 2 : st->valign == VA_SUB ? st->fsize / 4 : 0;
     if (dy < 0) a -= dy; else d += dy;
@@ -478,6 +525,7 @@ __attribute__((noinline)) static void atomic_image(struct fctx *c, struct node *
     int pl = rlen(st->p[3], c->width), pr = rlen(st->p[1], c->width), pt = rlen(st->p[0], c->width), pb = rlen(st->p[2], c->width);
     int ow = ml + bl + pl + w + pr + br + mr, oh = mt + bt + pt + h + pb + bb + mb;
     if (!fits(c, ow)) flush_line(c, false);
+    begin_line(c, ow);
     if (c->space && c->has) c->x += space_w(ic->st);
     int i0 = L->nit;
     int x = c->x + ml;
@@ -508,6 +556,7 @@ __attribute__((noinline)) static void atomic_control(struct fctx *c, struct node
     int mt = st->m[0].t == L_PX && st->m[0].v > 0 && st->m[0].v < 40 ? st->m[0].v : 1;
     int mb = st->m[2].t == L_PX && st->m[2].v > 0 && st->m[2].v < 40 ? st->m[2].v : 1;
     if (!fits(c, ml + w + mr)) flush_line(c, false);
+    begin_line(c, ml + w + mr);
     if (c->space && c->has) c->x += space_w(ic->st);
     int i0 = L->nit;
     int i = push(DI_CTRL);
@@ -527,6 +576,7 @@ __attribute__((noinline)) static void atomic_block(struct fctx *c, struct node *
     } else { ow = c->width < mx ? c->width : mx; if (ow < mn) ow = mn; }
     if (ow > c->width && c->width > 0) ow = c->width;
     if (!fits(c, ow)) flush_line(c, false);
+    begin_line(c, ow);
     if (c->space && c->has) c->x += space_w(ic->st);
     int i0 = L->nit;
     struct fctx t; memset(&t, 0, sizeof t);
@@ -564,6 +614,14 @@ static void flow_node(struct fctx *c, struct node *n, struct ictx ic) {
     if (n->type == N_TEXT) { inline_text(c, n->text, n->tlen, &ic); return; }
     const struct style *st = n->st;
     if (!st || st->display == D_NONE) return;
+    if (st->floated && c->fl) {
+        if (c->has) {                                      /* after this line */
+            if (c->pfloat) flush_line(c, false);
+            if (c->has) { c->pfloat = n; c->pfic = ic; return; }
+        }
+        do_float(c, n, ic);
+        return;
+    }
     int d = st->display;
     struct ictx in = ic;
     if (d == D_INLINE) {
@@ -571,7 +629,9 @@ static void flow_node(struct fctx *c, struct node *n, struct ictx ic) {
         if (!st->vis) in.hidden = true;
         if (n->tag == T_BR) {
             if (!c->has) { int a, dd; metrics(st, &a, &dd, 0, 0); line_metrics(c, a, dd); }
-            flush_line(c, true); return;
+            flush_line(c, true);
+            if (st->clear && c->fl) { int b = fl_clear(c->fl, st->clear); if (b > c->y) c->y = b; }
+            return;
         }
         if (n->tag == T_IMG) { atomic_image(c, n, &in); return; }
         if (is_control(n)) { atomic_control(c, n, &in); return; }
@@ -688,14 +748,15 @@ static void rect(int x, int y, int w, int h, uint32_t col) {
     int i = push(DI_RECT);
     if (i >= 0) { struct ditem *it = IT(i); it->x = x; it->y = y; it->w = w; it->h = h; it->col = col & 0xFFFFFF; }
 }
-static void borders(const struct style *st, int x, int y, int w, int h) {
-    int bt = bwid(st, 0), br = bwid(st, 1), bb = bwid(st, 2), bl = bwid(st, 3);
+static void borders_m(const struct style *st, int x, int y, int w, int h, bool no_top, bool no_left) {
+    int bt = no_top ? 0 : bwid(st, 0), br = bwid(st, 1), bb = bwid(st, 2), bl = no_left ? 0 : bwid(st, 3);
     if (!st->vis) return;
     if (bt) rect(x, y, w, bt, st->bc[0]);
     if (bb) rect(x, y + h - bb, w, bb, st->bc[2]);
     if (bl) rect(x, y, bl, h, st->bc[3]);
     if (br) rect(x + w - br, y, br, h, st->bc[1]);
 }
+static void borders(const struct style *st, int x, int y, int w, int h) { borders_m(st, x, y, w, h, false, false); }
 static void shift_items(int i0, int i1, int dy) { for (int i = i0; i < i1; i++) L->it[i].y += dy; }
 
 __attribute__((noinline)) static void layout_table(struct fctx *c, struct node *e, struct ictx ic) {
@@ -712,6 +773,12 @@ __attribute__((noinline)) static void layout_table(struct fctx *c, struct node *
     columns(&t, c->width, cmin, cmax, cpct);
     int s = st->spacing;
     int cbw = c->width;
+    int fleft = c->left;
+    if (c->fl && c->fl->n) {                               /* a table goes beside floats, not under them */
+        int ty = c->y + (c->pm > 0 ? c->pm : 0);
+        fleft = fl_left(c, ty, 40); cbw = fl_right(c, ty, 40) - fleft;
+        if (cbw < 100 && c->width >= 100) { int b = fl_clear(c->fl, 3); if (b > c->y) c->y = b; fleft = c->left; cbw = c->width; }
+    }
     int ml = st->m[3].t == L_AUTO ? 0 : rlen(st->m[3], cbw), mr = st->m[1].t == L_AUTO ? 0 : rlen(st->m[1], cbw);
     int mt = rlen(st->m[0], cbw), mb = rlen(st->m[2], cbw);
     int pl = rlen(st->p[3], cbw), pr = rlen(st->p[1], cbw), pt = rlen(st->p[0], cbw), pb = rlen(st->p[2], cbw);
@@ -744,10 +811,11 @@ __attribute__((noinline)) static void layout_table(struct fctx *c, struct node *
     int boxw = tw + frame;
     /* place the table */
     int y = c->y + (c->pm > mt ? c->pm : mt);
-    int x = c->left + ml;
-    if (st->m[3].t == L_AUTO && st->m[1].t == L_AUTO) x = c->left + (cbw - boxw) / 2;
-    else if (st->m[3].t == L_AUTO) x = c->left + cbw - mr - boxw;
-    if (x < c->left) x = c->left;
+    if (st->clear && c->fl) { int b = fl_clear(c->fl, st->clear); if (b > y) y = b; }
+    int x = fleft + ml;
+    if (st->m[3].t == L_AUTO && st->m[1].t == L_AUTO) x = fleft + (cbw - boxw) / 2;
+    else if (st->m[3].t == L_AUTO) x = fleft + cbw - mr - boxw;
+    if (x < fleft) x = fleft;
     e->y = y;
     struct ictx in = ic; in.st = st; in.deco = ic.deco | st->deco; in.bgst = 0; if (e->link >= 0) in.link = e->link;
     /* captions above */
@@ -779,7 +847,7 @@ __attribute__((noinline)) static void layout_table(struct fctx *c, struct node *
             int cbl = bwid(cs, 3), cbr = bwid(cs, 1), cbt = bwid(cs, 0), cbb = bwid(cs, 2);
             struct fctx cc; memset(&cc, 0, sizeof cc);
             cc.left = xx + cbl + cpl; cc.width = w - cbl - cpl - cpr - cbr; if (cc.width < 0) cc.width = 0;
-            cc.y = cy + cbt + cpt; cc.x = cc.left; cc.line_first = L->nit; cc.bst = cs;
+            cc.y = cy + cbt + cpt; cc.x = cc.left; cc.line_first = L->nit; cc.bst = cs; cc.fl = new_flist();
             int i0 = L->nit;
             struct ictx cin = rin; cin.st = cs; cin.deco = rin.deco | cs->deco; if (cn->link >= 0) cin.link = cn->link; cin.bgst = 0;
             if (!cs->vis) cin.hidden = true;
@@ -787,6 +855,7 @@ __attribute__((noinline)) static void layout_table(struct fctx *c, struct node *
             flow_children(&cc, cn, cin);
             flush_line(&cc, false);
             depth--;
+            int fb = fl_clear(cc.fl, 3); if (fb > cc.y + (cc.pm > 0 ? cc.pm : 0)) { cc.y = fb; cc.pm = 0; }
             int h = cc.y + (cc.pm > 0 ? cc.pm : 0) - cy + cpb + cbb;
             if (cs->h.t == L_PX && cs->h.v > h) h = cs->h.v;
             const char *ha = node_attr(cn, "height"); if (ha && katoi(ha) > h && katoi(ha) < 2000) h = katoi(ha);
@@ -801,7 +870,8 @@ __attribute__((noinline)) static void layout_table(struct fctx *c, struct node *
             int dy = va == VA_MIDDLE ? (rowh - cell[k].h) / 2 : va == VA_BOTTOM ? rowh - cell[k].h : 0;
             if (dy > 0) shift_items(cell[k].i0, cell[k].i1, dy);
             if (cell[k].bg >= 0) { struct ditem *b = IT(cell[k].bg); b->x = cell[k].x; b->y = cy; b->w = cell[k].w; b->h = rowh; b->col = cs->bg & 0xFFFFFF; }
-            borders(cs, cell[k].x, cy, cell[k].w, rowh);
+            /* collapsed borders: a cell leaves out the edges its neighbour above or to the left already drew */
+            borders_m(cs, cell[k].x, cy, cell[k].w, rowh, st->bcollapse && r > 0, st->bcollapse && cell[k].x > cx0);
         }
         if (rbg >= 0) { struct ditem *b = IT(rbg); b->x = cx0 - s; b->y = cy; b->w = tw; b->h = rowh; b->col = rs->bg & 0xFFFFFF; }
         if (row->tr) row->tr->y = cy;
@@ -898,6 +968,43 @@ __attribute__((noinline)) static bool layout_flex(struct fctx *cc, struct node *
     return true;
 }
 
+/* ---------------- floats ---------------- */
+__attribute__((noinline)) static void do_float(struct fctx *c, struct node *n, struct ictx ic) {
+    const struct style *st = n->st;
+    if (!c->fl || depth >= MAX_DEPTH) return;
+    int avail = c->width, ow;
+    int ml = st->m[3].t == L_AUTO ? 0 : rlen(st->m[3], avail), mr = st->m[1].t == L_AUTO ? 0 : rlen(st->m[1], avail);
+    if (n->tag == T_IMG) { int w, h; img_size(n, avail, &w, &h); ow = w + hextra(st, avail); }
+    else if ((st->w.t == L_PX || st->w.t == L_PCT) && st->display != D_TABLE)
+        ow = rlen(st->w, avail) + hextra(st, avail) - (st->bsizing ? rlen(st->p[1], avail) + rlen(st->p[3], avail) + bwid(st, 1) + bwid(st, 3) : 0);
+    else { int mn, mx; intrinsic(n, avail, &mn, &mx); ow = mx < avail ? mx : avail; if (ow < mn) ow = mn; if (st->display == D_TABLE && (st->w.t == L_PX || st->w.t == L_PCT)) { int tw = rlen(st->w, avail) + ml + mr; if (tw > ow) ow = tw; } }
+    if (ow > avail) ow = avail;
+    if (ow < 1) ow = 1;
+    if (c->fl->n >= MAXFLOATS) { int b = fl_clear(c->fl, 3); if (b > c->y) c->y = b; c->fl->n = 0; }
+    /* the highest place where it fits */
+    int y = c->y, x = c->left;
+    for (int k = 0; k < MAXFLOATS + 1; k++) {
+        int l = fl_left(c, y, 1), r = fl_right(c, y, 1);
+        if (r - l >= ow || (l == c->left && r == c->left + c->width)) { x = st->floated == 2 ? r - ow : l; break; }
+        int b = fl_next_bottom(c, y);
+        if (b < 0) break;
+        y = b;
+    }
+    struct fctx t; memset(&t, 0, sizeof t);
+    t.left = x; t.width = ow; t.y = y; t.x = x; t.line_first = L->nit; t.bst = st;
+    struct ictx in = ic; in.bgst = 0;
+    depth++;
+    if (st->display == D_TABLE) layout_table(&t, n, in);
+    else layout_block(&t, n, in, ow - ml - mr < 0 ? 0 : ow - ml - mr);
+    depth--;
+    int bottom = t.y + (t.pm > 0 ? t.pm : 0);
+    struct flist *f = c->fl;
+    f->f[f->n].x0 = x; f->f[f->n].x1 = x + ow; f->f[f->n].top = y; f->f[f->n].bottom = bottom; f->f[f->n].side = st->floated == 2 ? 2 : 1;
+    f->n++;
+    c->line_first = L->nit;
+    if (!c->has) { c->ll = fl_left(c, c->y, 16); c->lr = fl_right(c, c->y, 16); if (c->x < c->ll) c->x = c->ll; }
+}
+
 /* ---------------- blocks ---------------- */
 /* a picture or form control with display: block; its margins, borders and padding were done by the block */
 __attribute__((noinline)) static void replaced_block(struct fctx *cc, struct node *n, const struct ictx *in, int w) {
@@ -948,6 +1055,7 @@ static void layout_block(struct fctx *c, struct node *n, struct ictx ic, int for
     if (c->pm >= 0 && mt >= 0) top = c->y + (c->pm > mt ? c->pm : mt);
     else if (c->pm < 0 && mt < 0) top = c->y + (c->pm < mt ? c->pm : mt);
     else top = c->y + c->pm + mt;
+    if (st->clear && c->fl) { int b = fl_clear(c->fl, st->clear); if (b > top) top = b; }
     int x0 = c->left + ml;
     n->y = top;
     int bgi = st->bg && n != canvas_node && st->vis ? push(DI_RECT) : -1;
@@ -960,6 +1068,7 @@ static void layout_block(struct fctx *c, struct node *n, struct ictx ic, int for
     cc.left = x0 + bl + pl; cc.width = w; cc.y = top + bt + pt; cc.bst = st;
     cc.x = cc.left + (st->indent > 0 && st->indent < w / 2 ? st->indent : 0);
     cc.line_first = L->nit;
+    cc.fl = st->bfc || forced_w >= 0 || !c->fl || n->tag == T_HTML ? new_flist() : c->fl;
     if (c->mark && cc.y == top) { cc.mark = c->mark; cc.mark_num = c->mark_num; cc.mark_st = c->mark_st; c->mark = 0; }
     if (st->display == D_LIST_ITEM && st->list != LS_NONE) {
         int num = ++c->counter;
@@ -976,6 +1085,7 @@ static void layout_block(struct fctx *c, struct node *n, struct ictx ic, int for
     flush_line(&cc, false);
     if (cc.mark) { int a, d; metrics(st, &a, &d, 0, 0); draw_marker(&cc, cc.y + a); }
     int content = cc.y + (cc.pm > 0 ? cc.pm : 0) - (top + bt + pt);
+    if (cc.fl != c->fl) { int fb = fl_clear(cc.fl, 3) - (top + bt + pt); if (fb > content) content = fb; }   /* its own floats are inside it */
     if (st->h.t == L_PX) { int h = st->h.v - (st->bsizing ? pt + pb + bt + bb : 0); if (h > content) content = h; }
     int bottom = top + bt + pt + content + pb + bb;
     if (bgi >= 0) { struct ditem *b = IT(bgi); b->x = x0; b->y = top; b->w = w + frame; b->h = bottom - top; b->col = st->bg & 0xFFFFFF; }
@@ -1007,7 +1117,7 @@ void layout_doc(struct doc *d, struct layout *Lo, int width) {
     else if (d->body && d->body->st && d->body->st->bg) { L->canvas_bg = d->body->st->bg & 0xFFFFFF; canvas_node = d->body; }
     struct fctx c; memset(&c, 0, sizeof c);
     static struct style rootst; rootst.fsize = 16; rootst.vis = 1;
-    c.left = 0; c.width = width; c.y = 0; c.x = 0; c.bst = &rootst; c.line_first = 0;
+    c.left = 0; c.width = width; c.y = 0; c.x = 0; c.bst = &rootst; c.line_first = 0; c.fl = new_flist();
     struct ictx ic = { &rootst, 0, -1, 0, false };
     if (d->root->st && d->root->st->display != D_NONE) layout_block(&c, d->root, ic, -1);
     L->doc_h = c.y + (c.pm > 0 ? c.pm : 0);

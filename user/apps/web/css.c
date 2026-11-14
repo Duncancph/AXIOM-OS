@@ -931,6 +931,7 @@ static void apply(struct style *st, const struct style *ps, const char *prop, co
             {"inline-grid", D_INLINE_BLOCK}, {"flow-root", D_BLOCK}, {"contents", D_INLINE}, {"run-in", D_BLOCK},
             {"-webkit-box", D_BLOCK}, {"-ms-flexbox", D_FLEX}, {"-webkit-flex", D_FLEX}, {"block flex", D_FLEX}, {"inline flex", D_INLINE_FLEX},
             {"block flow", D_BLOCK}, {"inline flow-root", D_INLINE_BLOCK} };
+        if (eq_ci(v, vl, "flow-root")) st->bfc = 1;
         for (unsigned i = 0; i < sizeof dk / sizeof dk[0]; i++) if (eq_ci(v, vl, dk[i].k)) { st->display = dk[i].d; return; }
         return;
     }
@@ -1074,11 +1075,13 @@ static void apply(struct style *st, const struct style *ps, const char *prop, co
         return;
     }
     if (P("text-indent")) { struct len l; if (parse_len(v, vl, st->fsize, &l, false) && l.t == L_PX) st->indent = l.v; else if (inherit) st->indent = ps->indent; return; }
+    if (P("clear")) { st->clear = eq_ci(v, vl, "left") ? 1 : eq_ci(v, vl, "right") ? 2 : eq_ci(v, vl, "both") ? 3 : 0; return; }
+    if (P("overflow") || P("overflow-x") || P("overflow-y")) { if (eq_ci(v, vl, "hidden") || eq_ci(v, vl, "auto") || eq_ci(v, vl, "scroll") || pre_ci(v, vl, "hidden ")) st->bfc = 1; return; }
     if (P("float")) { st->floated = eq_ci(v, vl, "left") ? 1 : eq_ci(v, vl, "right") ? 2 : 0; return; }
     if (P("position")) { st->pos = eq_ci(v, vl, "absolute") ? 1 : eq_ci(v, vl, "fixed") ? 2 : eq_ci(v, vl, "sticky") ? 0 : 0; return; }
     if (P("box-sizing")) { st->bsizing = eq_ci(v, vl, "border-box"); return; }
     if (P("border-spacing")) { struct len l; int k = tokens(v, vl, t, tl, 2); if (k && parse_len(t[0], tl[0], st->fsize, &l, false) && l.t == L_PX) st->spacing = l.v < 0 ? 0 : l.v > 50 ? 50 : l.v; return; }
-    if (P("border-collapse")) { if (eq_ci(v, vl, "collapse")) st->spacing = 0; return; }
+    if (P("border-collapse")) { st->bcollapse = eq_ci(v, vl, "collapse"); if (st->bcollapse) st->spacing = 0; return; }
     if (P("flex-direction")) { st->flex_col = pre_ci(v, vl, "column"); return; }
     if (P("flex-flow")) { st->flex_col = has_ci(v, vl, "column"); st->flex_wrap = has_ci(v, vl, "wrap") && !has_ci(v, vl, "nowrap"); return; }
     if (P("flex-wrap")) { st->flex_wrap = pre_ci(v, vl, "wrap"); return; }
@@ -1207,11 +1210,13 @@ static int hints(const struct node *e, char *buf, int max) {
         if ((v = node_attr(e, "link"))) (void)v;
     }
     if ((v = node_attr(e, "align"))) {
-        if (e->tag == T_TABLE) { if (!strcmp(v, "center")) ADD("margin-left:auto;margin-right:auto;"); else if (!strcmp(v, "right")) ADD("margin-left:auto;"); }
+        if (e->tag == T_TABLE) { if (!strcmp(v, "center")) ADD("margin-left:auto;margin-right:auto;"); else if (!strcmp(v, "right") || !strcmp(v, "left")) ADD("float:%s;", v); }
         else if (e->tag == T_IMG) { if (!strcmp(v, "middle") || !strcmp(v, "absmiddle")) ADD("vertical-align:middle;"); }
         else ADD("text-align:%s;", v);
     }
     if ((v = node_attr(e, "valign"))) ADD("vertical-align:%s;", v);
+    if (e->tag == T_BR && (v = node_attr(e, "clear"))) ADD("clear:%s;", !strcmp(v, "all") ? "both" : v);
+    if (e->tag == T_IMG && (v = node_attr(e, "align")) && (!strcmp(v, "left") || !strcmp(v, "right"))) ADD("float:%s;", v);
     if (e->tag == T_TABLE || e->tag == T_TD || e->tag == T_TH || e->tag == T_IMG || e->tag == T_COL || e->tag == T_HR || e->tag == T_IFRAME || e->tag == T_PRE) {
         if ((v = node_attr(e, "width")) && v[0] >= '0' && v[0] <= '9' && e->tag != T_PRE) { int k = katoi(v); bool pct = v[strlen(v) - 1] == '%'; if (k) ADD("width:%d%s;", k, pct ? "%" : "px"); }
         if ((v = node_attr(e, "height")) && v[0] >= '0' && v[0] <= '9' && e->tag != T_TD && e->tag != T_TH && e->tag != T_TABLE) { int k = katoi(v); bool pct = v[strlen(v) - 1] == '%'; if (!pct) ADD("height:%dpx;", k); }
@@ -1260,7 +1265,7 @@ static void style_elem(struct node *e, const struct style *ps) {
     st->color = ps->color; st->fsize = ps->fsize; st->bold = ps->bold; st->italic = ps->italic; st->mono = ps->mono;
     st->align = ps->align; st->ws = ps->ws; st->list = ps->list; st->list_inside = ps->list_inside; st->vis = ps->vis;
     st->lh_num = ps->lh_num; st->lh = ps->lh_num ? 0 : ps->lh; st->tt = ps->tt; st->indent = ps->indent; st->vars = ps->vars;
-    st->spacing = ps->spacing;              /* inherited, as in CSS */
+    st->spacing = ps->spacing; st->bcollapse = ps->bcollapse;    /* inherited, as in CSS */
     /* not inherited: initial values */
     st->display = D_INLINE; st->bg = 0; st->deco = 0; st->valign = VA_BASELINE;
     for (int i = 0; i < 4; i++) { st->m[i].t = L_PX; st->p[i].t = L_PX; st->bc[i] = CURRENT; st->bw[i] = 3; }
@@ -1329,7 +1334,10 @@ static void style_elem(struct node *e, const struct style *ps) {
     /* elements hidden by moving them away or clipping them to nothing */
     if (st->pos && ((st->w.t == L_PX && st->w.v <= 1) || (st->h.t == L_PX && st->h.v <= 1))) st->display = D_NONE;
     if (st->pos && (st->m[3].t == L_PX && st->m[3].v < -1000)) st->display = D_NONE;
-    if (st->floated && (st->display == D_INLINE || st->display == D_INLINE_BLOCK)) st->display = e->tag == T_IMG || e->tag == T_INPUT ? D_INLINE_BLOCK : D_BLOCK;
+    if (st->floated && (st->display == D_INLINE || st->display == D_INLINE_BLOCK || st->display == D_LIST_ITEM || st->display == D_INLINE_FLEX))
+        st->display = st->display == D_INLINE_FLEX ? D_FLEX : D_BLOCK;
+    if (st->floated && (st->display == D_ROW || st->display == D_CELL || st->display == D_ROW_GROUP)) st->floated = 0;
+    if (st->pos) st->floated = 0;                    /* positioned boxes are laid out in the flow */
     /* table internals outside tables, and the other way round, are fixed up by layout */
 }
 
