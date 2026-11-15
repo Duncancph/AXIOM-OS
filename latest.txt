@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 89
-notes Web no longer crashes when a site's request fails or times out (for example signing in to claude.ai)
-file kernel b89/thane.elf.gz 16359544 50b58085966e3f338ece95ad40c2f06bc3faebef2fdd033291766e56c2b9e877
-file initrd b89/initrd.tar.gz 1280000 799b6cbc290afe0df4f498446066f175476c9db054f5070ef0cd6ff143bb6186
-file bootx64 b89/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b89/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022100c352312996030416cd379284f329a2485276707e4dfe27795bcc55f79778070902201ce16d0afeeeedf78a585a7b20dee3f6bc08a4a7aebe1c17ef41bd0babbf165b
+build 90
+notes Sound through the monitor's speakers over HDMI; Settings > Sound chooses monitor or headphone jack
+file kernel b90/thane.elf.gz 16395336 d94ddf32ac853af817e01f7caab045bbf1bd49778f3c04e4efbd7d6697f6cbec
+file initrd b90/initrd.tar.gz 1280000 6b4f65423c0a067466906842ae2830784e62958629bc02619d136b6e29451a96
+file bootx64 b90/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b90/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3046022100af6b64f92228e1147d8a93e8bc8d6327c5b240540e1428182c3fbe2047511a14022100c17a54b815763b54b257818b1b4849ca4be5723686d8c17df257c5f57384e3e8
