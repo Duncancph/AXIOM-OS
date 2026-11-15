@@ -160,7 +160,7 @@ struct imgent {
 };
 struct imgent *img_get(const char *url);          /* find or add a cache entry */
 
-enum { FC_TEXT, FC_PASSWORD, FC_HIDDEN, FC_SUBMIT, FC_RESET, FC_BUTTON, FC_CHECKBOX, FC_RADIO, FC_NUMBER, FC_TEXTAREA, FC_SELECT, FC_IMAGE, FC_FILE };
+enum { FC_TEXT, FC_PASSWORD, FC_HIDDEN, FC_SUBMIT, FC_RESET, FC_BUTTON, FC_CHECKBOX, FC_RADIO, FC_NUMBER, FC_TEXTAREA, FC_SELECT, FC_IMAGE, FC_FILE, FC_MEDIA };
 struct fctl {
     int type;
     char *val; int len, cap, cur;     /* text */
@@ -170,6 +170,7 @@ struct fctl {
     int size, rows, cols;             /* size: characters (text), rows/cols: textarea */
     int scroll;                       /* textarea: first line shown */
     const char *label;                /* buttons */
+    void *media;                      /* FC_MEDIA: <video>/<audio> state (web/media.c) */
 };
 void form_init_control(struct doc *d, struct node *n);
 void form_option_text(struct node *opt, char *out, int max);
@@ -208,3 +209,22 @@ void js_stop_scripts(void);
 bool js_page_step(char *status, int n);
 extern int web_script_waiting;          /* set while a running script waits for the network: events are held back */
 void web_requeue_event(const struct dunc_event *e);   /* an event seen while a script ran, handled afterwards */
+
+/* ---------------- <video> and <audio> (web/media.c) ---------------- */
+struct canvas;
+void media_attach(struct doc *d, struct node *n);  /* give a <video>/<audio> its player (as an FC_MEDIA control) */
+void media_page_end(void);                         /* stop and forget them all */
+void media_box(struct node *n, int *w, int *h);    /* its size before styles */
+void media_draw(struct canvas *c, struct node *n, int x, int y, int w, int h);
+void media_click(struct node *n, int x, int y, int w, int h);   /* x, y inside the box */
+void media_toggle(struct node *n);                 /* play / pause */
+long media_tick(void);                             /* main loop: download, decode, show; ms it may wait (-1: idle) */
+double media_js(struct node *n, const char *op, const char *name, double v);
+const char *media_error_text(struct node *n);
+const char *media_src(struct node *n);
+/* web.c, for media.c */
+void web_redraw_node(struct node *n);              /* draw just this element's box and show it */
+void web_media_resized(void);                      /* a video's size became known: lay out again */
+/* download a whole file (growing buffer up to cap) while the window keeps answering; progress text goes to
+ * msg (and the element is redrawn). Returns the length, -2 when over cap, other negatives on errors. */
+long web_download(const char *url, long cap, char **out, int *status, char *ctype, int ctlen, char *msg, int msglen, struct node *n);

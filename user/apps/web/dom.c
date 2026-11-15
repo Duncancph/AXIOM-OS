@@ -11,7 +11,7 @@ static js_rt *rt;
 static struct doc *D;
 static jsval wrappers;                 /* every node's JS object, by node->jsw - 1 (kept for the page's life) */
 static long nwrappers;
-static jsval proto_elem, proto_text, proto_comment, api;   /* set by the prelude */
+static jsval proto_elem, proto_text, proto_comment, proto_media, api;   /* set by the prelude */
 static bool page_on;
 
 /* ---------------- console (about:console) ---------------- */
@@ -113,7 +113,8 @@ static char *ardup(const char *s, long n) { return ar_strndup(&D->ar, s, n); }
 static jsval W(struct node *n) {                         /* the node's JS object */
     if (!n) return js_null();
     if (n->jsw) return js_get_index(rt, wrappers, n->jsw - 1);
-    jsval o = js_host_object(rt, &node_class, n, n->type == N_TEXT ? proto_text : proto_elem);
+    jsval o = js_host_object(rt, &node_class, n, n->type == N_TEXT ? proto_text :
+                             (n->tag == T_VIDEO || n->tag == T_AUDIO) && js_is_object(proto_media) ? proto_media : proto_elem);
     HOLD(o);
     js_set_index(rt, wrappers, nwrappers, o);
     n->jsw = ++nwrappers;
@@ -649,7 +650,28 @@ NATIVE(n_test_spin) { volatile unsigned long x = 0; for (;;) x++; return js_unde
 #endif
 NATIVE(n_set_protos) {
     proto_elem = A(argc, argv, 0); proto_text = A(argc, argv, 1); proto_comment = A(argc, argv, 2); api = A(argc, argv, 3);
+    proto_media = A(argc, argv, 4);
     return js_undefined();
+}
+/* D.media(el, op, name, value): <video>/<audio> for scripts (web/media.c) */
+NATIVE(n_media) {
+    struct node *n = N(A(argc, argv, 0));
+    if (!n || n->type != N_ELEM || (n->tag != T_VIDEO && n->tag != T_AUDIO)) return js_undefined();
+    if (!n->fc) media_attach(D, n);                     /* made by a script (new Audio()) and not in the page */
+    char *op = T(A(argc, argv, 1), 0), *name = js_is_string(A(argc, argv, 2)) ? T(A(argc, argv, 2), 0) : 0;
+    jsval r = js_undefined();
+    if (op) {
+        if (!strcmp(op, "src")) r = js_str(rt, media_src(n), -1);
+        else if (!strcmp(op, "errtext")) r = js_str(rt, media_error_text(n), -1);
+        else {
+            double v = argc > 3 ? js_to_number(rt, argv[3]) : 0;
+            double x = media_js(n, op, name ? name : "", v);
+            r = !strcmp(op, "get") && name && (!strcmp(name, "paused") || !strcmp(name, "ended") || !strcmp(name, "muted") || !strcmp(name, "loop") || !strcmp(name, "error"))
+                ? js_bool(x != 0) : js_num(x);
+        }
+    }
+    free(op); free(name);
+    return r;
 }
 
 /* ---------------- running scripts ---------------- */
@@ -729,7 +751,7 @@ static const struct { const char *name; js_native fn; int n; } natives[] = {
 #ifdef WEB_TEST_SPIN
     { "testSpin", n_test_spin, 0 },
 #endif
-    { "storageLoad", n_storage_load, 0 }, { "storageSave", n_storage_save, 1 }, { "compile", n_compile, 1 }, { "setProtos", n_set_protos, 4 },
+    { "storageLoad", n_storage_load, 0 }, { "storageSave", n_storage_save, 1 }, { "compile", n_compile, 1 }, { "setProtos", n_set_protos, 5 }, { "media", n_media, 4 },
 };
 
 bool js_page_active(void) { return page_on; }
@@ -753,6 +775,7 @@ void js_page_start(struct doc *d) {
     conlen = 0; conlog[0] = 0;
     wrappers = js_array(rt); nwrappers = 0;
     js_root(rt, &wrappers); js_root(rt, &proto_elem); js_root(rt, &proto_text); js_root(rt, &proto_comment); js_root(rt, &api);
+    proto_media = js_undefined(); js_root(rt, &proto_media);
     for (int i = 0; i < MAXT; i++) { timers[i].used = false; timers[i].fn = js_undefined(); js_root(rt, &timers[i].fn); }
     jsval g = js_global(rt), dd = js_object(rt);
     js_root(rt, &dd);
@@ -810,7 +833,8 @@ void js_page_end(void) {
     if (!rt) { page_on = false; return; }
     page_on = false;
     for (int i = 0; i < MAXT; i++) { js_unroot(rt, &timers[i].fn); timers[i].used = false; }
-    js_unroot(rt, &wrappers); js_unroot(rt, &proto_elem); js_unroot(rt, &proto_text); js_unroot(rt, &proto_comment); js_unroot(rt, &api);
+    js_unroot(rt, &wrappers); js_unroot(rt, &proto_elem); js_unroot(rt, &proto_text); js_unroot(rt, &proto_comment); js_unroot(rt, &api); js_unroot(rt, &proto_media);
+    proto_media = js_undefined();
     if (D) {                                              /* forget the nodes' JS objects */
         struct node *st[256]; int sp = 0; st[sp++] = D->root;
         while (sp) { struct node *e = st[--sp]; e->jsw = 0; for (struct node *c = e->first; c; c = c->next) if (sp < 256) st[sp++] = c; else c->jsw = 0; }

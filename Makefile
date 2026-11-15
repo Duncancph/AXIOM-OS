@@ -124,9 +124,13 @@ build/gen/dom_prelude.h: user/apps/web/dom_prelude.js tools/embed.py
 build/u/web_dom.o: user/apps/web/dom.c build/gen/dom_prelude.h user/apps/web/web.h user/apps/web/js/js.h $(HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(UCFLAGS_FP) -Ibuild/gen -c $< -o $@
-build/user/web.elf: build/u/app_web.o $(WEB_OBJS) $(JS_OBJS) $(U_LIB) $(NETLIB) $(IMGLIB) user/user.ld
+# <video>/<audio>: the media player part of Web uses the decoders (floating point)
+build/u/web_media.o: user/apps/web/media.c user/apps/web/web.h $(wildcard user/lib/video/*.h user/lib/media/*.h user/lib/audio/*.h) $(HDRS)
 	@mkdir -p $(dir $@)
-	$(LD) -n -T user/user.ld -nostdlib -z max-page-size=0x1000 -z noexecstack --no-warn-rwx-segments -o $@ $(U_LIB) $< $(WEB_OBJS) $(JS_OBJS) $(NETLIB) $(IMGLIB) $(LIBGCC)
+	$(CC) $(UCFLAGS_FP) -c $< -o $@
+build/user/web.elf: build/u/app_web.o $(WEB_OBJS) $(JS_OBJS) $(VIDEO_OBJS) $(AUDIO_OBJS) $(U_LIB) $(NETLIB) $(IMGLIB) user/user.ld
+	@mkdir -p $(dir $@)
+	$(LD) -n -T user/user.ld -nostdlib -z max-page-size=0x1000 -z noexecstack --no-warn-rwx-segments -o $@ $(U_LIB) $< $(WEB_OBJS) $(JS_OBJS) $(VIDEO_OBJS) $(AUDIO_OBJS) $(NETLIB) $(IMGLIB) $(LIBGCC)
 build/u/app_web.o: user/apps/web/web.h
 
 build/thane.elf: $(K_OBJS) src/linker.ld

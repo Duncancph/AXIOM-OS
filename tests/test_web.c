@@ -9,6 +9,7 @@ long sys_call(long n, long a, long b, long c, long d, long e) { return -1; }
 struct link *links; int nlinks, links_cap;
 int add_link(const char *href, struct node *n) { return -1; }
 struct imgent *img_get(const char *u) { return 0; }
+void media_box(struct node *n, int *w, int *h) { (void)n; *w = 300; *h = 150; }
 void form_init_control(struct doc *d, struct node *n) {}
 char *web_fetch_text(const char *url, long *len, long cap) { return 0; }
 void resolve_url(const char *base, const char *href, char *out, int n) { strncpy0(out, href, n); }

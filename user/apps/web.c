@@ -576,6 +576,7 @@ static void control_key(int k) {
     struct fctl *fc = focus->fc;
     int code = KEY_CODE(k);
     if (k == 27) { focus = 0; return; }
+    if (fc->type == FC_MEDIA && k != '\t') { if (k == ' ' || k == '\n') media_toggle(focus); return; }
     if (k == '\t') { bool seen = false; struct node *nx = tab_next(doc->root, focus, &seen, 0); if (!nx) { seen = false; nx = tab_next(doc->root, 0, &seen, 0); } focus = nx; if (nx) { if (nx->fc) nx->fc->cur = nx->fc->len; ensure_visible(nx); } return; }
     if (fc->type == FC_CHECKBOX || fc->type == FC_RADIO) {
         if (k == ' ') {
@@ -641,6 +642,7 @@ static void init_node(struct doc *d, struct node *c) {
             if (s) c->link = add_link(s, c);
         }
         if (c->tag == T_INPUT || c->tag == T_TEXTAREA || c->tag == T_SELECT || c->tag == T_BUTTON) form_init_control(d, c);
+        if (c->tag == T_VIDEO || c->tag == T_AUDIO) media_attach(d, c);
         if (c->tag == T_IMG) {
             const char *src = node_attr(c, "src");
             const char *lazy = node_attr(c, "data-src"); if (!lazy) lazy = node_attr(c, "data-original");
@@ -763,6 +765,7 @@ static void scroll_to_fragment(const char *f) {
 static void show_doc(struct doc *d) {
     struct doc *old = doc;
     js_page_end();                                         /* the old page's scripts stop */
+    media_page_end();                                      /* and its videos and sounds */
     doc = d; web_doc = d;
     free_doc(old);
     nlinks = 0; hover_link = -1; focus = 0; popup = 0;
@@ -866,7 +869,7 @@ static void about_page(const char *u) {
     } else {
         ksnprintf(h, sizeof h, "<title>Start page</title>%s"
             "<h1>Web <span class=dim style=\"font-size:22px\">0.4</span></h1>"
-            "<p>A browser for <b>AXIOM</b>, running on the Thane kernel's own TCP/IP stack. Secure <b>https://</b> sites use TLS 1.3, "
+            "<p>A browser for <b>AXIOM</b>, running on the Axiom Core kernel's own TCP/IP stack. Secure <b>https://</b> sites use TLS 1.3, "
             "and every site's certificate is checked against the trusted authorities.</p>"
             "<div class=card><h2>Try</h2><ul>"
             "<li><a href=\"https://text.npr.org/\">text.npr.org</a> - news in plain text</li>"
@@ -1118,6 +1121,7 @@ static void draw_image(struct canvas *c, struct ditem *it, int x, int y) {
 static void draw_control(struct canvas *c, struct ditem *it, int x, int y) {
     struct node *n = it->n; struct fctl *fc = n->fc;
     if (!fc) return;
+    if (fc->type == FC_MEDIA) { media_draw(c, n, x, y, it->w, it->h); return; }
     bool foc = n == focus;
     const struct font *f = web_font(14, false, false);
     uint32_t border = foc ? HL_ACCENT : 0x8F8F8F, txt = fc->disabled ? 0x9A9A9A : 0x1E1E1E;
@@ -1398,6 +1402,7 @@ static void click_control(struct node *n, int mx, int my) {
     case FC_RADIO: control_key(' '); break;
     case FC_SUBMIT: case FC_IMAGE: submit(n->form, n); break;
     case FC_RESET: if (n->form) reset_form(doc->root, n->form, 0); break;
+    case FC_MEDIA: if (i >= 0) media_click(n, mx - lay.it[i].x, my - (lay.it[i].y - scroll + BAR_H), lay.it[i].w, lay.it[i].h); break;
     case FC_SELECT: popup = n; popup_hover = fc->sel; popup_first = fc->sel > 6 ? fc->sel - 6 : 0;
         if (popup_first + 12 > fc->nopt) popup_first = fc->nopt > 12 ? fc->nopt - 12 : 0;
         break;
@@ -1453,6 +1458,63 @@ void web_navigate(const char *u) {                         /* later, from the ma
     free(pend_body); pend_body = 0; pend_blen = 0; pend_post = false; pend_mode = 0; pend_scroll = 0;
 }
 void web_page_url(char *out, int n) { strncpy0(out, url, n); }
+
+/* ---------------- for <video>/<audio> (web/media.c) ---------------- */
+void web_redraw_node(struct node *n) {
+    if (!doc || popup) return;
+    int i = ctl_item(n);
+    if (i < 0 || (lay.it[i].deco & 0x80)) return;
+    int x = lay.it[i].x, y = lay.it[i].y - scroll + BAR_H, w = lay.it[i].w, h = lay.it[i].h;
+    int vx0 = 0, vy0 = BAR_H, vx1 = WW - SCROLLBAR, vy1 = WH - STATUS_H;
+    int cx0 = x > vx0 ? x : vx0, cy0 = y > vy0 ? y : vy0, cx1 = x + w < vx1 ? x + w : vx1, cy1 = y + h < vy1 ? y + h : vy1;
+    if (cx1 <= cx0 || cy1 <= cy0) return;
+    gfx_clip(&a.c, cx0, cy0, cx1 - cx0, cy1 - cy0);
+    media_draw(&a.c, n, x, y, w, h);
+    gfx_noclip(&a.c);
+    app_flush_rect(&a, cx0, cy0, cx1 - cx0, cy1 - cy0);
+}
+void web_media_resized(void) { need_layout = true; }
+struct dlbuf { char *b; long len, cap, max; bool over; long total; uint64_t last; char *msg; int msglen; struct node *n; };
+static bool dl_sink(const char *d, long n, void *ctx) {
+    struct dlbuf *f = ctx;
+    if (f->len + n > f->max) { f->over = true; return false; }
+    if (f->len + n > f->cap) {
+        long nc = f->cap * 2; while (nc < f->len + n) nc *= 2;
+        if (nc > f->max) nc = f->max;
+        char *nb = realloc(f->b, nc + 1); if (!nb) { f->over = true; return false; }
+        f->b = nb; f->cap = nc;
+    }
+    memcpy(f->b + f->len, d, n); f->len += n;
+    uint64_t now = sys_time();
+    if (now - f->last > 300) {
+        f->last = now;
+        if (f->total > 0) ksnprintf(f->msg, f->msglen, "Downloading... %ld of %ld MB (Esc stops)", f->len >> 20, f->total >> 20);
+        else ksnprintf(f->msg, f->msglen, "Downloading... %ld MB (Esc stops)", f->len >> 20);
+        web_redraw_node(f->n);
+    }
+    poll_events();
+    return !abort_fetch && !quit && !pend;
+}
+long web_download(const char *u, long cap, char **out, int *status, char *ctype, int ctlen, char *msg, int msglen, struct node *n) {
+    *out = 0; *status = 0;
+    if (!pre_ci(u, "http:") && !pre_ci(u, "https:")) {          /* file: and data: */
+        long r = fetch_any(u, cap, out, ctype, ctlen, status, 0, 0, 0, 0, 0);
+        if (r >= 0 && !*status) *status = 200;
+        return r;
+    }
+    struct dlbuf f = { malloc(1 << 20), 0, 1 << 20, cap, false, 0, 0, msg, msglen, n };
+    if (!f.b) return NET_ENOMEM;
+    struct http_req rq = { "GET", 0, 0, 0, 0, 0, 0 };
+    abort_fetch = false;
+    fetch_depth++;
+    long r = http_request(u, &rq, dl_sink, &f, status, &f.total, ctype, ctlen, 0, 0);
+    fetch_depth--;
+    bool stopped = abort_fetch; abort_fetch = false;
+    if (f.over) { free(f.b); return -2; }
+    if (stopped || (r < 0 && !f.len) || quit || pend) { free(f.b); return r < 0 ? r : -1; }
+    *out = f.b;
+    return f.len;
+}
 void web_set_title(const char *t) { set_title(); }
 /* Scripts asking for sizes and positions after changing the page need it laid out again. Some (animation
  * libraries) change and measure in a loop; on a big page each layout is slow, so it's redone at most 4
@@ -1603,7 +1665,7 @@ static void handle_event(struct dunc_event *e) {
             if (addr_focus) { draw_toolbar(&a.c); app_flush_rect(&a, 0, 0, WW, BAR_H); return; }
         } else if (js_page_active() && doc && js_event(focus ? focus : doc->body, "keydown", 0, 0, k)) {
             /* a script handled the key */
-        } else if (focus && doc) {
+        } else if (focus && doc && !(focus->fc && focus->fc->type == FC_MEDIA && k != ' ' && k != '\n' && k != '\t' && k != 27)) {
             struct node *was = focus; int len0 = focus->fc ? focus->fc->len : 0, sel0 = focus->fc ? focus->fc->sel : 0;
             control_key(k);
             if (was->fc && (was->fc->len != len0 || (was->fc->type == FC_SELECT && was->fc->sel != sel0))) { js_event(was, "input", 0, 0, k); if (was->fc->type == FC_SELECT) js_event(was, "change", 0, 0, 0); }
@@ -1694,6 +1756,9 @@ int main(void) {
         if (need_draw && tnow - last_draw >= 33) { need_draw = false; last_draw = tnow; draw(); }
         if (nrequeued) { struct dunc_event q = requeued[0]; for (int i = 1; i < nrequeued; i++) requeued[i - 1] = requeued[i]; nrequeued--; handle_event(&q); continue; }
         long wait = js_timer_wait();                    /* scripts' timers */
+        long mw = media_tick();                         /* a video or sound playing */
+        if (mw >= 0 && (wait < 0 || mw < wait)) wait = mw;
+        if (mw == 0) { if (sys_event(&e, 0) > 0) handle_event(&e); js_run_timers(); continue; }
         if (need_draw) { long dw = 33 - (long)(tnow - last_draw); if (dw < 1) dw = 1; if (wait < 0 || dw < wait) wait = dw; }
         if (sys_event(&e, wait) > 0) handle_event(&e);
         js_run_timers();

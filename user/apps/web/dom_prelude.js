@@ -107,6 +107,7 @@
     }
     return null;
   }
+  var MEDIA_EVENTS = { play: 1, playing: 1, pause: 1, ended: 1, timeupdate: 1, durationchange: 1, loadedmetadata: 1, loadeddata: 1, canplay: 1, canplaythrough: 1, loadstart: 1, seeked: 1, volumechange: 1, emptied: 1, error: 1 };
   function reportError(e) { console.error(e && e.stack ? e.stack : String(e)); }
 
   // ---------------- nodes ----------------
@@ -774,12 +775,49 @@
       } else if (type === 'input') ev = new InputEvent('input', { bubbles: true, inputType: 'insertText' });
       else if (type === 'submit') ev = new SubmitEvent('submit', { bubbles: true, cancelable: true });
       else if (type === 'focus' || type === 'blur') { ev = new FocusEvent(type, {}); if (type === 'focus') doc._active = target; }
-      else ev = new Event(type, { bubbles: type !== 'scroll' && type !== 'resize', cancelable: true });
+      else ev = new Event(type, { bubbles: type !== 'scroll' && type !== 'resize' && !MEDIA_EVENTS[type], cancelable: true });
       ev.isTrusted = true;
       var ok = (type === 'resize' || type === 'scroll' ? g : target).dispatchEvent(ev);
       if (type === 'focus') target.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
       return !ok;
     }
   });
-  D.setProtos(P, TP, TP, g.__axiom);
+  // ---------------- <video> and <audio> (played by Web itself, see web/media.c) ----------------
+  var MP = Object.create(P);
+  function HTMLMediaElement() { throw new TypeError('Illegal constructor'); }
+  HTMLMediaElement.prototype = MP; MP.constructor = HTMLMediaElement;
+  MP.play = function () { D.media(this, 'play'); return Promise.resolve(); };
+  MP.pause = function () { D.media(this, 'pause'); };
+  MP.load = function () { D.media(this, 'load'); };
+  MP.canPlayType = function (t) {
+    t = String(t).toLowerCase();
+    if (/webm|ogg|opus|vp8|vp9|av01|hev1|hvc1|flac|mpegurl|dash/.test(t)) return '';
+    return /^(video\/mp4|audio\/mp4|audio\/mpeg|audio\/mp3|audio\/wav|audio\/x-wav|audio\/wave|audio\/aac|audio\/x-m4a|video\/x-m4v)/.test(t) ? (t.indexOf('codecs') >= 0 ? 'probably' : 'maybe') : '';
+  };
+  MP.addTextTrack = function () { return { mode: 'disabled', cues: [], addCue: function () {} }; };
+  ['currentTime', 'volume', 'muted', 'loop'].forEach(function (k) {
+    Object.defineProperty(MP, k, { get: function () { return D.media(this, 'get', k); }, set: function (v) { D.media(this, 'set', k, k === 'muted' || k === 'loop' ? (v ? 1 : 0) : +v); }, configurable: true });
+  });
+  ['duration', 'paused', 'ended', 'readyState', 'networkState', 'videoWidth', 'videoHeight'].forEach(function (k) {
+    Object.defineProperty(MP, k, { get: function () { return D.media(this, 'get', k); }, configurable: true });
+  });
+  Object.defineProperty(MP, 'controls', { get: function () { return this.hasAttribute('controls'); }, set: function (v) { if (v) this.setAttribute('controls', ''); else this.removeAttribute('controls'); D.media(this, 'set', 'controls', v ? 1 : 0); }, configurable: true });
+  Object.defineProperty(MP, 'autoplay', { get: function () { return this.hasAttribute('autoplay'); }, set: function (v) { if (v) this.setAttribute('autoplay', ''); else this.removeAttribute('autoplay'); }, configurable: true });
+  Object.defineProperty(MP, 'currentSrc', { get: function () { return D.media(this, 'src') || ''; }, configurable: true });
+  Object.defineProperty(MP, 'error', { get: function () { return D.media(this, 'get', 'error') ? { code: 4, message: D.media(this, 'errtext') } : null; }, configurable: true });
+  Object.defineProperty(MP, 'playbackRate', { get: function () { return 1; }, set: function () {}, configurable: true });
+  Object.defineProperty(MP, 'defaultPlaybackRate', { get: function () { return 1; }, set: function () {}, configurable: true });
+  Object.defineProperty(MP, 'seeking', { get: function () { return false; }, configurable: true });
+  Object.defineProperty(MP, 'preload', { get: function () { return this.getAttribute('preload') || 'metadata'; }, set: function (v) { this.setAttribute('preload', v); }, configurable: true });
+  Object.defineProperty(MP, 'poster', { get: function () { return this.getAttribute('poster') || ''; }, set: function (v) { this.setAttribute('poster', v); }, configurable: true });
+  function ranges(el) { var d = el.duration; var n = d === d && d > 0 ? 1 : 0; return { length: n, start: function () { return 0; }, end: function () { return n ? el.duration : 0; } }; }
+  Object.defineProperty(MP, 'buffered', { get: function () { return ranges(this); }, configurable: true });
+  Object.defineProperty(MP, 'seekable', { get: function () { return ranges(this); }, configurable: true });
+  Object.defineProperty(MP, 'played', { get: function () { return ranges(this); }, configurable: true });
+  Object.defineProperty(MP, 'textTracks', { get: function () { return []; }, configurable: true });
+  ['NETWORK_EMPTY', 'NETWORK_IDLE', 'NETWORK_LOADING', 'NETWORK_NO_SOURCE'].forEach(function (k, i) { MP[k] = i; HTMLMediaElement[k] = i; });
+  ['HAVE_NOTHING', 'HAVE_METADATA', 'HAVE_CURRENT_DATA', 'HAVE_FUTURE_DATA', 'HAVE_ENOUGH_DATA'].forEach(function (k, i) { MP[k] = i; HTMLMediaElement[k] = i; });
+  g.HTMLMediaElement = HTMLMediaElement; g.HTMLVideoElement = HTMLMediaElement; g.HTMLAudioElement = HTMLMediaElement;
+  g.Audio = function (src) { var a = doc.createElement('audio'); if (src !== undefined) a.setAttribute('src', src); return a; };
+  D.setProtos(P, TP, TP, g.__axiom, MP);
 })(this);

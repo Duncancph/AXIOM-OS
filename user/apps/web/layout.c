@@ -173,6 +173,22 @@ static void control_size(struct node *n, int cbw, int *w, int *h, int *base) {
     int W = 150, H = 26;
     const struct style *cs = ctl_style();
     if (!fc) { *w = 0; *h = 0; *base = 0; return; }
+    if (fc->type == FC_MEDIA) {                          /* <video>/<audio>: its own size, scaled to the width the page gives it */
+        int bw, bh; media_box(n, &bw, &bh);
+        W = bw; H = bh;
+        if (st->w.t == L_PX) W = st->w.v; else if (st->w.t == L_PCT) W = rlen(st->w, cbw) - hextra(st, cbw);
+        int maxw = st->maxw.t == L_PX || st->maxw.t == L_PCT ? rlen(st->maxw, cbw) : -1;
+        if (maxw >= 0 && W > maxw) W = maxw;
+        if (W > cbw - hextra(st, cbw) && cbw > 60) W = cbw - hextra(st, cbw);
+        if (W < 20) W = 20;
+        if (n->tag == T_VIDEO) {
+            if (st->h.t == L_PX && st->h.v > 0) H = st->h.v;
+            else if (W != bw && bw > 0) H = (int)((long)bh * W / bw);
+        }
+        if (H < 20) H = 20;
+        *w = W; *h = H; *base = n->tag == T_AUDIO ? H / 2 + 6 : H;
+        return;
+    }
     switch (fc->type) {
     case FC_CHECKBOX: case FC_RADIO: W = 15; H = 15; break;
     case FC_SUBMIT: case FC_RESET: case FC_BUTTON: case FC_IMAGE: case FC_FILE:
@@ -197,7 +213,8 @@ static void control_size(struct node *n, int cbw, int *w, int *h, int *base) {
     *w = W; *h = H;
     *base = fc->type == FC_CHECKBOX || fc->type == FC_RADIO ? 13 : fc->type == FC_TEXTAREA ? 17 : H / 2 + 5;
 }
-static bool is_control(const struct node *n) { return n->tag == T_INPUT || n->tag == T_TEXTAREA || n->tag == T_SELECT || n->tag == T_BUTTON; }
+static bool is_control(const struct node *n) { return n->tag == T_INPUT || n->tag == T_TEXTAREA || n->tag == T_SELECT || n->tag == T_BUTTON ||
+                                                     ((n->tag == T_VIDEO || n->tag == T_AUDIO) && n->fc); }
 
 /* ---------------- intrinsic widths (min-content, max-content), cached per layout ---------------- */
 static void intrinsic(struct node *e, int cbw, int *mn, int *mx);
