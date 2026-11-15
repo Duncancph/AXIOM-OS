@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 103
-notes New window title bars (thin buttons on the right); Arc loads large style sheets (YouTube's layout starts to work)
-file kernel b103/thane.elf.gz 18066056 5758222035237eb8d4ffdabc5c7e0ff7c715b00d3b319ce17d32f5091bfad5ad
-file initrd b103/initrd.tar.gz 1280000 8dd6d704f39d0f0c0a63ad3abfbd7ef9694e7fc920d6c0b2012de66be3f2f963
-file bootx64 b103/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b103/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022100fe3a1b66b4f25d7ba461be46b94de13d61ed5ac9c9a5a9b3060b63baddc9884d022051044c08034620de655ab4b3ba4fc9813313505107c9852a3f0dc359212921c8
+build 104
+notes Arc: absolute, fixed and relative positioning (site headers, overlays and badges sit where they should)
+file kernel b104/thane.elf.gz 18090632 8341ab95dc957ac17bf61dc9ea296cc6e851d827b78f24184304b649a6277031
+file initrd b104/initrd.tar.gz 1280000 8dd6d704f39d0f0c0a63ad3abfbd7ef9694e7fc920d6c0b2012de66be3f2f963
+file bootx64 b104/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b104/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 30450220649b3c3bdf5a985acd5311f8d3b7f6fdb0c700239f8f01a4c00b22f92a71b492022100a0195b39fbab0da0caa383292477e53c4abbdbe4eb73a3a3b653bcb9c5e53108
