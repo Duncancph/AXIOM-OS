@@ -179,6 +179,10 @@ def g_music(d, S, u):
     d.rectangle([u(.70), u(.16), u(.70) + w, u(.62)], fill=W)
     d.polygon([(u(.36), u(.24)), (u(.76), u(.16)), (u(.76), u(.27)), (u(.36), u(.35))], fill=W)
 
+def g_video(d, S, u):
+    d.rounded_rectangle([u(.16), u(.24), u(.84), u(.76)], radius=u(.08), outline=W, width=max(2, u(.06)))
+    d.polygon([(u(.42), u(.36)), (u(.42), u(.64)), (u(.64), u(.50))], fill=W)
+
 ICONS = [   # name, gradient top, bottom, glyph
     ("folder", "#2C2C2C", "#141414", g_folder),
     ("terminal", "#2C2C2C", "#141414", g_terminal),
@@ -196,6 +200,7 @@ ICONS = [   # name, gradient top, bottom, glyph
     ("note", "#2C2C2C", "#141414", g_note),
     ("calendar", "#2C2C2C", "#141414", g_calendar),
     ("music", "#2C2C2C", "#141414", g_music),
+    ("video", "#2C2C2C", "#141414", g_video),
     ("chat", "#2C2C2C", "#141414", g_chat),
 ]
 

@@ -121,6 +121,7 @@ const char *app_for_file(const char *path) {
     if (ext_is(path, "png jpg jpeg gif bmp")) return "viewer";
     if (ext_is(path, "html htm xhtml")) return "web";
     if (ext_is(path, "mp3")) return "music";
+    if (ext_is(path, "mp4") || ext_is(path, "m4v") || ext_is(path, "mov")) return "video";
     if (ext_is(path, "elf bin img iso zip gz tgz tar xz 7z rar exe dll so o a wav ogg flac mp4 mkv avi mov pdf doc docx xls xlsx ppt pptx")) return 0;
     return "editor";
 }

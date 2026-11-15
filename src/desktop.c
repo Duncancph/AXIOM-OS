@@ -121,7 +121,7 @@ static int app_cat(int a) {
     return 0;
 }
 static int app_order(int a) {                      /* the order within a group */
-    static const char *ord[] = { "files", "web", "notes", "calendar", "music", "viewer", "calc",
+    static const char *ord[] = { "files", "web", "notes", "calendar", "music", "video", "viewer", "calc",
                                  "settings", "terminal", "monitor", "network", "bluetooth", "about" };
     for (unsigned i = 0; i < sizeof ord / sizeof ord[0]; i++) if (!strcmp(apps_get(a)->id, ord[i])) return i;
     return 100 + a;

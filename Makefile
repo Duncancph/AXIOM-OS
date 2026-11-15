@@ -104,6 +104,20 @@ build/u/aud_%.o: user/lib/audio/%.c $(wildcard user/lib/audio/*.h)
 build/user/music.elf: build/u/app_music.o $(AUDIO_OBJS) $(U_LIB) $(NETLIB) $(IMGLIB) user/user.ld
 	@mkdir -p $(dir $@)
 	$(LD) -n -T user/user.ld -nostdlib -z max-page-size=0x1000 -z noexecstack --no-warn-rwx-segments -o $@ $(U_LIB) $< $(AUDIO_OBJS) $(NETLIB) $(IMGLIB) $(LIBGCC)
+# video: the H.264 decoder, the MP4 reader and the AAC decoder (floating point too)
+VIDEO_OBJS := $(patsubst user/lib/video/%.c,build/u/vid_%.o,$(wildcard user/lib/video/*.c)) $(patsubst user/lib/media/%.c,build/u/med_%.o,$(wildcard user/lib/media/*.c))
+build/u/vid_%.o: user/lib/video/%.c $(wildcard user/lib/video/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(UCFLAGS_FP) -c $< -o $@
+build/u/med_%.o: user/lib/media/%.c $(wildcard user/lib/media/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(UCFLAGS_FP) -c $< -o $@
+build/u/app_video.o: user/apps/video.c $(wildcard user/lib/video/*.h user/lib/media/*.h) $(HDRS)
+	@mkdir -p $(dir $@)
+	$(CC) $(UCFLAGS) -c $< -o $@
+build/user/video.elf: build/u/app_video.o $(VIDEO_OBJS) $(U_LIB) $(NETLIB) $(IMGLIB) user/user.ld
+	@mkdir -p $(dir $@)
+	$(LD) -n -T user/user.ld -nostdlib -z max-page-size=0x1000 -z noexecstack --no-warn-rwx-segments -o $@ $(U_LIB) $< $(VIDEO_OBJS) $(NETLIB) $(IMGLIB) $(LIBGCC)
 build/gen/dom_prelude.h: user/apps/web/dom_prelude.js tools/embed.py
 	@mkdir -p $(dir $@)
 	python3 tools/embed.py $< $@ dom_prelude
