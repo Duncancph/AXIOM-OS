@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 106
-notes Arc: clearer reasons when a page can't load (Netflix), more redirects and larger headers allowed; MutationObserver and ResizeObserver for scripts
-file kernel b106/thane.elf.gz 18107016 2f0a332fa49554ab6f182e421de9485a97e0ce09212701ff4a188d8b4e0796a0
-file initrd b106/initrd.tar.gz 1280000 c7d73fa2aa6239de58491e4f48dd51755f31e04e828ec340ed06524fc3cf0789
-file bootx64 b106/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b106/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 304502206916c85ac5041235659bae6c45b74921479bebfc809b2a8a56369a210f61cd00022100da8e98f1897c61b71589a59852508abae7072499e3add293a96b3c16b989ba0b
+build 107
+notes Arc: unpacks compressed pages the way browsers do (netflix.com)
+file kernel b107/thane.elf.gz 18131000 2a36020e46d8f728948c4d1a8d7288d0f172d8986e01aa04eda6a1f526b9183a
+file initrd b107/initrd.tar.gz 1280000 a47fb9ddcd6647eccfeec474e3971d434556854e6c73030f0c8b5d24a80799d3
+file bootx64 b107/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b107/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022100d90a91118d77569303a7f5440670dbbf816222eaee873779b6c82caf9385656702200fa90ff8485291a5d7fc907d1c9382eb2c9bcdd6c9b6b2ebabc227f3a0ad912b
