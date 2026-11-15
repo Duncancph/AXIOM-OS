@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 72
-notes Spare memory caches files (faster opening); Web reuses pictures, styles and scripts
-file kernel b72/thane.elf.gz 14673600 b35fdf7630f4783a1367fdec076a07eab8ea35407f70a824dfe944a4b78d5b7b
-file initrd b72/initrd.tar.gz 1269760 862168cc744b526454d4eddb791f49fd02226bb19deb7ddd4afa8eebfed9af74
-file bootx64 b72/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b72/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 304402200d9feab327bc7f80c1883f29213cf6dcd9d185698608ff375fac686cfa7e1116022058aa4d7b0f5e5466f892889deb76d31e8c5debe44b15eec3297ad6dbd9feb6e3
+build 74
+notes Settings > Display can switch to the monitor's full size (1920x1080)
+file kernel b74/thane.elf.gz 14702360 70a1cae003f2c46ba058ba54ee33f3f6deb6f24af8eeb1455f2961f7b3aab46f
+file initrd b74/initrd.tar.gz 1280000 d88e6ecc5103c031c06e5c26cdc0037ffc04d5d72d3d69d99350ba7082e3526e
+file bootx64 b74/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b74/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022100951d35fbd051e8b4933e936823061636520eca71ae66750b20b55ea19c4357f7022073a65a71fc18b1c90c0f904baa1539d0aa2d4ff891f84ac175546cb8dcb91351
