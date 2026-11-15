@@ -159,18 +159,32 @@ static void layout(int fw, int fh) {
     if (vw > 4096) vw = 4096;
     vx = (aw - vw) / 2; vy = (ah - vh) / 2;
 }
+static int xfr[4096];
+/* scale the picture to the window smoothly: brightness (Y) bilinear, colour (U, V) from the nearest sample */
 static void blit(const struct h264_frame *f) {
     struct canvas *c = &a.c;
     layout(f->width, f->height);
     make_tables(f->matrix, f->full_range);
-    for (int x = 0; x < vw; x++) xmap[x] = (int)((int64_t)x * f->width / vw);
+    int fw = f->width, fh = f->height;
+    for (int x = 0; x < vw; x++) {                       /* source position of each column, in 1/256 pixels (pixel centres) */
+        int p = (int)(((int64_t)(2 * x + 1) * fw * 128) / vw) - 128; if (p < 0) p = 0;
+        if (p > (fw - 1) * 256) p = (fw - 1) * 256;
+        xmap[x] = p >> 8; xfr[x] = p & 255;
+    }
     for (int y = 0; y < vh; y++) {
-        int sy = (int)((int64_t)y * f->height / vh);
-        const uint8_t *Y = f->y + (long)sy * f->stride_y, *U = f->u + (long)(sy >> 1) * f->stride_uv, *V = f->v + (long)(sy >> 1) * f->stride_uv;
+        int q = (int)(((int64_t)(2 * y + 1) * fh * 128) / vh) - 128; if (q < 0) q = 0;
+        if (q > (fh - 1) * 256) q = (fh - 1) * 256;
+        int sy = q >> 8, fy = q & 255, sy2 = sy + 1 < fh ? sy + 1 : sy;
+        const uint8_t *Y0 = f->y + (long)sy * f->stride_y, *Y1 = f->y + (long)sy2 * f->stride_y;
+        int cy = (sy + (fy >= 128)) >> 1; if (cy > (fh - 1) >> 1) cy = (fh - 1) >> 1;
+        const uint8_t *U = f->u + (long)cy * f->stride_uv, *V = f->v + (long)cy * f->stride_uv;
         uint32_t *d = c->px + (long)(vy + y) * c->stride + vx;
         for (int x = 0; x < vw; x++) {
-            int sx = xmap[x], cx = sx >> 1;
-            int yy = tY[Y[sx]], u = U[cx], v = V[cx];
+            int sx = xmap[x], fx = xfr[x], sx2 = sx + 1 < fw ? sx + 1 : sx;
+            int top = Y0[sx] * (256 - fx) + Y0[sx2] * fx, bot = Y1[sx] * (256 - fx) + Y1[sx2] * fx;
+            int yv = (top * (256 - fy) + bot * fy + 32768) >> 16;
+            int cx = (sx + (fx >= 128)) >> 1; if (cx > (fw - 1) >> 1) cx = (fw - 1) >> 1;
+            int yy = tY[yv], u = U[cx], v = V[cx];
             d[x] = clamp8(yy + tRV[v]) << 16 | clamp8(yy + tGU[u] + tGV[v]) << 8 | clamp8(yy + tBU[u]);
         }
     }
