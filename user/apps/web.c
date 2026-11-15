@@ -374,6 +374,30 @@ static struct imgent *next_image(void) {
     return first;
 }
 static uint64_t last_layout_t;
+/* a .svg file: parsed into a little tree and drawn (at twice its size when small, so it scales well) */
+static struct node *find_svg(struct node *n, int depth) {
+    if (n->type == N_ELEM && n->tag == T_SVG) return n;
+    for (struct node *c = n->first; c && depth < 50; c = c->next) { struct node *r = find_svg(c, depth + 1); if (r) return r; }
+    return 0;
+}
+static bool svg_file(struct imgent *e, char *b, long n) {
+    bool looks = false;
+    for (long i = 0; i + 4 < n && i < 4096 && !looks; i++) if (b[i] == '<' && (b[i + 1] == 's' || b[i + 1] == 'S') && (b[i + 2] == 'v' || b[i + 2] == 'V') && (b[i + 3] == 'g' || b[i + 3] == 'G')) looks = true;
+    if (!looks || n > (4l << 20)) return false;
+    struct doc *t = calloc(1, sizeof *t);
+    if (!t) return false;
+    html_parse(t, b, n);
+    struct node *s = find_svg(t->root, 0);
+    bool ok = false;
+    if (s) {
+        int w, h; svg_size(s, &w, &h);
+        int k = w <= 256 && h <= 256 ? 2 : 1;
+        uint32_t *px = svg_render(s, w * k, h * k, 0);
+        if (px) { e->px = px; e->pw = w * k; e->ph = h * k; e->w = w; e->h = h; e->opaque = false; e->state = IS_OK; img_bytes += (long)e->pw * e->ph * 4; ok = true; }
+    }
+    ar_reset(&t->ar); free(t);
+    return ok;
+}
 static void load_image(struct imgent *e) {
     e->state = IS_LOADING;
     char ct[80]; char *b; int status;
@@ -382,7 +406,7 @@ static void load_image(struct imgent *e) {
     if (pend || quit) { free(b); e->state = IS_PENDING; return; }
     if (abort_fetch) { free(b); e->state = IS_FAILED; images_stopped = true; return; }
     if (n <= 0 || !b || (status && status >= 400)) { free(b); e->state = IS_FAILED; need_layout = true; return; }
-    if (!decode_into(e, (const uint8_t *)b, n)) e->state = IS_FAILED;
+    if (!decode_into(e, (const uint8_t *)b, n) && !svg_file(e, b, n)) e->state = IS_FAILED;
     free(b);
     need_layout = true;
 }
@@ -638,6 +662,8 @@ int add_link(const char *href, struct node *n) {
     return nlinks++;
 }
 
+static struct imgent *svgs; static uint32_t svg_gen_now = 1;   /* the page's <svg> elements; svg_gen_now changes when the page does */
+static void svgs_free(void) { while (svgs) { struct imgent *e = svgs; svgs = e->next; free(e->px); free(e); } }
 static void init_node(struct doc *d, struct node *c) {
         if ((c->tag == T_A || c->tag == T_AREA) && node_attr(c, "href")) {
             static char u[600]; resolve_url(d->base, node_attr(c, "href"), u, sizeof u);
@@ -646,6 +672,10 @@ static void init_node(struct doc *d, struct node *c) {
         }
         if (c->tag == T_INPUT || c->tag == T_TEXTAREA || c->tag == T_SELECT || c->tag == T_BUTTON) form_init_control(d, c);
         if (c->tag == T_VIDEO || c->tag == T_AUDIO) media_attach(d, c);
+        if (c->tag == T_SVG && !c->img) {                /* drawn by svg.c at the size it's shown */
+            struct imgent *e = calloc(1, sizeof *e);
+            if (e) { e->svg = c; e->state = IS_OK; svg_size(c, &e->w, &e->h); e->next = svgs; svgs = e; c->img = e; }
+        }
         if (c->tag == T_IMG) {
             const char *src = node_attr(c, "src");
             const char *lazy = node_attr(c, "data-src"); if (!lazy) lazy = node_attr(c, "data-original");
@@ -829,6 +859,7 @@ static void show_doc(struct doc *d) {
     struct doc *old = doc;
     js_page_end();                                         /* the old page's scripts stop */
     media_page_end();                                      /* and its videos and sounds */
+    svgs_free();
     doc = d; web_doc = d;
     free_doc(old);
     nlinks = 0; hover_link = -1; focus = 0; popup = 0;
@@ -1207,6 +1238,11 @@ static void blit_img(struct canvas *c, const uint32_t *px, int w, int h, int x, 
 
 static void draw_image(struct canvas *c, struct ditem *it, int x, int y) {
     struct imgent *e = it->n->img;
+    if (e && e->svg && it->w > 0 && it->h > 0 && (!e->px || e->pw != it->w || e->ph != it->h || e->svg_gen != svg_gen_now)) {
+        free(e->px);
+        e->px = svg_render(e->svg, it->w, it->h, it->n->st ? it->n->st->color : 0);
+        e->pw = it->w; e->ph = it->h; e->svg_gen = svg_gen_now; e->opaque = false;
+    }
     if (e && e->state == IS_OK && e->px && it->w > 0 && it->h > 0) {
         const uint32_t *px = e->px;
         if (e->pw != it->w || e->ph != it->h) {
@@ -1565,7 +1601,7 @@ void web_requeue_event(const struct dunc_event *e) {
 }
 void web_dom_changed(struct node *added) {
     if (added && doc && added->type == N_ELEM) { init_node(doc, added); walk_init(doc, added, 0); }
-    need_cascade = true; need_layout = true; styles_scan = true;
+    need_cascade = true; need_layout = true; styles_scan = true; svg_gen_now++;
 }
 void web_text_changed(struct node *n) {                    /* a <button>'s label is drawn from its text */
     for (struct node *p = n; p && p->type == N_ELEM; p = 0) if (p->tag == T_STYLE && p->css_done) styles_reload = true;   /* a sheet was rewritten */

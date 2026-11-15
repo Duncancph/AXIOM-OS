@@ -1,0 +1,11 @@
+<!doctype html><html><body style="font-family:sans-serif">
+<h3>SVG test</h3>
+<p>Inline: <svg width="200" height="120" viewBox="0 0 200 120"><rect x="5" y="5" width="60" height="40" rx="8" fill="#e33"/><circle cx="100" cy="25" r="20" fill="none" stroke="#06c" stroke-width="4"/><path d="M140 10 L190 10 L165 45 Z" fill="#2a2"/><path d="M10 70 C 40 40, 60 100, 90 70 S 140 100, 160 70" fill="none" stroke="#000" stroke-width="3"/></svg> after</p>
+<p style="color:#c00">Icon in red text <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M11 2a9 9 0 105.641 16.01.966.966 0 00.152.197l3.5 3.5a1 1 0 101.414-1.414l-3.5-3.5a1 1 0 00-.197-.153A8.96 8.96 0 0020 11a9 9 0 00-9-9Zm0 2a7 7 0 110 14 7 7 0 010-14Z"/></svg> and as a file: <img src="search.svg" width="48" height="48"> <img src="a.svg"></p>
+<p>Made by a script: <span id="s" style="display:inline-block;width:64px;height:64px;color:#06c"></span></p>
+<script>
+var NS = 'http://www.w3.org/2000/svg', svg = document.createElementNS(NS, 'svg');
+svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('fill', 'currentColor'); svg.style.width = '100%'; svg.style.height = '100%';
+var p = document.createElementNS(NS, 'path'); p.setAttribute('d', 'M12 2l3 7h7l-5.5 4.5 2 7.5L12 17l-6.5 4 2-7.5L2 9h7z'); svg.appendChild(p);
+document.getElementById('s').appendChild(svg);
+</script></body></html>

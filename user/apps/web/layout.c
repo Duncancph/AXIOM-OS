@@ -100,6 +100,7 @@ static void metrics(const struct style *st, int *asc, int *desc, int *gasc, int 
     *asc = a; *desc = d;
 }
 
+static bool is_pic(const struct node *n) { return n->tag == T_IMG || n->tag == T_SVG; }   /* laid out as a picture */
 static bool is_ws(char c) { return c == ' ' || c == '\n' || c == '\t' || c == '\r' || c == '\f'; }
 
 /* ---------------- lengths ---------------- */
@@ -126,7 +127,8 @@ static int attr_px(const struct node *n, const char *a) {
 static void img_size(struct node *n, int cbw, int *w, int *h) {
     const struct style *st = n->st;
     int iw = 0, ih = 0;
-    if (n->img && n->img->w > 0 && n->img->h > 0) { iw = n->img->w; ih = n->img->h; }
+    if (n->tag == T_SVG) { svg_size(n, &iw, &ih); if (n->img) { n->img->w = iw; n->img->h = ih; } }
+    else if (n->img && n->img->w > 0 && n->img->h > 0) { iw = n->img->w; ih = n->img->h; }
     int W = -1, H = -1;
     if (st->w.t == L_PX) W = st->w.v; else if (st->w.t == L_PCT) W = rlen(st->w, cbw); else W = attr_px(n, "width");
     if (st->h.t == L_PX) H = st->h.v; else H = attr_px(n, "height");
@@ -283,7 +285,7 @@ static void intrinsic(struct node *e, int cbw, int *mn, int *mx) {
     int a = 0, b = 0;
     if (!st || st->display == D_NONE) { *mn = *mx = 0; return; }
     int ex = hextra(st, cbw);
-    if (e->tag == T_IMG) { int w, h; img_size(e, 100000, &w, &h); a = b = w + ex; if (st->maxw.t == L_PCT || st->w.t == L_PCT) a = 0; }
+    if (is_pic(e)) { int w, h; img_size(e, 100000, &w, &h); a = b = w + ex; if (st->maxw.t == L_PCT || st->w.t == L_PCT) a = 0; }
     else if (is_control(e)) { int w, h, bs; control_size(e, 100000, &w, &h, &bs); a = b = w + ex; }
     else if (st->display == D_TABLE || st->display == D_INLINE_TABLE) { table_intrinsic(e, cbw, &a, &b); a += ex; b += ex; }
     else if (st->w.t == L_PX) {
@@ -661,14 +663,14 @@ static void flow_node_(struct fctx *c, struct node *n, struct ictx ic) {
             if (st->clear && c->fl) { int b = fl_clear(c->fl, st->clear); if (b > c->y) c->y = b; }
             return;
         }
-        if (n->tag == T_IMG) { atomic_image(c, n, &in); return; }
+        if (is_pic(n)) { atomic_image(c, n, &in); return; }
         if (is_control(n)) { atomic_control(c, n, &in); return; }
         inline_element(c, n, ic);
         return;
     }
     if (d == D_INLINE_BLOCK || d == D_INLINE_TABLE || d == D_INLINE_FLEX || d == D_INLINE_GRID) {
         in.st = st; in.deco = ic.deco | st->deco; if (n->link >= 0) in.link = n->link;
-        if (n->tag == T_IMG) { atomic_image(c, n, &in); return; }
+        if (is_pic(n)) { atomic_image(c, n, &in); return; }
         if (is_control(n)) { atomic_control(c, n, &in); return; }
         atomic_block(c, n, &in);
         return;
@@ -1004,7 +1006,7 @@ __attribute__((noinline)) static bool layout_flex(struct fctx *cc, struct node *
             struct ictx in = ic; in.bgst = 0;
             const struct style *is = items[k]->st;
             int ml = is->m[3].t == L_AUTO ? 0 : rlen(is->m[3], W), mr = is->m[1].t == L_AUTO ? 0 : rlen(is->m[1], W);
-            if (items[k]->tag == T_IMG || is_control(items[k])) {
+            if (is_pic(items[k]) || is_control(items[k])) {
                 struct fctx lc = t; lc.bst = st;
                 flow_node(&lc, items[k], in);
                 flush_line(&lc, false);
@@ -1039,7 +1041,7 @@ __attribute__((noinline)) static void do_float(struct fctx *c, struct node *n, s
     if (!c->fl || depth >= MAX_DEPTH) return;
     int avail = c->width, ow;
     int ml = st->m[3].t == L_AUTO ? 0 : rlen(st->m[3], avail), mr = st->m[1].t == L_AUTO ? 0 : rlen(st->m[1], avail);
-    if (n->tag == T_IMG) { int w, h; img_size(n, avail, &w, &h); ow = w + hextra(st, avail); }
+    if (is_pic(n)) { int w, h; img_size(n, avail, &w, &h); ow = w + hextra(st, avail); }
     else if ((st->w.t == L_PX || st->w.t == L_PCT) && st->display != D_TABLE)
         ow = rlen(st->w, avail) + hextra(st, avail) - (st->bsizing ? rlen(st->p[1], avail) + rlen(st->p[3], avail) + bwid(st, 1) + bwid(st, 3) : 0);
     else { int mn, mx; intrinsic(n, avail, &mn, &mx); ow = mx < avail ? mx : avail; if (ow < mn) ow = mn; if (st->display == D_TABLE && (st->w.t == L_PX || st->w.t == L_PCT)) { int tw = rlen(st->w, avail) + ml + mr; if (tw > ow) ow = tw; } }
@@ -1080,7 +1082,7 @@ __attribute__((noinline)) static void replaced_block(struct fctx *cc, struct nod
     for (int i = 0; i < 4; i++) { flat.m[i].t = L_PX; flat.m[i].v = 0; flat.p[i].t = L_PX; flat.p[i].v = 0; flat.bs[i] = 0; flat.bw[i] = 0; }
     flat.w.t = L_PX; flat.w.v = w; flat.maxw.t = L_NONE;
     n->st = &flat;
-    if (n->tag == T_IMG) atomic_image(cc, n, &ri); else atomic_control(cc, n, &ri);
+    if (is_pic(n)) atomic_image(cc, n, &ri); else atomic_control(cc, n, &ri);
     n->st = keep;
 }
 
@@ -1097,7 +1099,7 @@ static int place_cell(struct node *it, struct ictx ic, const struct style *pst, 
     struct ictx in = ic; in.bgst = 0;
     const struct style *is = it->st;
     int ml = is->m[3].t == L_AUTO ? 0 : rlen(is->m[3], cw), mr = is->m[1].t == L_AUTO ? 0 : rlen(is->m[1], cw);
-    if (it->tag == T_IMG || is_control(it)) {
+    if (is_pic(it) || is_control(it)) {
         struct fctx lc = t; lc.bst = pst;
         flow_node(&lc, it, in); flush_line(&lc, false);
         return lc.y - y;
@@ -1293,7 +1295,7 @@ static void layout_block_(struct fctx *c, struct node *n, struct ictx ic, int fo
         int m = rlen(st->maxw, cbw) - (st->bsizing ? frame : 0);
         if (w > m) { w = m; narrowed = true; }
     }
-    if (n->tag == T_IMG && forced_w < 0) {                  /* a block-level picture: as wide as the picture */
+    if (is_pic(n) && forced_w < 0) {                  /* a block-level picture: as wide as the picture */
         int iw, ih; img_size(n, cbw - frame, &iw, &ih);
         w = iw; narrowed = true;
     }
@@ -1343,7 +1345,7 @@ static void layout_block_(struct fctx *c, struct node *n, struct ictx ic, int fo
     struct ictx in = ic; in.st = st; in.deco = ic.deco | st->deco; in.bgst = 0; if (n->link >= 0) in.link = n->link;
     if (!st->vis) in.hidden = true;
     depth++;
-    if (n->tag == T_IMG || is_control(n)) replaced_block(&cc, n, &in, w);   /* a replaced element shown as a block */ else {
+    if (is_pic(n) || is_control(n)) replaced_block(&cc, n, &in, w);   /* a replaced element shown as a block */ else {
         bool flexd = st->display == D_FLEX || st->display == D_INLINE_FLEX, done = false;
         if (flexd && !st->flex_col) done = layout_flex(&cc, n, in);
         else if (flexd && (st->align_items || st->rgap)) done = layout_flex_col(&cc, n, in);

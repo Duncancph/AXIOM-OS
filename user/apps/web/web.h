@@ -182,9 +182,12 @@ struct imgent {
     uint32_t *px; int pw, ph;         /* decoded pixels (maybe reduced to pw x ph) */
     uint32_t *spx; int sw, sh;        /* a scaled copy for the size it's shown at */
     bool opaque; bool used;
+    struct node *svg; uint32_t svg_gen; /* an <svg> element drawn into px at the size it's shown (svg.c) */
     struct imgent *next;
 };
-struct imgent *img_get(const char *url);          /* find or add a cache entry */
+struct imgent *img_get(const char *url);
+void svg_size(const struct node *svg, int *w, int *h);                 /* the size an <svg> asks for */
+uint32_t *svg_render(struct node *svg, int w, int h, uint32_t cur);    /* a new w x h picture of it (malloc) */          /* find or add a cache entry */
 
 enum { FC_TEXT, FC_PASSWORD, FC_HIDDEN, FC_SUBMIT, FC_RESET, FC_BUTTON, FC_CHECKBOX, FC_RADIO, FC_NUMBER, FC_TEXTAREA, FC_SELECT, FC_IMAGE, FC_FILE, FC_MEDIA };
 struct fctl {

@@ -414,10 +414,10 @@ void html_parse(struct doc *d, const char *s, long n) {
             }
         }
         insert_element(e);
-        if (selfclose && e->tag == T_UNKNOWN && sp > 1 && top() == e) sp--;     /* <foo/> in XHTML-ish pages */
+        if (selfclose && (e->tag == T_UNKNOWN || e->tag == T_SVG) && sp > 1 && top() == e) sp--;     /* <foo/> in XHTML-ish pages */
         /* raw text elements */
         if (t == T_SCRIPT || t == T_STYLE || t == T_TITLE || t == T_TEXTAREA || t == T_XMP || t == T_NOFRAMES || t == T_IFRAME ||
-            t == T_PLAINTEXT || t == T_SVG || t == T_MATH) {
+            t == T_PLAINTEXT || t == T_MATH) {
             long ts, e2 = t == T_PLAINTEXT ? (ts = n) : find_end(s, i, n, name, &ts);
             if (selfclose && (t == T_SCRIPT || t == T_SVG || t == T_MATH || t == T_IFRAME)) { if (sp > 1 && top() == e) sp--; continue; }
             if (t == T_STYLE || t == T_SCRIPT) { e->text = ar_strndup(&d->ar, s + i, ts - i); e->tlen = ts - i; }
@@ -437,7 +437,7 @@ void html_parse(struct doc *d, const char *s, long n) {
                 long a0 = i; if (t == T_TEXTAREA && a0 < ts && s[a0] == '\n') a0++;
                 if (t == T_TEXTAREA) add_text_decoded(s + a0, ts - a0); else add_text(s + a0, ts - a0);
             }
-            /* script, style, iframe, svg, math, noframes: no text (no scripts, frames or vector images) */
+            /* script, style, iframe, math, noframes: no text */
             if (sp > 1 && top() == e) sp--;
             i = e2; continue;
         }

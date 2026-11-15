@@ -124,6 +124,10 @@ build/gen/dom_prelude.h: user/apps/web/dom_prelude.js tools/embed.py
 build/u/web_dom.o: user/apps/web/dom.c build/gen/dom_prelude.h user/apps/web/web.h user/apps/web/js/js.h $(HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(UCFLAGS_FP) -Ibuild/gen -c $< -o $@
+# SVG drawing uses floating point
+build/u/web_svg.o: user/apps/web/svg.c user/apps/web/web.h $(HDRS)
+	@mkdir -p $(dir $@)
+	$(CC) $(UCFLAGS_FP) -c $< -o $@
 # <video>/<audio>: the media player part of Web uses the decoders (floating point)
 build/u/web_media.o: user/apps/web/media.c user/apps/web/web.h $(wildcard user/lib/video/*.h user/lib/media/*.h user/lib/audio/*.h) $(HDRS)
 	@mkdir -p $(dir $@)
