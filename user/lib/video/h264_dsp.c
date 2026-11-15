@@ -310,7 +310,7 @@ static void luma_qpel(uint8_t *dst, int ds, const uint8_t *src, int ss, int fx, 
 }
 
 void h264_mc_luma(uint8_t *dst, int ds, const struct h264_pic *ref, int stride, int pw, int ph,
-                  int x, int y, int mvx, int mvy, int w, int h, uint8_t *edge, int16_t *tmp) {
+                  int x, int y, int mvx, int mvy, int w, int h, uint8_t *edge) {
     int xi = x + (mvx >> 2), yi = y + (mvy >> 2);
     const uint8_t *plane = ref->plane[0];
     const uint8_t *src;

@@ -191,6 +191,8 @@ CASES = [
     ("cells_cavlc", "cells", "320x240", 20, ["-profile:v", "baseline"], "", False),
     ("life_cabac", "life", "320x240", 20, ["-profile:v", "high"], "bframes=2", False),
     ("mbtree_off_aq", "rot", "320x240", 24, ["-profile:v", "high"], "mbtree=0:aq-mode=2:bframes=2", False),
+    ("partitions_all", "rot", "352x288", 30, ["-profile:v", "high"], "partitions=all:subme=9:bframes=3:ref=4:direct=temporal", True),
+    ("partitions_all_spatial", "mandel", "352x288", 30, ["-profile:v", "main"], "partitions=all:subme=10:trellis=2:bframes=3:ref=6", False),
 ]
 for prof in ("baseline", "main", "high"):
     for preset in ("ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"):
@@ -754,7 +756,8 @@ def copy_pps(rb, bipred=None):
     if c.ue(): raise ValueError("slice groups")
     info["nref"] = [c.ue() + 1, c.ue() + 1]
     info["wp"] = c.u(1)
-    info["bipred"] = c.u(2, bipred) if bipred is None else (c.u(2, bipred), bipred)[1]
+    info["bipred"] = c.u(2, bipred)
+    if bipred is not None: info["bipred"] = bipred
     c.se(); c.se(); c.se()
     info["dfc"] = c.u(1); c.u(1)
     if c.u(1): raise ValueError("redundant_pic_cnt")
@@ -828,7 +831,7 @@ def test_rewritten_b():
     # the syntax does not change
     for direct in ("spatial", "temporal"):
         case = ("noinfer_src_" + direct, "rot", "320x240", 30, ["-profile:v", "main"],
-                "bframes=3:b-pyramid=normal:ref=3:direct=%s:weightp=0" % direct, True)
+                "bframes=3:b-pyramid=normal:ref=3:direct=%s:weightp=0:partitions=all:subme=9" % direct, True)
         st = {}
         def tr(i, nal, lmfn, cabac, dfc):
             t = nal[0] & 31
@@ -879,7 +882,8 @@ def rewritten_test_generic(label, case, transform):
     if r.returncode or not eq or na == 0:
         fail("%s: mismatch with ffmpeg (%d vs %d frames, first diff %s) %s" % (label, na, nb, first, r.stderr[-300:]))
         return
-    print("%s: bit-exact with ffmpeg, %d frames" % (label, na))
+    changed = open(refp, "rb").read() != open(base + ".ref.yuv", "rb").read()
+    print("%s: bit-exact with ffmpeg, %d frames (%s)" % (label, na, "pictures differ from the original stream" if changed else "same pictures as the original"))
 
 
 def test_pcm():

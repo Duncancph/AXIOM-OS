@@ -21,8 +21,9 @@ app_images:
     APP notes, "Notes", 0
     APP calendar, "Calendar", 0
     APP music, "Music", 0
+    APP video, "Video", 0
     APP about, "About AXIOM", 0
-app_count: dd 14
+app_count: dd 15
 
 id_files: db "files", 0
 title_files: db "Files", 0
@@ -48,6 +49,8 @@ id_calendar: db "calendar", 0
 title_calendar: db "Calendar", 0
 id_music: db "music", 0
 title_music: db "Music", 0
+id_video: db "video", 0
+title_video: db "Video", 0
 id_viewer: db "viewer", 0
 title_viewer: db "Viewer", 0
 id_web: db "web", 0
@@ -89,6 +92,9 @@ bin_calendar_end:
 
 bin_music: incbin "build/user/music.elf"
 bin_music_end:
+
+bin_video: incbin "build/user/video.elf"
+bin_video_end:
 
 bin_viewer: incbin "build/user/viewer.elf"
 bin_viewer_end:

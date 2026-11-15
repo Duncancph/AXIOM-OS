@@ -8,7 +8,7 @@ UCFLAGS := $(COMMON) -mcmodel=large
 LDFLAGS := -n -T src/linker.ld -nostdlib -z max-page-size=0x1000 --no-warn-rwx-segments -z noexecstack
 LIBGCC  := $(shell $(CC) -print-libgcc-file-name)
 
-APPS    := files about terminal monitor bluetooth network calc sandbox settings viewer web notes calendar music
+APPS    := files about terminal monitor bluetooth network calc sandbox settings viewer web notes calendar music video
 REPO_APPS := editor clock
 K_SRCS  := $(filter-out src/desktop_highland.c,$(wildcard src/*.c)) common/gfx.c common/str.c common/inet.c user/lib/crypto/sha2.c user/lib/crypto/aead.c user/lib/crypto/bn.c user/lib/crypto/ecc.c user/lib/img/pngenc.c user/lib/img/inflate.c
 K_OBJS  := $(patsubst %.c,build/k/%.o,$(K_SRCS)) build/k/boot.o build/k/isr.o build/k/apps.o build/k/ap_blob.o
@@ -114,7 +114,7 @@ build/u/med_%.o: user/lib/media/%.c $(wildcard user/lib/media/*.h)
 	$(CC) $(UCFLAGS_FP) -c $< -o $@
 build/u/app_video.o: user/apps/video.c $(wildcard user/lib/video/*.h user/lib/media/*.h) $(HDRS)
 	@mkdir -p $(dir $@)
-	$(CC) $(UCFLAGS) -c $< -o $@
+	$(CC) $(UCFLAGS_FP) -c $< -o $@
 build/user/video.elf: build/u/app_video.o $(VIDEO_OBJS) $(U_LIB) $(NETLIB) $(IMGLIB) user/user.ld
 	@mkdir -p $(dir $@)
 	$(LD) -n -T user/user.ld -nostdlib -z max-page-size=0x1000 -z noexecstack --no-warn-rwx-segments -o $@ $(U_LIB) $< $(VIDEO_OBJS) $(NETLIB) $(IMGLIB) $(LIBGCC)

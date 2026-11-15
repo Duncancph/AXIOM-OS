@@ -19,14 +19,14 @@ static void mc_part(h264dec *d, int x4, int y4, int w4, int h4) {
     int list = r0 >= 0 ? 0 : 1, ref = r0 >= 0 ? r0 : r1;
     const struct h264_pic *p = sl->ref[list][ref];
     const int16_t *mv = d->mv_c[list][ci];
-    h264_mc_luma(dy, sy, p, sy, pw, ph, px, py, mv[0], mv[1], w, h, d->edge_buf, d->mc_tmp16);
+    h264_mc_luma(dy, sy, p, sy, pw, ph, px, py, mv[0], mv[1], w, h, d->edge_buf);
     h264_mc_chroma(du, sc, p->plane[1], sc, pw >> 1, ph >> 1, px >> 1, py >> 1, mv[0], mv[1], w >> 1, h >> 1, d->edge_buf);
     h264_mc_chroma(dv, sc, p->plane[2], sc, pw >> 1, ph >> 1, px >> 1, py >> 1, mv[0], mv[1], w >> 1, h >> 1, d->edge_buf);
     if (r0 >= 0 && r1 >= 0) {
         const struct h264_pic *q = sl->ref[1][r1];
         const int16_t *mv1 = d->mv_c[1][ci];
         uint8_t *ty = d->mc_tmp[0], *tu = d->mc_tmp[1], *tv = d->mc_tmp[1] + 8;
-        h264_mc_luma(ty, 16, q, sy, pw, ph, px, py, mv1[0], mv1[1], w, h, d->edge_buf, d->mc_tmp16);
+        h264_mc_luma(ty, 16, q, sy, pw, ph, px, py, mv1[0], mv1[1], w, h, d->edge_buf);
         h264_mc_chroma(tu, 16, q->plane[1], sc, pw >> 1, ph >> 1, px >> 1, py >> 1, mv1[0], mv1[1], w >> 1, h >> 1, d->edge_buf);
         h264_mc_chroma(tv, 16, q->plane[2], sc, pw >> 1, ph >> 1, px >> 1, py >> 1, mv1[0], mv1[1], w >> 1, h >> 1, d->edge_buf);
         if (sl->wp_mode == 0 || (sl->wp_mode == 1 && !sl->wflag[0][r0] && !sl->wflag[1][r1])) {
@@ -181,6 +181,16 @@ static void chroma_residual(h264dec *d, uint8_t *u, uint8_t *v, int sc) {
     }
 }
 
+/* 8x8 inverse transform, with a fast path for blocks that only have a DC coefficient */
+static void idct8(h264dec *d, uint8_t *dst, int stride, int b8) {
+    int16_t *b = d->coef + b8 * 64;
+    int r = h264_blk_xy[b8 * 4], x = r & 3, y = r >> 2;
+    const int8_t *nz = d->nnz_c[0];
+    int n = d->p->cabac ? nz[CI(x, y)] : nz[CI(x, y)] + nz[CI(x + 1, y)] + nz[CI(x, y + 1)] + nz[CI(x + 1, y + 1)];
+    if (n == 1 && b[0]) h264_idct8_dc_add(dst, stride, b);
+    else h264_idct8_add(dst, stride, b);
+}
+
 static const uint8_t tr_avail4[16] = { 2, 2, 1, 0, 2, 3, 1, 0, 1, 1, 1, 0, 1, 0, 1, 0 };  /* 0 no, 1 yes, 2 top MB, 3 top-right MB */
 
 void h264_recon_mb(h264dec *d) {
@@ -232,7 +242,7 @@ void h264_recon_mb(h264dec *d) {
                 h264_intra8x8(dst, sy, mode, al, at, atr, atl);
                 if (d->nz_luma & (15 << (b8 * 4))) {
                     if (d->bypass) bypass_block8(d, dst, sy, d->coef + b8 * 64, mode <= 1 ? mode : 2);
-                    else h264_idct8_add(dst, sy, d->coef + b8 * 64);
+                    else idct8(d, dst, sy, b8);
                 }
             }
         }
@@ -244,7 +254,7 @@ void h264_recon_mb(h264dec *d) {
                     if (!(d->nz_luma & (15 << (b8 * 4)))) continue;
                     uint8_t *dst = y + (b8 >> 1) * 8 * sy + (b8 & 1) * 8;
                     if (d->bypass) bypass_block8(d, dst, sy, d->coef + b8 * 64, 2);
-                    else h264_idct8_add(dst, sy, d->coef + b8 * 64);
+                    else idct8(d, dst, sy, b8);
                 }
             } else {
                 for (int blk = 0; blk < 16; blk++) {

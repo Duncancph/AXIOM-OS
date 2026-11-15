@@ -97,7 +97,6 @@ struct h264_cabac {
 extern const uint8_t h264_cabac_lps_range[64][4];
 extern uint8_t h264_cabac_lps2[512];   /* [(q << 7) | state]: rangeTabLPS for the combined state (built at open) */
 extern const uint8_t h264_cabac_next[256];   /* [s] after MPS, [128 + s] after LPS */
-extern const uint8_t h264_cabac_renorm[256];
 H264_INLINE void cabac_refill(struct h264_cabac *c) {
     if (c->p + 4 <= c->end) {
         c->low = (c->low << 32) | __builtin_bswap32(RD32(c->p));
@@ -306,7 +305,6 @@ struct h264dec {
     int last_out_poc, last_out_epoch, reorder_extra;
     int recovery_cnt;                 /* recovery_frame_cnt of a recovery point SEI before the next picture, -1 none */
     int recover_until, recover_left;  /* output suppressed until this frame_num (gradual refresh after a seek) */
-    int recovery_seen;
     /* current picture */
     struct h264_slice sl;             /* current slice */
     struct h264_slice nsl;            /* slice header being parsed */
@@ -325,7 +323,7 @@ struct h264dec {
     /* per-MB working state */
     int mb_x, mb_y, mb_xy;
     uint32_t mb_type;
-    int qp, qpc[2], last_qp_delta, prev_mb_skipped;
+    int qp, qpc[2], last_qp_delta;
     int cbp, t8x8, chroma_pred, intra16_mode;
     int sub_type[4];
     int part_pred[4];                 /* per partition / 8x8: bit0 L0, bit1 L1 */
@@ -359,7 +357,6 @@ struct h264dec {
     /* MC scratch */
     uint8_t mc_tmp[2][16 * 16 * 2] H264_ALIGN(16);
     uint8_t edge_buf[32 * 24] H264_ALIGN(16);
-    int16_t mc_tmp16[24 * 24] H264_ALIGN(16);
 };
 
 /* ---------------------------------------------------------------- tables (h264_tables.c) */
@@ -413,7 +410,7 @@ void h264_luma_dc_dequant(int16_t *coef, const int16_t *dc, int qmul);
 void h264_chroma_dc_dequant(int16_t *coef, const int16_t *dc, int qmul);
 
 void h264_mc_luma(uint8_t *dst, int dst_stride, const struct h264_pic *ref, int stride, int pw, int ph,
-                  int x, int y, int mvx, int mvy, int w, int h, uint8_t *edge, int16_t *tmp);
+                  int x, int y, int mvx, int mvy, int w, int h, uint8_t *edge);
 void h264_mc_chroma(uint8_t *dst, int dst_stride, const uint8_t *src_plane, int stride, int pw, int ph,
                     int x, int y, int mvx, int mvy, int w, int h, uint8_t *edge);
 void h264_avg(uint8_t *dst, int dst_stride, const uint8_t *src, int src_stride, int w, int h);
