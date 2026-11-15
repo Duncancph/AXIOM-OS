@@ -124,6 +124,10 @@ build/gen/dom_prelude.h: user/apps/web/dom_prelude.js tools/embed.py
 build/u/web_dom.o: user/apps/web/dom.c build/gen/dom_prelude.h user/apps/web/web.h user/apps/web/js/js.h $(HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(UCFLAGS_FP) -Ibuild/gen -c $< -o $@
+# <canvas> drawing too
+build/u/web_canvas.o: user/apps/web/canvas.c user/apps/web/web.h $(HDRS)
+	@mkdir -p $(dir $@)
+	$(CC) $(UCFLAGS_FP) -c $< -o $@
 # SVG drawing uses floating point
 build/u/web_svg.o: user/apps/web/svg.c user/apps/web/web.h $(HDRS)
 	@mkdir -p $(dir $@)

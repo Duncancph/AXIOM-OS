@@ -452,7 +452,106 @@
   P.requestSubmit = function () { if (this.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))) this.submit(); };
   P.reset = function () { this.elements.forEach(function (e) { if (e.type === 'checkbox' || e.type === 'radio') e.checked = e.defaultChecked; else if (e.tagName !== 'SELECT') e.value = e.defaultValue; }); };
   P.play = function () { return Promise.resolve(); }; P.pause = P.load = function () {};
-  P.getContext = function () { return null; };
+  // ---- <canvas> 2D drawing (web/canvas.c draws; this keeps the properties scripts read back) ----
+  function CanvasGradient() { this._stops = []; }
+  CanvasGradient.prototype.addColorStop = function (o, c) { this._stops.push([+o, String(c)]); };
+  function gradColour(g) { var s = g._stops; if (!s.length) return 'rgba(0,0,0,0)'; s.sort(function (a, b) { return a[0] - b[0]; }); return s[0][1]; }
+  function CanvasPattern() { } CanvasPattern.prototype.setTransform = function () {};
+  function TextMetrics(w, px) { this.width = w; this.actualBoundingBoxLeft = 0; this.actualBoundingBoxRight = w; this.actualBoundingBoxAscent = px * 0.75; this.actualBoundingBoxDescent = px * 0.25; this.fontBoundingBoxAscent = px * 0.9; this.fontBoundingBoxDescent = px * 0.25; this.emHeightAscent = px * 0.8; this.emHeightDescent = px * 0.2; this.alphabeticBaseline = 0; this.hangingBaseline = px * 0.8; this.ideographicBaseline = -px * 0.2; }
+  function ImageData(a, b, c) {
+    if (typeof a === 'number') { this.width = a; this.height = b; this.data = new Uint8ClampedArray(a * b * 4); }
+    else { this.data = a; this.width = b; this.height = c || (a.length / 4 / b); }
+    this.colorSpace = 'srgb';
+  }
+  function parseFont(f) {                       // '[style] [weight] size[/lh] family' -> [px, weight]
+    var m = /(\d*\.?\d+)(px|pt|em|rem)/.exec(f || ''); var px = 10;
+    if (m) { px = +m[1]; if (m[2] === 'pt') px = px * 4 / 3; else if (m[2] !== 'px') px = px * 16; }
+    var w = /\bbold\b|\b[6-9]00\b/.test(f || '') ? 700 : 400;
+    return [px, w];
+  }
+  var ctxProps = { fillStyle: '#000000', strokeStyle: '#000000', lineWidth: 1, globalAlpha: 1, font: '10px sans-serif', textAlign: 'start', textBaseline: 'alphabetic',
+    lineCap: 'butt', lineJoin: 'miter', miterLimit: 10, lineDashOffset: 0, shadowBlur: 0, shadowColor: 'rgba(0, 0, 0, 0)', shadowOffsetX: 0, shadowOffsetY: 0,
+    globalCompositeOperation: 'source-over', imageSmoothingEnabled: true, imageSmoothingQuality: 'low', direction: 'ltr', filter: 'none', fontKerning: 'auto', letterSpacing: '0px', wordSpacing: '0px', textRendering: 'auto' };
+  function normColour(v) {
+    if (typeof v !== 'string') return null;
+    var t = v.trim().toLowerCase();
+    var m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/.exec(t);
+    if (m) { var h = m[1]; if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2]; return '#' + h; }
+    return v;
+  }
+  function CanvasRenderingContext2D(canvas) {
+    hidden(this, 'canvas', canvas); hidden(this, '_p', {}); hidden(this, '_stack', []); hidden(this, '_dash', []);
+    for (var k in ctxProps) this._p[k] = ctxProps[k];
+  }
+  var CP = CanvasRenderingContext2D.prototype;
+  function cv(ctx, op, t, a) { var c = ctx.canvas; return D.cv(c, op, t === undefined ? null : t, a && a[0], a && a[1], a && a[2], a && a[3], a && a[4], a && a[5], a && a[6], a && a[7]); }
+  Object.keys(ctxProps).forEach(function (k) {
+    Object.defineProperty(CP, k, { configurable: true, enumerable: true, get: function () { return this._p[k]; }, set: function (v) {
+      var p = this._p;
+      if (k === 'fillStyle' || k === 'strokeStyle') {
+        if (v instanceof CanvasGradient) { p[k] = v; cv(this, k, gradColour(v)); return; }
+        if (v instanceof CanvasPattern) { p[k] = v; return; }
+        var n = normColour(v); if (n === null) return; p[k] = n; cv(this, k, String(v)); return;
+      }
+      if (k === 'lineWidth' || k === 'globalAlpha') { v = +v; if (!(v === v) || v < 0 || (k === 'globalAlpha' && v > 1) || (k === 'lineWidth' && v === 0)) return; p[k] = v; cv(this, k, null, [v]); return; }
+      if (k === 'font') { var f = parseFont(String(v)); p[k] = String(v); cv(this, 'font', null, f); return; }
+      if (k === 'textAlign' || k === 'textBaseline') { p[k] = String(v); cv(this, k, String(v)); return; }
+      p[k] = v;
+    } });
+  });
+  ['beginPath', 'closePath', 'moveTo', 'lineTo', 'bezierCurveTo', 'quadraticCurveTo', 'arc', 'arcTo', 'ellipse', 'rect', 'fillRect', 'strokeRect', 'clearRect',
+   'translate', 'scale', 'rotate', 'transform', 'stroke'].forEach(function (k) {
+    CP[k] = function () { cv(this, k, null, arguments); };
+  });
+  CP.roundRect = function (x, y, w, h) { cv(this, 'rect', null, [x, y, w, h]); };
+  CP.fill = function (a, b) { var rule = typeof a === 'string' ? a : typeof b === 'string' ? b : 'nonzero'; cv(this, 'fill', rule); };
+  CP.clip = function () {}; CP.isPointInPath = CP.isPointInStroke = function () { return false; };
+  CP.setTransform = function (a, b, c, d, e, f) { if (a && typeof a === 'object') { var m = a; cv(this, 'setTransform', null, [m.a, m.b, m.c, m.d, m.e, m.f]); } else if (arguments.length >= 6) cv(this, 'setTransform', null, arguments); else cv(this, 'setTransform', null, []); };
+  CP.resetTransform = function () { cv(this, 'setTransform', null, []); };
+  CP.getTransform = function () { return typeof DOMMatrix === 'function' ? new DOMMatrix() : { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }; };
+  CP.save = function () { var o = {}; for (var k in this._p) o[k] = this._p[k]; this._stack.push(o); cv(this, 'save'); };
+  CP.restore = function () { var o = this._stack.pop(); if (o) { this._p = o; hidden(this, '_p', o); } cv(this, 'restore'); };
+  CP.reset = function () { for (var k in ctxProps) this._p[k] = ctxProps[k]; this._stack.length = 0; cv(this, 'reset'); };
+  CP.fillText = function (t, x, y) { cv(this, 'fillText', String(t), [x, y]); };
+  CP.strokeText = function (t, x, y) { cv(this, 'strokeText', String(t), [x, y]); };
+  CP.measureText = function (t) { var px = parseFont(this._p.font)[0]; return new TextMetrics(cv(this, 'measureText', String(t)), px); };
+  CP.setLineDash = function (a) { this._dash = Array.isArray(a) ? a.slice() : []; }; CP.getLineDash = function () { return this._dash.slice(); };
+  CP.createLinearGradient = CP.createRadialGradient = CP.createConicGradient = function () { return new CanvasGradient(); };
+  CP.createPattern = function () { return new CanvasPattern(); };
+  CP.createImageData = function (w, h) { if (w && typeof w === 'object') { h = w.height; w = w.width; } return new ImageData(Math.abs(w | 0), Math.abs(h | 0)); };
+  CP.getImageData = function (x, y, w, h) {
+    w = w | 0; h = h | 0; if (w <= 0 || h <= 0) throw new Error('IndexSizeError: the width and height must not be zero');
+    var b = D.cvGet(this.canvas, x | 0, y | 0, w, h);
+    return new ImageData(b ? new Uint8ClampedArray(b) : new Uint8ClampedArray(w * h * 4), w, h);
+  };
+  CP.putImageData = function (im, x, y) { D.cvPut(this.canvas, im.data, im.width, im.height, x | 0, y | 0); };
+  CP.drawImage = function (img, a, b, c, d, e, f, g, h) {
+    var n = arguments.length;
+    if (!img || !img.nodeType) return;
+    if (n === 3) D.cvImage(this.canvas, img, 0, 0, -1, -1, a, b, -1, -1);
+    else if (n === 5) D.cvImage(this.canvas, img, 0, 0, -1, -1, a, b, c, d);
+    else D.cvImage(this.canvas, img, a, b, c, d, e, f, g, h);
+  };
+  CP.getContextAttributes = function () { return { alpha: true, colorSpace: 'srgb', desynchronized: false, willReadFrequently: false }; };
+  CP.isContextLost = function () { return false; };
+  g.CanvasRenderingContext2D = CanvasRenderingContext2D; g.CanvasGradient = CanvasGradient; g.CanvasPattern = CanvasPattern; g.ImageData = ImageData; g.TextMetrics = TextMetrics;
+  P.getContext = function (type) {
+    if (D.tag(this) !== 'canvas') return null;
+    if (type !== '2d') return null;                             // (no WebGL: scripts then use 2D, or go without)
+    if (!this._ctx) hidden(this, '_ctx', new CanvasRenderingContext2D(this));
+    return this._ctx;
+  };
+  P.toDataURL = function () { return D.tag(this) === 'canvas' ? D.cvURL(this) : undefined; };
+  P.toBlob = function (cb, type) { var u = D.cvURL(this); var s = atob(u.slice(u.indexOf(',') + 1)), a = new Uint8Array(s.length); for (var i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); var bl = new Blob([a], { type: 'image/png' }); setTimeout(function () { cb(bl); }, 0); };
+  P.captureStream = function () { return null; };
+  ['width', 'height'].forEach(function (k) {
+    Object.defineProperty(P, k, { configurable: true, enumerable: true,
+      get: function () { var v = D.attr(this, k), t = D.tag(this);
+        if (t === 'canvas') { var n = parseInt(v, 10); return n >= 0 ? n : (k === 'width' ? 300 : 150); }
+        if (t === 'img' && v === null) { var r = D.rect(this); return r ? r[k === 'width' ? 2 : 3] : 0; }
+        var m = parseInt(v, 10); return m >= 0 ? m : 0; },
+      set: function (v) { D.setAttr(this, k, String(Math.max(0, v | 0))); if (D.tag(this) === 'canvas') { D.cvSize(this); if (this._ctx) this._ctx.reset(); } } });
+  });
   P.showModal = P.show = function () { this.setAttribute('open', ''); }; P.close = function () { this.removeAttribute('open'); };
 
   function nodeList(a) { a.item = function (i) { return this[i] || null; }; return a; }
@@ -555,7 +654,8 @@
     try { Object.defineProperty(g, 'frameElement', { value: null, configurable: true }); } catch (e) { }
   }
   g.document = doc;
-  ['addEventListener', 'removeEventListener', 'dispatchEvent'].forEach(function (k) { g[k] = EventTarget.prototype[k]; });
+  // the window's own (called on their own too, like addEventListener(...) with no object: that's the window)
+  ['addEventListener', 'removeEventListener', 'dispatchEvent'].forEach(function (k) { var f = EventTarget.prototype[k]; g[k] = function () { return f.apply(this == null ? g : this, arguments); }; });
   g.Node = Node; g.Element = Element; g.HTMLElement = HTMLElement; g.Text = Text; g.Comment = Comment; g.CharacterData = CharacterData;
   g.Document = Document; g.HTMLDocument = Document; g.DocumentFragment = Element; g.EventTarget = EventTarget;
   ['Div', 'Span', 'Anchor', 'Image', 'Input', 'Button', 'Form', 'Select', 'Option', 'TextArea', 'Paragraph', 'Heading', 'Table', 'TableRow', 'TableCell',
@@ -622,7 +722,43 @@
     language: 'en-GB', languages: ['en-GB', 'en'], onLine: true, cookieEnabled: true, doNotTrack: '1', hardwareConcurrency: 1, maxTouchPoints: 0, webdriver: false,
     clipboard: { writeText: function () { return Promise.resolve(); }, readText: function () { return Promise.resolve(''); } },
     sendBeacon: function () { return true; }, javaEnabled: function () { return false; }, serviceWorker: undefined, geolocation: undefined };
-  g.performance = { now: performanceNow, timeOrigin: start, mark: function () {}, measure: function () {}, getEntriesByType: function () { return []; }, getEntriesByName: function () { return []; }, timing: { navigationStart: start } };
+  // performance: the clock, marks and measures, and an entry for the page's own load
+  var perfEntries = [];
+  function PerfEntry(name, type, t, d, more) { this.name = name; this.entryType = type; this.startTime = t; this.duration = d || 0; for (var k in more) this[k] = more[k]; }
+  PerfEntry.prototype.toJSON = function () { var o = {}; for (var k in this) if (typeof this[k] !== 'function') o[k] = this[k]; return o; };
+  var navEntry = null;
+  function navigationEntry() {
+    if (!navEntry) {
+      var t = performanceNow();
+      navEntry = new PerfEntry(g.location ? g.location.href : '', 'navigation', 0, t, { initiatorType: 'navigation', type: 'navigate', redirectCount: 0, nextHopProtocol: 'http/1.1',
+        fetchStart: 0, domainLookupStart: 0, domainLookupEnd: 0, connectStart: 0, connectEnd: 0, secureConnectionStart: 0, requestStart: 0, responseStart: 0, responseEnd: 0,
+        domInteractive: t, domContentLoadedEventStart: t, domContentLoadedEventEnd: t, domComplete: t, loadEventStart: t, loadEventEnd: t, unloadEventStart: 0, unloadEventEnd: 0,
+        transferSize: 0, encodedBodySize: 0, decodedBodySize: 0, workerStart: 0, redirectStart: 0, redirectEnd: 0, serverTiming: [] });
+    }
+    return navEntry;
+  }
+  function allEntries() { return [navigationEntry()].concat(perfEntries); }
+  g.performance = {
+    now: performanceNow, timeOrigin: start,
+    mark: function (name, o) { var e = new PerfEntry(String(name), 'mark', o && o.startTime !== undefined ? +o.startTime : performanceNow(), 0, { detail: o && o.detail !== undefined ? o.detail : null }); perfEntries.push(e); return e; },
+    measure: function (name, a, b) {
+      function at(x, def) { if (x === undefined) return def; if (typeof x === 'number') return x; for (var i = perfEntries.length - 1; i >= 0; i--) if (perfEntries[i].name === x && perfEntries[i].entryType === 'mark') return perfEntries[i].startTime; return def; }
+      var s0, s1; if (a && typeof a === 'object') { s0 = at(a.start, 0); s1 = a.end !== undefined ? at(a.end, performanceNow()) : a.duration !== undefined ? s0 + a.duration : performanceNow(); } else { s0 = at(a, 0); s1 = at(b, performanceNow()); }
+      var e = new PerfEntry(String(name), 'measure', s0, s1 - s0, { detail: a && typeof a === 'object' && a.detail !== undefined ? a.detail : null }); perfEntries.push(e); return e;
+    },
+    getEntries: function () { return allEntries(); },
+    getEntriesByType: function (t) { return allEntries().filter(function (e) { return e.entryType === t; }); },
+    getEntriesByName: function (n, t) { return allEntries().filter(function (e) { return e.name === n && (!t || e.entryType === t); }); },
+    clearMarks: function (n) { perfEntries = perfEntries.filter(function (e) { return e.entryType !== 'mark' || (n !== undefined && e.name !== n); }); },
+    clearMeasures: function (n) { perfEntries = perfEntries.filter(function (e) { return e.entryType !== 'measure' || (n !== undefined && e.name !== n); }); },
+    clearResourceTimings: function () {}, setResourceTimingBufferSize: function () {},
+    timing: { navigationStart: start, fetchStart: start, domainLookupStart: start, domainLookupEnd: start, connectStart: start, connectEnd: start, requestStart: start, responseStart: start, responseEnd: start, domLoading: start, domInteractive: start, domContentLoadedEventStart: start, domContentLoadedEventEnd: start, domComplete: start, loadEventStart: start, loadEventEnd: start, unloadEventStart: 0, unloadEventEnd: 0, redirectStart: 0, redirectEnd: 0, secureConnectionStart: 0 },
+    navigation: { type: 0, redirectCount: 0, TYPE_NAVIGATE: 0, TYPE_RELOAD: 1, TYPE_BACK_FORWARD: 2 },
+    eventCounts: new Map(),
+    addEventListener: function () {}, removeEventListener: function () {},
+    toJSON: function () { return { timeOrigin: start, timing: this.timing, navigation: this.navigation }; }
+  };
+  g.PerformanceEntry = PerfEntry;
   g.history = { length: 1, state: null, scrollRestoration: 'auto',
     pushState: function (s, t, u) { this.state = s; this.length++; }, replaceState: function (s) { this.state = s; },
     back: function () {}, forward: function () {}, go: function () {} };
@@ -862,7 +998,7 @@
   g.TextDecoder = function () { this.encoding = 'utf-8'; };
   g.TextDecoder.prototype.decode = function (a) { if (!a) return ''; var s = ''; for (var i = 0; i < a.length; i++) s += String.fromCharCode(a[i]); try { return decodeURIComponent(escape(s)); } catch (e) { return s; } };
   var Observer = function (cb) { this.observe = function () {}; this.unobserve = function () {}; this.disconnect = function () {}; this.takeRecords = function () { return []; }; };
-  g.MutationObserver = Observer; g.ResizeObserver = Observer; g.PerformanceObserver = Observer;
+  g.MutationObserver = Observer; g.ResizeObserver = Observer; g.PerformanceObserver = Observer; try { Observer.supportedEntryTypes = ['mark', 'measure', 'navigation', 'resource']; } catch (e) { }
   g.IntersectionObserver = function (cb) {
     var self = this, seen = [];
     this.observe = function (el) { if (seen.indexOf(el) >= 0) return; seen.push(el); D.setTimer(function () { var r = el.getBoundingClientRect(); cb([{ target: el, isIntersecting: true, intersectionRatio: 1, boundingClientRect: r, intersectionRect: r, rootBounds: null, time: performanceNow() }], self); }, 0, false); };

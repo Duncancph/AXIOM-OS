@@ -278,6 +278,7 @@ typedef struct Job { jsval fn, a, b, c; int kind; } Job;
 
 struct js_rt {
     struct js_host host;
+    char bad_key[80];          /* the name a computed method call found nothing callable under (for its error) */
     /* GC */
     GCHdr *gc_list;
     size_t bytes, threshold;

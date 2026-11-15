@@ -187,9 +187,27 @@ struct imgent {
     bool opaque; bool used;
     struct node *svg; uint32_t svg_gen; /* an <svg> element drawn into px at the size it's shown (svg.c) */
     void *frame;                      /* an <iframe>: its own page (web.c) */
+    struct cv *canvas;                /* a <canvas>: its drawing (canvas.c) */
     struct imgent *next;
 };
 struct imgent *img_get(const char *url);
+/* <canvas> (canvas.c): its pixels and drawing state */
+struct cv;
+struct cv *cv_new(int w, int h);
+void cv_free(struct cv *c);
+void cv_resize(struct cv *c, int w, int h);
+uint32_t *cv_pixels(struct cv *c, int *w, int *h);
+double cv_op(struct cv *c, const char *op, const double *a, int na, const char *s);
+void cv_draw_image(struct cv *c, const uint32_t *src, int sw_, int sh_, bool opaque, double sx, double sy, double sw, double sh, double dx, double dy, double dw, double dh);
+uint8_t *cv_get_rgba(struct cv *c, int x, int y, int w, int h);
+void cv_put_rgba(struct cv *c, const uint8_t *b, long n, int w, int h, int x, int y);
+char *cv_data_url(struct cv *c);
+void svg_raster(uint32_t *px, int w, int h, const double *xy, int n, const int *sub, const unsigned char *cl, int ns, uint32_t rgb, double alpha, int mode, double lw);
+int web_text_px(int px, bool bold, const char *s);                       /* a text's width (UTF-8) */
+int web_text_coverage(uint8_t *cov, int w, int h, int px, bool bold, const char *s);   /* drawn as coverage; returns the baseline row */
+struct cv *web_canvas(struct node *n);          /* a <canvas>'s drawing (made when first asked for) */
+void web_canvas_changed(struct node *n);        /* its pixels changed: shown again */
+bool web_image_pixels(struct node *n, const uint32_t **px, int *w, int *h, bool *opaque);   /* an <img>'s or <canvas>'s pixels, for drawImage */
 void svg_size(const struct node *svg, int *w, int *h);                 /* the size an <svg> asks for */
 uint32_t *svg_render(struct node *svg, int w, int h, uint32_t cur);    /* a new w x h picture of it (malloc) */          /* find or add a cache entry */
 

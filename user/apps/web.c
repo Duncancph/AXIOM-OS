@@ -767,7 +767,15 @@ static void frame_free(struct frame *f) {
     js_realm_free(f->realm);                              /* its scripts stop first: they use its page */
     free_doc(f->doc); layout_free(&f->lay); free(f->css); free(f->px); free(f->srcdoc); free(f);
 }
-static void svgs_free(void) { while (svgs) { struct imgent *e = svgs; svgs = e->next; frame_free(e->frame); free(e->px); free(e->url); free(e); } }
+static void svgs_free(void) {
+    while (svgs) {
+        struct imgent *e = svgs; svgs = e->next;
+        frame_free(e->frame);
+        if (e->canvas) cv_free(e->canvas); else free(e->px);   /* (a canvas's px is its own) */
+        if (e->spx) { img_bytes -= (long)e->sw * e->sh * 4; free(e->spx); }
+        free(e->url); free(e);
+    }
+}
 static void init_node(struct doc *d, struct node *c) {
         if ((c->tag == T_A || c->tag == T_AREA) && node_attr(c, "href")) {
             static char u[600]; resolve_url(d->base, node_attr(c, "href"), u, sizeof u);
@@ -1350,6 +1358,83 @@ static void draw_text(struct canvas *c, const struct font *f, int x, int base, u
         }
         x += g->adv;
     }
+}
+/* ---- for <canvas> (web/canvas.c): text and pictures ---- */
+static char *canvas_str(const char *s) {                  /* a script's UTF-8 text in the fonts' code page (malloc) */
+    long n = strlen(s); char *t = malloc(n + 1);
+    if (t) { memcpy(t, s, n + 1); utf8_to_cp1252(t, n + 1); }
+    return t;
+}
+static int text_width(const struct font *f, const char *s, int n);
+int web_text_px(int px, bool bold, const char *s) {
+    char *t = canvas_str(s); if (!t) return 0;
+    int w = text_width(web_font(px, bold, false), t, strlen(t));
+    free(t); return w;
+}
+int web_text_coverage(uint8_t *cov, int w, int h, int px, bool bold, const char *s) {
+    char *t = canvas_str(s); if (!t) return 0;
+    const struct font *f = web_font(px, bold, false);
+    int base = px; if (base >= h) base = h - 1;
+    int x = 0;
+    for (const char *q = t; *q; q++) {
+        unsigned ch = (unsigned char)*q; if (ch < 32 || ch == 127) ch = '?';
+        const struct glyph *g = &f->g[ch - 32];
+        const uint8_t *b = f->bits + g->off;
+        for (int j = 0; j < g->h; j++) {
+            int yy = base + g->yoff + j; if (yy < 0 || yy >= h) continue;
+            for (int i = 0; i < g->w; i++) {
+                int xx = x + g->xoff + i; if (xx < 0 || xx >= w) continue;
+                int al = b[j * g->w + i], o = cov[(long)yy * w + xx] + al;
+                cov[(long)yy * w + xx] = o > 255 ? 255 : o;
+            }
+        }
+        x += g->adv;
+    }
+    free(t);
+    return base;
+}
+static void canvas_size(struct node *n, int *w, int *h) {
+    const char *a = node_attr(n, "width"), *b = node_attr(n, "height");
+    *w = 300; *h = 150;
+    if (a && *a >= '0' && *a <= '9') { *w = 0; for (; *a >= '0' && *a <= '9' && *w < 100000; a++) *w = *w * 10 + (*a - '0'); }
+    if (b && *b >= '0' && *b <= '9') { *h = 0; for (; *b >= '0' && *b <= '9' && *h < 100000; b++) *h = *h * 10 + (*b - '0'); }
+    if (*w < 0 || *w > 8192) *w = 300;
+    if (*h < 0 || *h > 8192) *h = 150;
+}
+struct cv *web_canvas(struct node *n) {
+    if (!n || n->tag != T_CANVAS) return 0;
+    if (n->img && n->img->canvas) {                       /* width/height changed: a fresh, cleared canvas */
+        int w, h, cw, ch; canvas_size(n, &w, &h); cv_pixels(n->img->canvas, &cw, &ch);
+        if (w != cw || h != ch) { cv_resize(n->img->canvas, w, h); web_canvas_changed(n); }
+        return n->img->canvas;
+    }
+    if (n->img) return 0;
+    int w, h; canvas_size(n, &w, &h);
+    struct imgent *e = calloc(1, sizeof *e);
+    if (!e) return 0;
+    e->canvas = cv_new(w, h);
+    if (!e->canvas) { free(e); return 0; }
+    e->w = w; e->h = h; e->state = IS_OK;
+    e->px = cv_pixels(e->canvas, &e->pw, &e->ph);
+    e->next = svgs; svgs = e; n->img = e;
+    return e->canvas;
+}
+void web_canvas_changed(struct node *n) {
+    struct imgent *e = n ? n->img : 0;
+    if (!e || !e->canvas) return;
+    int w, h; e->px = cv_pixels(e->canvas, &w, &h);
+    if (e->w != w || e->h != h) { e->w = w; e->h = h; need_layout = true; }
+    e->pw = w; e->ph = h; e->opaque = false;
+    if (e->spx) { img_bytes -= (long)e->sw * e->sh * 4; free(e->spx); e->spx = 0; }
+    need_draw = true;
+}
+bool web_image_pixels(struct node *n, const uint32_t **px, int *w, int *h, bool *opaque) {
+    struct imgent *e = n ? n->img : 0;
+    if (!e) return false;
+    if (e->canvas) { *px = cv_pixels(e->canvas, w, h); *opaque = false; return true; }
+    if (e->state != IS_OK || !e->px) return false;
+    *px = e->px; *w = e->pw; *h = e->ph; *opaque = e->opaque;
+    return true;
 }
 static int text_width(const struct font *f, const char *s, int n) { int w = 0; for (int i = 0; i < n; i++) { unsigned ch = (unsigned char)s[i]; if (ch < 32 || ch == 127) ch = '?'; w += f->g[ch - 32].adv; } return w; }
 

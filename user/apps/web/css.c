@@ -514,7 +514,7 @@ static const char UA_CSS[] =
     " svg { display: inline-block }"
     " iframe { display: inline-block; border: 2px solid #c8c8c8 }"
     "head, title, meta, link, style, script, base, template, area, map, param, source, track, datalist, noframes, math,"
-    " canvas, audio, object, embed, colgroup, col, option, frame, frameset, input[type=hidden], [hidden], dialog { display: none }"
+    " audio, object, embed, colgroup, col, option, frame, frameset, input[type=hidden], [hidden], dialog { display: none }"
     " video { display: inline } audio[controls] { display: inline }"
     "dialog[open] { display: block }"
     "li { display: list-item }"

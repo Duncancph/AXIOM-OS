@@ -923,9 +923,61 @@ static void deliver_messages(void) {
         free(m.json);
     }
 }
+/* <canvas>: D.cv(canvas, op, text, n0..n7) draws (canvas.c); the others read and write its pixels */
+NATIVE(n_cv) {
+    struct node *n = N(A(argc, argv, 0)); struct cv *c = web_canvas(n);
+    if (!c) return js_undefined();
+    char *op = T(A(argc, argv, 1), 0); jsval tv = A(argc, argv, 2);
+    char *t = js_is_undefined(tv) || js_is_null(tv) ? 0 : T(tv, 0);
+    double v[8]; int nv = 0;
+    for (int i = 3; i < argc && nv < 8; i++) v[nv++] = js_to_number(rt, argv[i]);
+    double r = op ? cv_op(c, op, v, nv, t) : 0;
+    bool draws = op && strcmp(op, "measureText");
+    if (draws) web_canvas_changed(n);
+    free(op); free(t);
+    return js_num(r);
+}
+NATIVE(n_cv_size) {                                       /* the canvas's width/height attributes changed */
+    struct node *n = N(A(argc, argv, 0)); if (web_canvas(n)) web_canvas_changed(n);
+    return js_undefined();
+}
+NATIVE(n_cv_get) {
+    struct node *n = N(A(argc, argv, 0)); struct cv *c = web_canvas(n);
+    int x = (int)js_to_number(rt, A(argc, argv, 1)), y = (int)js_to_number(rt, A(argc, argv, 2)), w = (int)js_to_number(rt, A(argc, argv, 3)), h = (int)js_to_number(rt, A(argc, argv, 4));
+    uint8_t *b = c ? cv_get_rgba(c, x, y, w, h) : 0;
+    if (!b) return js_undefined();
+    jsval r = js_new_arraybuffer(rt, b, (long)w * h * 4); free(b);
+    return r;
+}
+NATIVE(n_cv_put) {
+    struct node *n = N(A(argc, argv, 0)); struct cv *c = web_canvas(n);
+    long len; const uint8_t *b = js_bytes(rt, A(argc, argv, 1), &len);
+    if (!c || !b) return js_undefined();
+    cv_put_rgba(c, b, len, (int)js_to_number(rt, A(argc, argv, 2)), (int)js_to_number(rt, A(argc, argv, 3)), (int)js_to_number(rt, A(argc, argv, 4)), (int)js_to_number(rt, A(argc, argv, 5)));
+    web_canvas_changed(n);
+    return js_undefined();
+}
+NATIVE(n_cv_url) {
+    struct node *n = N(A(argc, argv, 0)); struct cv *c = web_canvas(n);
+    char *u = c ? cv_data_url(c) : 0;
+    jsval r = js_str(rt, u ? u : "data:,", -1); free(u);
+    return r;
+}
+NATIVE(n_cv_image) {                                      /* D.cvImage(canvas, img|canvas, sx, sy, sw, sh, dx, dy, dw, dh) (sw < 0: all of it) */
+    struct node *n = N(A(argc, argv, 0)), *src = N(A(argc, argv, 1)); struct cv *c = web_canvas(n);
+    const uint32_t *px; int w, h; bool op;
+    if (!c || !src || (src->tag == T_CANVAS && !web_canvas(src)) || !web_image_pixels(src, &px, &w, &h, &op)) return js_bool(0);
+    double v[8]; for (int i = 0; i < 8; i++) v[i] = js_to_number(rt, A(argc, argv, 2 + i));
+    if (v[2] < 0) { v[0] = 0; v[1] = 0; v[2] = w; v[3] = h; }
+    if (v[6] < 0) { v[6] = v[2]; v[7] = v[3]; }
+    cv_draw_image(c, px, w, h, op, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]);
+    web_canvas_changed(n);
+    return js_bool(1);
+}
 NATIVE(n_is_frame) { return R->owner ? js_bool(1) : js_bool(0); }
 static const struct { const char *name; js_native fn; int n; } natives[] = {
     { "post", n_post, 3 }, { "isFrame", n_is_frame, 0 },
+    { "cv", n_cv, 11 }, { "cvSize", n_cv_size, 1 }, { "cvGet", n_cv_get, 5 }, { "cvPut", n_cv_put, 6 }, { "cvURL", n_cv_url, 1 }, { "cvImage", n_cv_image, 10 },
     { "type", n_type, 1 }, { "tag", n_tag, 1 }, { "parent", n_parent, 1 }, { "first", n_first, 1 }, { "last", n_last, 1 },
     { "next", n_next, 1 }, { "prev", n_prev, 1 }, { "root", n_root, 0 }, { "head", n_head, 0 }, { "body", n_body, 0 },
     { "attr", n_attr, 2 }, { "setAttr", n_set_attr, 3 }, { "removeAttr", n_remove_attr, 2 }, { "attrNames", n_attr_names, 1 },

@@ -391,6 +391,29 @@ static bool px_attr(const struct node *svg, const char *name, double *out) {
     if (pre(a, "em")) *out *= 16; else if (pre(a, "pt")) *out *= 4.0 / 3;
     return *out > 0;
 }
+/* for <canvas> (canvas.c): fill (mode 0 nonzero, 1 even-odd) or stroke (2, line width lw) a path given in
+ * pixels, over px */
+void svg_raster(uint32_t *px, int w, int h, const double *xy, int n, const int *sub, const unsigned char *cl, int ns,
+                uint32_t rgb, double alpha, int mode, double lw) {
+    float *cv = malloc((size_t)(w > 0 ? w : 1) * sizeof *cv);
+    if (!cv || w <= 0 || h <= 0) { free(cv); return; }
+    pix = px; PW = w; PH = h; cov = cv;
+    npt = 0; nsub = 0;
+    for (int s = 0; s < ns && s < 2048; s++) {
+        int a = sub[s], b = s + 1 < ns ? sub[s + 1] : n;
+        if (b - a < 1) continue;
+        sub_start(xy[a * 2], xy[a * 2 + 1]);
+        closed[nsub - 1] = cl[s];
+        for (int i = a + 1; i < b; i++) pt_add(xy[i * 2], xy[i * 2 + 1]);
+    }
+    struct paint p = { 0 };
+    p.op = alpha; p.fop = 1; p.sop = 1;
+    if (mode == 2) { p.has_stroke = true; p.stroke = rgb; p.sw = lw; }
+    else { p.has_fill = true; p.fill = rgb; p.evenodd = mode == 1; }
+    struct mtx m = { 1, 0, 0, 1, 0, 0 };
+    emit(m, &p);
+    free(cv); cov = 0; pix = 0;
+}
 void svg_size(const struct node *svg, int *w, int *h) {
     double vb[4], W, H; bool hv = view_box(svg, vb), hw = px_attr(svg, "width", &W), hh = px_attr(svg, "height", &H);
     if (hw && !hh) H = hv ? W * vb[3] / vb[2] : W;

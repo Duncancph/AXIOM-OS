@@ -992,6 +992,7 @@ static JS_NOINLINE jsval call_slow(js_rt *rt, jsval fn, jsval this_, int argc, j
 static JS_NOINLINE jsval not_callable(js_rt *rt, FuncProto *fp, uint32_t desc, jsval v, bool ctor) {
     JSString *d = desc != 0xFFFFFFFFu ? vstr(fp->consts[desc]) : val_brief(rt, v);
     if (ctor) return throw_error(rt, E_TYPE, "%S is not a constructor", d);
+    if (rt->bad_key[0]) { char k[80]; memcpy(k, rt->bad_key, sizeof k); rt->bad_key[0] = 0; return throw_error(rt, E_TYPE, "%S is not a function (the property '%s')", d, k); }
     return throw_error(rt, E_TYPE, "%S is not a function", d);
 }
 
@@ -1771,6 +1772,10 @@ static jsval run(js_rt *rt, bool throwing) {
         SAVE();
         v = elem_get_slow(rt, o, k);
         if (v == JS_EXC) goto exception;
+        if (!is_callable(v) && is_str(k)) {                     /* about to fail: keep the name for the error */
+            size_t kl; char *ks = str_to_utf8(rt, vstr(k), &kl);
+            if (ks) { size_t m = kl < sizeof rt->bad_key - 1 ? kl : sizeof rt->bad_key - 1; memcpy(rt->bad_key, ks, m); rt->bad_key[m] = 0; free(ks); }
+        } else rt->bad_key[0] = 0;
         sp[-2] = v;
         sp[-1] = o;
         pc++;
