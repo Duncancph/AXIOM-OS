@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 81
-notes Web answers (closes, Esc) while waiting for slow servers
-file kernel b81/thane.elf.gz 14710552 4a566bfb3b09806d3884fb4d56a2409b72c0afcaad10f1d91c4c3557195049cb
-file initrd b81/initrd.tar.gz 1280000 5379c4b7efbdb8a1dabf557cf2117412ba16991808f3c8fc7866c3d8dd078221
-file bootx64 b81/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b81/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022100e639b55c8589db2521993b210f296a5d61907a0cf86ad1973287ef614a0028f702205de85ad37e4f7d30c969ed1d50caa0cde08238677412a3535052c7d6d868eb3a
+build 84
+notes New Video app (MP4); Web recovers when a page gets it stuck
+file kernel b84/thane.elf.gz 16347240 dbe739559c3ec1b1f291433ebad7e9643bfe437fc410497f441594553a44e2ad
+file initrd b84/initrd.tar.gz 1280000 09792c00c59cfd0363902ef3551b97aad9cdf1e4b3f90ea5b6bac5a607005a2f
+file bootx64 b84/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b84/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3046022100d4712b18054efb35d2cdc376f3869ac5c0ce3992ce9ee0b7a31bc826b12be48f022100ef5bd3d6314c858b4ea4c68e4c213913eb081d88d026a088c82acb3a84ceabdd
