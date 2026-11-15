@@ -751,6 +751,7 @@ bool wm_resize(struct task *t, int id, int *nw, int *nh) {
 
 static void toggle_maximize(struct window *w) {
     if (!w->resizable) return;
+    hover_ctl = 0;                               /* the button moves away from under the mouse */
     damage_frame(w);
     if (!w->maximized) {
         w->rx = w->x; w->ry = w->y; w->rw = w->w; w->rh = w->h;
