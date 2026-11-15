@@ -155,6 +155,7 @@ static void recover_from_stuck(void) {
 void web_show_status(const char *s) { strncpy0(status_text, s, sizeof status_text); draw(); }
 /* while waiting for a server: keep answering (close, Esc, scrolling) and give up when asked or too late */
 uint64_t web_fetch_deadline;
+int web_time_scale = 1;
 int web_script_waiting;
 static bool web_wait(void) {
     poll_events();
@@ -657,6 +658,7 @@ static void init_node(struct doc *d, struct node *c) {
 }
 static void walk_init(struct doc *d, struct node *e, int depth) {
     if (depth > 200) return;
+    if (e->shadow) walk_init(d, e->shadow, depth + 1);
     for (struct node *c = e->first; c; c = c->next) {
         if (c->type != N_ELEM) continue;
         init_node(d, c);
@@ -666,18 +668,46 @@ static void walk_init(struct doc *d, struct node *e, int depth) {
 
 /* <style> and <link rel=stylesheet>, in document order */
 static int nsheets;
+/* a shadow root's <style>: scoped to its host's tag, and each different one only once (every instance of a
+ * component carries the same sheet) */
+static uint32_t scoped_seen[512]; static int nscoped;
+static void add_style_node(struct doc *d, struct node *c) {
+    c->css_done = 1;
+    char *b = 0; long len = 0, cap = 0;
+    if (c->text && !c->first) { b = malloc(c->tlen + 1); if (b) { memcpy(b, c->text, c->tlen); b[c->tlen] = 0; len = c->tlen; } }
+    else {                                              /* its text children */
+        for (struct node *t = c->first; t; t = t->next) if (t->type == N_TEXT) cap += t->tlen;
+        b = malloc(cap + 1);
+        if (b) { for (struct node *t = c->first; t; t = t->next) if (t->type == N_TEXT) { memcpy(b + len, t->text, t->tlen); len += t->tlen; } b[len] = 0; }
+    }
+    if (!b || !len) { free(b); return; }
+    struct node *h = css_tree_host(c);
+    if (h && h->name) {
+        uint32_t hash = 2166136261u;
+        for (const char *q = h->name; *q; q++) hash = (hash ^ (uint8_t)*q) * 16777619u;
+        for (long i = 0; i < len; i++) hash = (hash ^ (uint8_t)b[i]) * 16777619u;
+        for (int i = 0; i < nscoped; i++) if (scoped_seen[i] == hash) { free(b); return; }
+        if (nscoped < 512) scoped_seen[nscoped++] = hash;
+        long sl; char *sc = css_scope_shadow(b, len, h->name, &sl);
+        free(b); b = sc; len = sl;
+        if (!b) return;
+    }
+    char *copy = ar_strndup(&d->ar, b, len); free(b);
+    if (copy) css_add_sheet(copy, len, d->base, 0);
+}
 static void walk_styles(struct doc *d, struct node *e, int depth) {
     if (depth > 200) return;
     for (struct node *c = e->first; c && !abort_fetch && !quit && !pend; c = c->next) {
         if (c->type != N_ELEM) continue;
         const char *media = node_attr(c, "media");
         bool ok = !media || css_media_matches(media, strlen(media), WW - SCROLLBAR);
-        if (c->tag == T_STYLE) { if (c->text && ok) css_add_sheet(c->text, c->tlen, d->base, 0); continue; }
+        if (c->tag == T_STYLE) { if (ok) add_style_node(d, c); else c->css_done = 1; continue; }
         if (c->tag == T_LINK && ok && nsheets < 24) {
             const char *rel = node_attr(c, "rel"), *href = node_attr(c, "href");
             bool sheet = false;
             if (rel) for (const char *q = rel; *q; q++) if (pre_ci(q, "stylesheet")) sheet = true;
             if (rel && pre_ci(rel, "alternate")) sheet = false;
+            c->css_done = 1;
             if (sheet && href) {
                 static char u[600]; resolve_url(d->base, href, u, sizeof u);
                 ksnprintf(status_text, sizeof status_text, "Loading style sheet %s", u);
@@ -687,6 +717,7 @@ static void walk_styles(struct doc *d, struct node *e, int depth) {
                 if (t) { char *copy = ar_strndup(&d->ar, t, n); free(t); if (copy) css_add_sheet(copy, n, u, 0); }
             }
         }
+        if (c->shadow) walk_styles(d, c->shadow, depth + 1);
         walk_styles(d, c, depth + 1);
     }
 }
@@ -728,8 +759,37 @@ static void set_title(void) {
 }
 
 static int page_w(void) { return WW - SCROLLBAR > 120 ? WW - SCROLLBAR : 120; }
+static bool styles_scan, styles_reload;
+static const bool web_load_late_links = false;
+static void load_styles(struct doc *d);
+static void scan_new_styles(struct doc *d, struct node *e, int depth) {     /* <style>/<link> that scripts added */
+    if (depth > 200) return;
+    if (e->shadow) scan_new_styles(d, e->shadow, depth + 1);
+    for (struct node *c = e->first; c; c = c->next) {
+        if (c->type != N_ELEM) continue;
+        if (c->tag == T_STYLE) { if (!c->css_done) { const char *m = node_attr(c, "media"); if (!m || css_media_matches(m, strlen(m), WW - SCROLLBAR)) add_style_node(d, c); else c->css_done = 1; } continue; }
+        /* style sheets linked by scripts later (lazy-loaded parts of a site) are left out for now: they are
+         * written for layout features Web doesn't have yet and made pages like npr.org worse, not better */
+        if (c->tag == T_LINK && !c->css_done && !web_load_late_links) { c->css_done = 1; continue; }
+        if (c->tag == T_LINK && !c->css_done) {
+            c->css_done = 1;
+            const char *rel = node_attr(c, "rel"), *href = node_attr(c, "href");
+            bool sheet = false;
+            if (rel) for (const char *q = rel; *q; q++) if (pre_ci(q, "stylesheet")) sheet = true;
+            if (sheet && href && nsheets < 40) {
+                static char u[600]; resolve_url(d->base, href, u, sizeof u);
+                long n; char *t = web_fetch_text(u, &n, MAXCSS); nsheets++;
+                if (t) { char *copy = ar_strndup(&d->ar, t, n); free(t); if (copy) css_add_sheet(copy, n, u, 0); }
+            }
+            continue;
+        }
+        scan_new_styles(d, c, depth + 1);
+    }
+}
 static void relayout(void) {
     if (!doc) return;
+    if (styles_reload && !styles_loading) { styles_reload = styles_scan = false; load_styles(doc); need_cascade = true; }
+    if (styles_scan && !styles_loading) { styles_scan = false; scan_new_styles(doc, doc->root, 0); }
     if (need_cascade && !styles_loading) { css_cascade(doc, page_w()); need_cascade = false; }
     layout_doc(doc, &lay, page_w());
     need_layout = false;
@@ -807,7 +867,7 @@ static struct doc *parse_page(char *s, long n, const char *ctype, const char *ba
 
 static void load_styles(struct doc *d) {
     css_reset(&d->ar);
-    nsheets = 0;
+    nsheets = 0; nscoped = 0;
     styles_loading = true;
     walk_styles(d, d->root, 0);
     styles_loading = false;
@@ -1441,9 +1501,11 @@ void web_requeue_event(const struct dunc_event *e) {
 }
 void web_dom_changed(struct node *added) {
     if (added && doc && added->type == N_ELEM) { init_node(doc, added); walk_init(doc, added, 0); }
-    need_cascade = true; need_layout = true;
+    need_cascade = true; need_layout = true; styles_scan = true;
 }
 void web_text_changed(struct node *n) {                    /* a <button>'s label is drawn from its text */
+    for (struct node *p = n; p && p->type == N_ELEM; p = 0) if (p->tag == T_STYLE && p->css_done) styles_reload = true;   /* a sheet was rewritten */
+    if (n && n->parent && n->type == N_TEXT && n->parent->tag == T_STYLE && n->parent->css_done) styles_reload = true;
     for (int k = 0; n && k < 20; n = n->parent, k++)
         if (n->type == N_ELEM && n->tag == T_BUTTON && n->fc && doc) {
             char b[200]; int l = 0; text_content(n, b, sizeof b, &l, 0);
@@ -1553,6 +1615,9 @@ bool web_node_rect(struct node *n, int *x, int *y, int *w, int *h) {
     if (x1 < x0) { *x = *y = *w = *h = 0; return false; }
     *x = x0; *y = y0; *w = x1 - x0; *h = y1 - y0;
     return true;
+}
+long web_http_script(const char *u, char **out, int *status, char *ctype, int ctlen, char *final, int fulen) {
+    return fetch_any(u, 24l << 20, out, ctype, ctlen, status, final, fulen, "GET", 0, 0);
 }
 long web_http(const char *method, const char *u, const char *body, long blen, const char *headers,
               char **out, int *status, char *ctype, int ctlen, char *final, int fulen) {
@@ -1689,6 +1754,7 @@ static void handle_event(struct dunc_event *e) {
 int main(void) {
     char arg[256];
     http_options = HTTP_OPT_COOKIES | HTTP_OPT_GZIP;
+    { char ts[8] = ""; sys_setting_get("web.test_slow", ts, sizeof ts); if (ts[0] == '1') web_time_scale = 10; }   /* emulator testing only */
     css_init();
     if (!app_open_ex(&a, WW, WH, "Web", WIN_RESIZABLE)) return 1;
     http_wait_hook = web_wait;
@@ -1699,7 +1765,7 @@ int main(void) {
         /* If one turn of the loop uses 8 s of processor time (a page's script making Web loop somewhere in its
          * own code), the alarm brings it back here: that page's scripts are turned off and Web carries on. */
         if (dunc_setjmp(stuck_jb)) recover_from_stuck();
-        sys_alarm(8000, on_stuck_alarm);
+        sys_alarm(8000 * web_time_scale, on_stuck_alarm);
         if (pend) {
             pend = false; abort_fetch = false;
             char u[600]; strncpy0(u, pend_url, sizeof u);

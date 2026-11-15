@@ -51,6 +51,12 @@ struct node {
     int minw, maxw, iw_gen;           /* intrinsic widths, cached per layout */
     struct node *form;                /* the form a control belongs to */
     int jsw;                          /* scripts: index+1 of this node's JavaScript object (0: none yet) */
+    /* shadow DOM: a host's shadow root (a "#shadow-root" node, not in the host's children; its parent is the
+     * host, its host field too). What is drawn is the flattened tree (ffirst/fnext): an element's shadow
+     * content instead of its children, with each <slot> replaced by the host children assigned to it. */
+    struct node *shadow, *host, *ffirst, *fnext;
+    uint32_t fgen;
+    uint8_t css_done;                 /* <style>/<link>: its sheet is loaded */
 };
 
 struct doc {
@@ -106,7 +112,11 @@ struct style {
 void css_init(void);                                  /* parse the built-in style sheet */
 void css_reset(struct arena *page);                   /* forget the author style sheets */
 void css_add_sheet(const char *text, long len, const char *base_url, int import_depth);
-void css_cascade(struct doc *d, int viewport_w);      /* compute node->st for every element */
+void css_cascade(struct doc *d, int viewport_w);      /* compute node->st for every element (and the flattened tree) */
+void css_compose(struct doc *d);                      /* the flattened tree (ffirst/fnext) for shadow DOM */
+struct node *css_tree_host(const struct node *n);     /* the host of the shadow tree n is in (0: the document) */
+/* a shadow root's style sheet, rewritten so its rules apply inside its host only (:host, ::slotted) */
+char *css_scope_shadow(const char *css, long n, const char *host_tag, long *out_len);
 bool css_parse_color(const char *s, int n, uint32_t *out);
 bool css_media_dependent(void);
 void *css_save(void);                                 /* the current author rules, to put back with css_restore */
@@ -188,6 +198,7 @@ void web_viewport(int *w, int *h, int *scroll, int *doc_h);
 void web_scroll_to(int y);
 void web_message(const char *title, const char *msg);   /* alert() */
 bool web_node_rect(struct node *n, int *x, int *y, int *w, int *h);   /* where it is drawn (page coordinates) */
+long web_http_script(const char *url, char **out, int *status, char *ctype, int ctlen, char *final, int fulen);   /* up to 24 MB */
 long web_http(const char *method, const char *url, const char *body, long blen, const char *headers,
               char **out, int *status, char *ctype, int ctlen, char *final, int fulen);
 /* dom.c, for web.c */
@@ -207,6 +218,7 @@ extern uint64_t web_fetch_deadline;   /* if set: a download gives up at this tim
 void dom_check_soon(void);
 void js_stop_scripts(void);
 bool js_page_step(char *status, int n);
+extern int web_time_scale;              /* 1; 10 on a slow test machine (setting web.test_slow) */
 extern int web_script_waiting;          /* set while a running script waits for the network: events are held back */
 void web_requeue_event(const struct dunc_event *e);   /* an event seen while a script ran, handled afterwards */
 

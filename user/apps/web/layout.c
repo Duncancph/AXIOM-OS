@@ -251,7 +251,7 @@ static void text_intrinsic(const struct style *st, const char *s, int n, int *li
 }
 
 static void inline_intrinsic(struct node *e, int cbw, int *line, int *mn, int *mx, int d) {
-    for (struct node *c = e->first; c; c = c->next) {
+    for (struct node *c = e->ffirst; c; c = c->fnext) {
         if (c->type == N_TEXT) { text_intrinsic(e->st, c->text, c->tlen, line, mn, mx); continue; }
         const struct style *st = c->st;
         if (!st || st->display == D_NONE) continue;
@@ -293,7 +293,7 @@ static void intrinsic(struct node *e, int cbw, int *mn, int *mx) {
         depth++;
         if (st->display == D_FLEX && !st->flex_col) {
             /* a row: widths add up */
-            for (struct node *c = e->first; c; c = c->next) {
+            for (struct node *c = e->ffirst; c; c = c->fnext) {
                 if (c->type != N_ELEM || !c->st || c->st->display == D_NONE) continue;
                 int cmn, cmx; intrinsic(c, cbw, &cmn, &cmx);
                 b += cmx + st->gap; if (st->flex_wrap) { if (cmn > a) a = cmn; } else a += cmn + st->gap;
@@ -674,7 +674,7 @@ static void flow_node_(struct fctx *c, struct node *n, struct ictx ic) {
 }
 
 static void flow_children(struct fctx *c, struct node *e, struct ictx ic) {
-    for (struct node *ch = e->first; ch; ch = ch->next) flow_node(c, ch, ic);
+    for (struct node *ch = e->ffirst; ch; ch = ch->fnext) flow_node(c, ch, ic);
 }
 
 /* ---------------- tables ---------------- */
@@ -686,14 +686,14 @@ static int colspan(struct node *cell) { int s = attr_px(cell, "colspan"); return
 
 static int count_cells(struct node *e, int d) {
     int n = 0;
-    for (struct node *c = e->first; c && n < MAXCOLS; c = c->next) {
+    for (struct node *c = e->ffirst; c && n < MAXCOLS; c = c->fnext) {
         if (c->type != N_ELEM || !c->st || c->st->display == D_NONE) continue;
         n += c->st->display == D_CELL || d >= 2 ? 1 : count_cells(c, d + 1);
     }
     return n < MAXCOLS ? n : MAXCOLS;
 }
 static void row_cells(struct trow *r, struct node *e, int d, int cap) {
-    for (struct node *c = e->first; c; c = c->next) {
+    for (struct node *c = e->ffirst; c; c = c->fnext) {
         if (c->type != N_ELEM || !c->st || c->st->display == D_NONE) continue;
         if (c->st->display == D_CELL || d >= 2) { if (r->nc < cap) r->cells[r->nc++] = c; }
         else row_cells(r, c, d + 1, cap);
@@ -701,7 +701,7 @@ static void row_cells(struct trow *r, struct node *e, int d, int cap) {
 }
 /* two passes: count rows and cells (rows == 0), then fill them in */
 static void gather(struct tinfo *t, struct node *e, int d) {
-    for (struct node *c = e->first; c; c = c->next) {
+    for (struct node *c = e->ffirst; c; c = c->fnext) {
         if (c->type != N_ELEM || !c->st || c->st->display == D_NONE) continue;
         int dsp = c->st->display;
         if (dsp == D_ROW) {
@@ -935,7 +935,7 @@ __attribute__((noinline)) static bool layout_flex(struct fctx *cc, struct node *
     if (!items) return false;
     int *basis = (int *)(items + 64), *mins = basis + 64, *w = mins + 64;
     int n = 0;
-    for (struct node *c = e->first; c; c = c->next) {
+    for (struct node *c = e->ffirst; c; c = c->fnext) {
         if (c->type == N_TEXT) { for (int i = 0; i < c->tlen; i++) if (!is_ws(c->text[i])) return false; continue; }
         if (!c->st || c->st->display == D_NONE) continue;
         if (n >= 64) return false;

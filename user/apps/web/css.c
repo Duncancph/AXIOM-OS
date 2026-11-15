@@ -1349,19 +1349,152 @@ static void style_elem(struct node *e, const struct style *ps) {
     /* table internals outside tables, and the other way round, are fixed up by layout */
 }
 
+/* ---------------- shadow DOM: the flattened tree ---------------- */
+static uint32_t fgen_now;
+static struct node **ftail;
+struct node *css_tree_host(const struct node *n) {
+    for (const struct node *p = n ? n->parent : 0; p; p = p->parent) if (p->host && p->host->shadow == p) return p->host;
+    return 0;
+}
+static bool is_slot(const struct node *c) { return c->type == N_ELEM && c->name && !strcmp(c->name, "slot") && css_tree_host(c); }
+static void fadd(struct node *c) {
+    if (c->fgen == fgen_now) return;                   /* already placed (two slots with the same name) */
+    c->fgen = fgen_now; c->fnext = 0; *ftail = c; ftail = &c->fnext;
+}
+static void flat_add(struct node *c, int depth) {
+    if (depth < 16 && is_slot(c)) {
+        struct node *h = css_tree_host(c);
+        const char *nm = node_attr(c, "name"); if (!nm) nm = "";
+        bool any = false;
+        for (struct node *k = h->first; k; k = k->next) {
+            const char *ks = k->type == N_ELEM ? node_attr(k, "slot") : 0;
+            if (nm[0] ? (ks && !strcmp(ks, nm)) : (!ks || !ks[0])) {
+                if (k->type == N_TEXT && !nm[0]) { bool blank = true; for (int i = 0; i < k->tlen; i++) if ((unsigned char)k->text[i] > ' ') blank = false; if (blank && !any) continue; }
+                any = true;
+                if (is_slot(k)) flat_add(k, depth + 1); else fadd(k);
+            }
+        }
+        if (!any) for (struct node *k = c->first; k; k = k->next) flat_add(k, depth + 1);   /* fallback content */
+        return;
+    }
+    fadd(c);
+}
+static void compose_rec(struct node *e, int depth) {
+    if (depth > 400) return;
+    struct node *src = e->shadow ? e->shadow : e;
+    e->ffirst = 0; ftail = &e->ffirst;
+    for (struct node *c = src->first; c; c = c->next) flat_add(c, 0);
+    for (struct node *c = e->ffirst; c; c = c->fnext) if (c->type == N_ELEM) compose_rec(c, depth + 1);
+}
+void css_compose(struct doc *d) { if (!d || !d->root) return; fgen_now++; if (!fgen_now) fgen_now = 1; d->root->fgen = fgen_now; compose_rec(d->root, 0); }
+
+/* :host -> the host's tag, ::slotted(x) -> x inside the host, everything else -> inside the host */
+static void sb_put(char **o, long *n, long *cap, const char *s, long k) {
+    if (*n + k + 1 > *cap) { long nc = (*cap + k + 64) * 2; char *t = realloc(*o, nc); if (!t) return; *o = t; *cap = nc; }
+    memcpy(*o + *n, s, k); *n += k; (*o)[*n] = 0;
+}
+static long paren_end(const char *s, long i, long n) {      /* s[i] == '(' -> index after its ')' */
+    int d = 0;
+    for (; i < n; i++) { if (s[i] == '(') d++; else if (s[i] == ')' && --d == 0) return i + 1; }
+    return n;
+}
+static void scope_sel(char **o, long *on, long *cap, const char *s, long n, const char *host) {
+    while (n && (unsigned char)s[0] <= ' ') { s++; n--; }
+    while (n && (unsigned char)s[n - 1] <= ' ') n--;
+    if (!n) return;
+    long hl = strlen(host);
+    bool hosted = false;
+    for (long i = 0; i + 5 <= n; i++) if (!memcmp(s + i, ":host", 5)) hosted = true;
+    if (!hosted) { sb_put(o, on, cap, host, hl); sb_put(o, on, cap, " ", 1); }
+    for (long i = 0; i < n;) {
+        if (i + 13 <= n && !memcmp(s + i, ":host-context", 13) && s[i + 13] == '(') {
+            long e = paren_end(s, i + 13, n);
+            sb_put(o, on, cap, s + i + 14, e - i - 15); sb_put(o, on, cap, " ", 1); sb_put(o, on, cap, host, hl);
+            i = e; continue;
+        }
+        if (i + 5 <= n && !memcmp(s + i, ":host", 5)) {
+            sb_put(o, on, cap, host, hl);
+            if (i + 5 < n && s[i + 5] == '(') { long e = paren_end(s, i + 5, n); sb_put(o, on, cap, s + i + 6, e - i - 7); i = e; }
+            else i += 5;
+            continue;
+        }
+        if (i + 9 <= n && !memcmp(s + i, "::slotted", 9) && i + 9 < n && s[i + 9] == '(') {
+            long e = paren_end(s, i + 9, n);
+            if (*on && (*o)[*on - 1] != ' ') sb_put(o, on, cap, " ", 1);
+            sb_put(o, on, cap, s + i + 10, e - i - 11); i = e; continue;
+        }
+        sb_put(o, on, cap, s + i, 1); i++;
+    }
+}
+char *css_scope_shadow(const char *s, long n, const char *host, long *outn) {
+    long cap = n + 256, on = 0; char *o = malloc(cap); if (!o) return 0; o[0] = 0;
+    int ctx[64], dep = 0; ctx[0] = 0;                      /* 0 rules, 1 declarations, 2 copied as is */
+    long i = 0;
+    while (i < n) {
+        char ch = s[i];
+        if (ch == '/' && i + 1 < n && s[i + 1] == '*') { long e = i + 2; while (e + 1 < n && !(s[e] == '*' && s[e + 1] == '/')) e++; i = e + 2 > n ? n : e + 2; continue; }
+        if (ctx[dep] != 0) {                               /* inside declarations or a copied block */
+            long st = i; char q = 0;
+            while (i < n) {
+                char c = s[i];
+                if (q) { if (c == '\\') i++; else if (c == q) q = 0; }
+                else if (c == '"' || c == '\'') q = c;
+                else if (c == '{') { if (dep < 63) { dep++; ctx[dep] = 2; } i++; break; }
+                else if (c == '}') { dep = dep > 0 ? dep - 1 : 0; i++; break; }
+                i++;
+            }
+            sb_put(&o, &on, &cap, s + st, i - st);
+            continue;
+        }
+        if (ch == '}') { dep = dep > 0 ? dep - 1 : 0; sb_put(&o, &on, &cap, "}", 1); i++; continue; }
+        if ((unsigned char)ch <= ' ') { sb_put(&o, &on, &cap, s + i, 1); i++; continue; }
+        long st = i; char q = 0; int pd = 0;               /* a prelude: up to '{' or ';' */
+        while (i < n) {
+            char c = s[i];
+            if (q) { if (c == '\\') i++; else if (c == q) q = 0; }
+            else if (c == '"' || c == '\'') q = c;
+            else if (c == '(' || c == '[') pd++;
+            else if (c == ')' || c == ']') pd--;
+            else if (pd <= 0 && (c == '{' || c == ';' || c == '}')) break;
+            i++;
+        }
+        if (i >= n || s[i] != '{') { sb_put(&o, &on, &cap, s + st, i - st + (i < n && s[i] == ';')); if (i < n && s[i] == ';') i++; continue; }
+        if (s[st] == '@') {
+            sb_put(&o, &on, &cap, s + st, i - st + 1);
+            bool nested = !strncmp(s + st, "@media", 6) || !strncmp(s + st, "@supports", 9) || !strncmp(s + st, "@container", 10) || !strncmp(s + st, "@layer", 6) || !strncmp(s + st, "@document", 9);
+            if (dep < 63) { dep++; ctx[dep] = nested ? 0 : 2; }
+            i++; continue;
+        }
+        long a = st; pd = 0; q = 0; bool first = true;     /* the selector list, one at a time */
+        for (long k = st; k <= i; k++) {
+            char c = k < i ? s[k] : ',';
+            if (q) { if (c == q) q = 0; continue; }
+            if (c == '"' || c == '\'') { q = c; continue; }
+            if (c == '(' || c == '[') pd++; else if (c == ')' || c == ']') pd--;
+            else if (c == ',' && pd <= 0) { if (!first) sb_put(&o, &on, &cap, ", ", 2); scope_sel(&o, &on, &cap, s + a, k - a, host); first = false; a = k + 1; }
+        }
+        sb_put(&o, &on, &cap, " {", 2);
+        if (dep < 63) { dep++; ctx[dep] = 1; }
+        i++;
+    }
+    *outn = on;
+    return o;
+}
+
 static void cascade_rec(struct node *e, const struct style *ps) {
     if (cascade_depth > 200) { e->st = 0; return; }
     style_elem(e, ps);
     if (!e->st) return;
     if (e->st->display == D_NONE) return;
     cascade_depth++;
-    for (struct node *c = e->first; c; c = c->next) if (c->type == N_ELEM) cascade_rec(c, e->st); else c->st = 0;
+    for (struct node *c = e->ffirst; c; c = c->fnext) if (c->type == N_ELEM) cascade_rec(c, e->st); else c->st = 0;
     cascade_depth--;
 }
 
 static void clear_styles(struct node *e) {
     e->st = 0;
     for (struct node *c = e->first; c; c = c->next) clear_styles(c);
+    if (e->shadow) clear_styles(e->shadow);
 }
 
 /* attributes like <a href> become :link; <base href> was read already */
@@ -1370,6 +1503,7 @@ void css_cascade(struct doc *d, int vw) {
     viewport_w = vw; media_gen++;
     match_budget = 40000000;
     root_fs = 16;
+    css_compose(d);
     clear_styles(d->root);
     struct style init; memset(&init, 0, sizeof init);
     init.color = 0x000000; init.fsize = 16; init.vis = 1; init.display = D_BLOCK; init.spacing = 0;

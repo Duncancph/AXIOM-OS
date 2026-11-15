@@ -11,13 +11,30 @@ static js_rt *rt;
 static struct doc *D;
 static jsval wrappers;                 /* every node's JS object, by node->jsw - 1 (kept for the page's life) */
 static long nwrappers;
-static jsval proto_elem, proto_text, proto_comment, proto_media, api;   /* set by the prelude */
+static jsval proto_elem, proto_text, proto_comment, proto_media, proto_shadow, api;   /* set by the prelude */
 static bool page_on;
 
 /* ---------------- console (about:console) ---------------- */
 static char conlog[16384]; static long conlen;
 static void con_add(const char *pre, const char *s) {
-    if (pre[0] == '[' && pre[1] == 'e') { char l[300]; ksnprintf(l, sizeof l, "script %s%s", pre, s); sys_log(l); }   /* errors also go to the log */
+    if (pre[0] == '[' && pre[1] == 'e') {               /* errors also go to the log: long addresses shortened, in pieces */
+        static char l[2000]; long k = 0;
+        for (const char *p = pre; *p && k < 1990; p++) l[k++] = *p;
+        for (const char *p = s; *p && k < 1990;) {
+            if (!strncmp(p, "http://", 7) || !strncmp(p, "https://", 8)) {          /* keep the file name of an address */
+                const char *q = p + 8, *last = p; while (*q && *q != ' ' && *q != ')' && *q != '\n') { if (*q == '/') last = q; q++; }
+                const char *nm = last + 1; long nl = 0; while (nm + nl < q && nl < 40 && nm[nl] != '?') nl++;
+                l[k++] = '.'; l[k++] = '.'; l[k++] = '/';
+                for (long i = 0; i < nl && k < 1990; i++) l[k++] = nm[i];
+                const char *ln = nm + nl; while (ln < q && *ln != ':') ln++;           /* and its :line */
+                while (ln < q && k < 1990) l[k++] = *ln++;
+                p = q; continue;
+            }
+            l[k++] = *p == '\n' ? ' ' : *p; p++;
+        }
+        l[k] = 0;
+        for (long o = 0; o < k; o += 200) { char part[220] = "script "; long m = k - o < 200 ? k - o : 200; memcpy(part + 7, l + o, m); part[7 + m] = 0; sys_log(part); }
+    }
     long n = strlen(pre) + strlen(s) + 1;
     if (n > (long)sizeof conlog / 2) n = sizeof conlog / 2;
     if (conlen + n >= (long)sizeof conlog) { long cut = conlen + n - (long)sizeof conlog / 2; memmove(conlog, conlog + cut, conlen - cut); conlen -= cut; }
@@ -38,7 +55,7 @@ static uint64_t run_start, page_deadline, last_look;
 /* How much processor time the page's scripts have used, counted with the cycle counter (timer jobs
  * are often far shorter than a millisecond). A page that keeps scripts busy without end (YouTube's
  * app, for one) has its scripts turned off after PAGE_CPU_MS, so it can't keep a core busy forever. */
-#define PAGE_CPU_MS 20000
+#define PAGE_CPU_MS ((uint64_t)20000 * (uint64_t)web_time_scale)
 static uint64_t cyc_begin, page_cycles, cal_tsc0, cal_ms0;
 static inline uint64_t cyc(void) { uint32_t lo, hi; __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi)); return (uint64_t)hi << 32 | lo; }
 static uint64_t cycles_per_ms(void) {
@@ -59,7 +76,7 @@ static void scripts_off(const char *why) { con_add("[stopped] ", why); page_on =
 static _Bool h_interrupt(void *c) {
     uint64_t now = sys_time();
     if (!page_on) return true;
-    if (now - run_start > 4000) { scripts_off("a script ran for more than 4 seconds; this page's scripts were turned off"); return true; }
+    if (now - run_start > 4000 * (uint64_t)web_time_scale) { scripts_off("a script ran for more than 4 seconds; this page's scripts were turned off"); return true; }
     if (page_cpu_ms() > PAGE_CPU_MS) { scripts_off("this page's scripts kept the processor busy for 20 seconds, so they were turned off"); return true; }
     if (now - last_look > 100) {
         last_look = now;
@@ -114,6 +131,7 @@ static jsval W(struct node *n) {                         /* the node's JS object
     if (!n) return js_null();
     if (n->jsw) return js_get_index(rt, wrappers, n->jsw - 1);
     jsval o = js_host_object(rt, &node_class, n, n->type == N_TEXT ? proto_text :
+                             n->host && n->host->shadow == n && js_is_object(proto_shadow) ? proto_shadow :
                              (n->tag == T_VIDEO || n->tag == T_AUDIO) && js_is_object(proto_media) ? proto_media : proto_elem);
     HOLD(o);
     js_set_index(rt, wrappers, nwrappers, o);
@@ -273,7 +291,21 @@ static void run_script_node(struct node *s);
 #define NATIVE(name) static jsval name(js_rt *rt_, jsval self, int argc, jsval *argv, void *data)
 NATIVE(n_type) { struct node *n = N(A(argc, argv, 0)); return js_int(!n ? 0 : n->type == N_TEXT ? 3 : 1); }
 NATIVE(n_tag) { struct node *n = N(A(argc, argv, 0)); return n && n->name ? js_str(rt, n->name, -1) : js_str(rt, "", 0); }
-NATIVE(n_parent) { struct node *n = N(A(argc, argv, 0)); return n ? W(n->parent) : js_null(); }
+NATIVE(n_parent) { struct node *n = N(A(argc, argv, 0)); return n && !(n->host && n->host->shadow == n) ? W(n->parent) : js_null(); }   /* a shadow root has no parent */
+/* shadow DOM: D.attachShadow(host) -> its shadow root; D.shadow(host); D.host(shadowRoot) */
+NATIVE(n_attach_shadow) {
+    struct node *h = N(A(argc, argv, 0));
+    if (!h || h->type != N_ELEM) return js_null();
+    if (!h->shadow) {
+        struct node *r = new_node(N_ELEM, "#shadow-root");
+        if (!r) return js_null();
+        r->parent = h; r->host = h; h->shadow = r;
+        web_dom_changed(0);
+    }
+    return W(h->shadow);
+}
+NATIVE(n_shadow) { struct node *h = N(A(argc, argv, 0)); return h && h->shadow ? W(h->shadow) : js_null(); }
+NATIVE(n_host) { struct node *r = N(A(argc, argv, 0)); return r && r->host && r->host->shadow == r ? W(r->host) : js_null(); }
 NATIVE(n_first) { struct node *n = N(A(argc, argv, 0)); return n ? W(n->first) : js_null(); }
 NATIVE(n_last) { struct node *n = N(A(argc, argv, 0)); return n ? W(n->last) : js_null(); }
 NATIVE(n_next) { struct node *n = N(A(argc, argv, 0)); return n ? W(n->next) : js_null(); }
@@ -398,14 +430,20 @@ NATIVE(n_insert) {
     return W(n);
 }
 NATIVE(n_remove) { struct node *n = N(A(argc, argv, 0)); if (n) { struct node *p = n->parent; detach(n); web_text_changed(p); web_dom_changed(0); } return js_undefined(); }
+/* a copy of a node (and with deep, of everything inside it): node by node, not through HTML */
+static struct node *clone_node(struct node *n, bool deep, int depth) {
+    if (n->type == N_TEXT) { struct node *t = new_node(N_TEXT, 0); if (t) { t->text = ardup(n->text, n->tlen); t->tlen = n->tlen; } return t; }
+    struct node *c = new_node(N_ELEM, n->name ? n->name : "div");
+    if (!c) return 0;
+    for (int i = 0; i < n->nattr; i++) set_attr(c, n->attrs[i].name, n->attrs[i].value ? n->attrs[i].value : "", n->attrs[i].value ? strlen(n->attrs[i].value) : 0);
+    if (n->text) { c->text = ardup(n->text, n->tlen); c->tlen = n->tlen; }   /* script / style text */
+    if (deep && depth < 400)
+        for (struct node *k = n->first; k; k = k->next) { struct node *kc = clone_node(k, true, depth + 1); if (kc) insert_before(c, kc, 0); }
+    return c;
+}
 NATIVE(n_clone) {
     struct node *n = N(A(argc, argv, 0)); if (!n) return js_null();
-    struct sb b = { 0, 0, 0 };
-    if (n->type == N_TEXT) { struct node *t = new_node(N_TEXT, 0); if (t) { t->text = ardup(n->text, n->tlen); t->tlen = n->tlen; } return W(t); }
-    if (js_truthy(A(argc, argv, 1))) { serialize(&b, n, true, 0); struct node *f = parse_fragment(b.p ? b.p : "", b.n); free(b.p); return W(f); }
-    struct node *c = new_node(N_ELEM, n->name ? n->name : "div");
-    if (c) for (int i = 0; i < n->nattr; i++) set_attr(c, n->attrs[i].name, n->attrs[i].value ? n->attrs[i].value : "", n->attrs[i].value ? strlen(n->attrs[i].value) : 0);
-    return W(c);
+    return W(clone_node(n, js_truthy(A(argc, argv, 1)), 0));
 }
 static void query(struct node *e, const char *sel, int sl, jsval arr, long *cnt, bool all, int depth) {
     if (depth > 200) return;
@@ -503,6 +541,33 @@ NATIVE(n_rect) {
     if (n) web_node_rect(n, &x, &y, &w, &h);
     jsval a = js_array(rt); HOLD(a);
     js_set_index(rt, a, 0, js_int(x)); js_set_index(rt, a, 1, js_int(y)); js_set_index(rt, a, 2, js_int(w)); js_set_index(rt, a, 3, js_int(h));
+    DROP(a);
+    return a;
+}
+/* D.customIn(node): every element at or under node whose name has a '-' (a possible custom element), in
+ * document order, shadow trees included */
+static bool has_dash(const char *s) { for (; *s; s++) if (*s == '-') return true; return false; }
+static void custom_in(struct node *e, jsval arr, long *n, int depth) {
+    if (depth > 400 || *n > 200000) return;
+    if (e->type == N_ELEM && e->name && e->name[0] != '#' && has_dash(e->name)) js_set_index(rt, arr, (*n)++, W(e));
+    if (e->shadow) custom_in(e->shadow, arr, n, depth + 1);
+    for (struct node *c = e->first; c; c = c->next) if (c->type == N_ELEM) custom_in(c, arr, n, depth + 1);
+}
+NATIVE(n_custom_in) {
+    struct node *e = N(A(argc, argv, 0));
+    jsval arr = js_array(rt); HOLD(arr);
+    long n = 0; if (e) custom_in(e, arr, &n, 0);
+    DROP(arr);
+    return arr;
+}
+/* D.computed(el): [font size px, colour, background (0: none), bold, italic, line height px (0: normal), visible, position, text-align] */
+NATIVE(n_computed) {
+    struct node *n = N(A(argc, argv, 0));
+    const struct style *st = n && n->type == N_ELEM ? n->st : 0;
+    jsval a = js_array(rt); HOLD(a);
+    int v[9] = { 16, 0, 0, 0, 0, 0, 1, 0, 0 };
+    if (st) { v[0] = st->fsize; v[1] = (int)(st->color & 0xFFFFFF); v[2] = (int)st->bg; v[3] = st->bold; v[4] = st->italic; v[5] = st->lh; v[6] = st->vis; v[7] = st->pos; v[8] = st->align; }
+    for (int i = 0; i < 9; i++) js_set_index(rt, a, i, js_num((double)(uint32_t)v[i]));
     DROP(a);
     return a;
 }
@@ -650,7 +715,7 @@ NATIVE(n_test_spin) { volatile unsigned long x = 0; for (;;) x++; return js_unde
 #endif
 NATIVE(n_set_protos) {
     proto_elem = A(argc, argv, 0); proto_text = A(argc, argv, 1); proto_comment = A(argc, argv, 2); api = A(argc, argv, 3);
-    proto_media = A(argc, argv, 4);
+    proto_media = A(argc, argv, 4); proto_shadow = A(argc, argv, 5);
     return js_undefined();
 }
 /* D.media(el, op, name, value): <video>/<audio> for scripts (web/media.c) */
@@ -704,10 +769,10 @@ static void run_script_node(struct node *s) {
         uint64_t now = sys_time();                        /* a script file gets until the page's time is up (5 s at least) */
         web_fetch_deadline = page_deadline > now + 5000 ? page_deadline : now + 5000;
         web_script_waiting++;
-        long n = web_http("GET", u, 0, 0, 0, &t, &st, ct, sizeof ct, fin, sizeof fin);
+        long n = web_http_script(u, &t, &st, ct, sizeof ct, fin, sizeof fin);
         web_script_waiting--;
         web_fetch_deadline = 0;
-        if (n > 1500000) { char m[700]; ksnprintf(m, sizeof m, "%s is too big to run here (%ld KB)", u, n / 1024); con_add("[skipped] ", m); free(t); }
+        if (n > (24l << 20)) { char m[700]; ksnprintf(m, sizeof m, "%s is too big to run here (%ld KB)", u, n / 1024); con_add("[skipped] ", m); free(t); }
         else if (n >= 0 && t && st < 400) { run_code(t, n, u); free(t); }
         else { char m[700]; ksnprintf(m, sizeof m, "couldn't load %s", u); con_add("[error] ", m); }
         return;
@@ -751,7 +816,7 @@ static const struct { const char *name; js_native fn; int n; } natives[] = {
 #ifdef WEB_TEST_SPIN
     { "testSpin", n_test_spin, 0 },
 #endif
-    { "storageLoad", n_storage_load, 0 }, { "storageSave", n_storage_save, 1 }, { "compile", n_compile, 1 }, { "setProtos", n_set_protos, 5 }, { "media", n_media, 4 },
+    { "storageLoad", n_storage_load, 0 }, { "storageSave", n_storage_save, 1 }, { "compile", n_compile, 1 }, { "setProtos", n_set_protos, 6 }, { "computed", n_computed, 1 }, { "customIn", n_custom_in, 1 }, { "attachShadow", n_attach_shadow, 1 }, { "shadow", n_shadow, 1 }, { "host", n_host, 1 }, { "media", n_media, 4 },
 };
 
 bool js_page_active(void) { return page_on; }
@@ -776,6 +841,7 @@ void js_page_start(struct doc *d) {
     wrappers = js_array(rt); nwrappers = 0;
     js_root(rt, &wrappers); js_root(rt, &proto_elem); js_root(rt, &proto_text); js_root(rt, &proto_comment); js_root(rt, &api);
     proto_media = js_undefined(); js_root(rt, &proto_media);
+    proto_shadow = js_undefined(); js_root(rt, &proto_shadow);
     for (int i = 0; i < MAXT; i++) { timers[i].used = false; timers[i].fn = js_undefined(); js_root(rt, &timers[i].fn); }
     jsval g = js_global(rt), dd = js_object(rt);
     js_root(rt, &dd);
@@ -785,7 +851,7 @@ void js_page_start(struct doc *d) {
     }
     js_define(rt, g, "__d", dd, false);
     js_unroot(rt, &dd);
-    page_deadline = sys_time() + 15000; skip_said = false; page_cycles = 0; cyc_begin = 0; page_net_ms = 0;
+    page_deadline = sys_time() + 15000 * (uint64_t)web_time_scale; skip_said = false; page_cycles = 0; cyc_begin = 0; page_net_ms = 0;
     run_code(dom_prelude, sizeof dom_prelude - 1, "web prelude");
 #ifdef WEB_TEST_SPIN
     { jsval f = js_function(rt, "axiomTestSpin", n_test_spin, 0, 0); HOLD(f); js_define(rt, js_global(rt), "axiomTestSpin", f, false); DROP(f); }
@@ -823,7 +889,7 @@ void js_abandon(uint64_t where) {
     for (int i = 0; i < MAXT; i++) timers[i].used = false;
     if (D && D->root) {                                   /* forget the nodes' script objects (at most a million nodes) */
         struct node *st[256]; int sp = 0; long seen = 0; st[sp++] = D->root;
-        while (sp && seen++ < 1000000) { struct node *e = st[--sp]; e->jsw = 0; for (struct node *c = e->first; c && seen < 1000000; c = c->next, seen++) { if (sp < 256) st[sp++] = c; else c->jsw = 0; } }
+        while (sp && seen++ < 1000000) { struct node *e = st[--sp]; e->jsw = 0; if (e->shadow && sp < 256) st[sp++] = e->shadow; for (struct node *c = e->first; c && seen < 1000000; c = c->next, seen++) { if (sp < 256) st[sp++] = c; else c->jsw = 0; } }
     }
     rt = 0; D = 0;                                        /* the runtime is left as it is (it may be half-way through something) */
 }
@@ -833,11 +899,11 @@ void js_page_end(void) {
     if (!rt) { page_on = false; return; }
     page_on = false;
     for (int i = 0; i < MAXT; i++) { js_unroot(rt, &timers[i].fn); timers[i].used = false; }
-    js_unroot(rt, &wrappers); js_unroot(rt, &proto_elem); js_unroot(rt, &proto_text); js_unroot(rt, &proto_comment); js_unroot(rt, &api); js_unroot(rt, &proto_media);
-    proto_media = js_undefined();
+    js_unroot(rt, &wrappers); js_unroot(rt, &proto_elem); js_unroot(rt, &proto_text); js_unroot(rt, &proto_comment); js_unroot(rt, &api); js_unroot(rt, &proto_media); js_unroot(rt, &proto_shadow);
+    proto_media = js_undefined(); proto_shadow = js_undefined();
     if (D) {                                              /* forget the nodes' JS objects */
         struct node *st[256]; int sp = 0; st[sp++] = D->root;
-        while (sp) { struct node *e = st[--sp]; e->jsw = 0; for (struct node *c = e->first; c; c = c->next) if (sp < 256) st[sp++] = c; else c->jsw = 0; }
+        while (sp) { struct node *e = st[--sp]; e->jsw = 0; if (e->shadow && sp < 256) st[sp++] = e->shadow; for (struct node *c = e->first; c; c = c->next) if (sp < 256) st[sp++] = c; else c->jsw = 0; }
     }
     js_free(rt);
     rt = 0; D = 0;
