@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 97
-notes Web: more modern-site support (custom element frameworks, lazy-loaded scripts, long addresses)
-file kernel b97/thane.elf.gz 17996872 9330fa761fe45173ab6e1fff2484e2fd07b4180a0ecc0e14600e7abbab222ba3
-file initrd b97/initrd.tar.gz 1280000 274bf8911f0d221a215d580954998534a5fdb7fc26df79354d51fe3cbd8a7020
-file bootx64 b97/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b97/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 30450220051d7c124bd5b5af4f3f2c8fa5725f71ae324ba97a5a37128b2c96169106d2b7022100da02e3775fcbc2cebf0600d660ad7ea81b422af24aec9b2915b946dc11698774
+build 99
+notes Web is now called Arc, with a new icon; long custom element names work
+file kernel b99/thane.elf.gz 18013008 14b297decb1666e73a7ed04e326944aa6cfa8a392419c38b2b452ce6c31ca501
+file initrd b99/initrd.tar.gz 1280000 42ad685dbf2a09e828a0881acb1e144de9307ddde9c3b4422d93103f1b8d0dcf
+file bootx64 b99/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b99/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304502200b4691638d24d84b5bb41b090839d2a6727de8d85af005ad120d80b8f5c479be022100cc99daa0755c9200e14a943c3b6e6da678a3877e397198d179667e8e0e6c5c6b
