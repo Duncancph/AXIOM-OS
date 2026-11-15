@@ -6,7 +6,8 @@
 #include "web/web.h"
 
 static int WW = 900, WH = 640;
-#define BAR_H 52
+#define TAB_H 30                  /* the row of tabs */
+#define BAR_H (TAB_H + 52)         /* tabs + the address row; the page starts below */
 #define STATUS_H 24
 #define SCROLLBAR 12
 #define MAXPAGE (4l << 20)
@@ -804,6 +805,7 @@ static void title_ascii(const char *in, char *out, int max) {
     out[k] = 0;
 }
 
+static void tab_title(const char *t);
 static void set_title(void) {
     char t[64];
     char tbuf[160]; title_ascii(doc && doc->title[0] ? doc->title : url, tbuf, sizeof tbuf);
@@ -812,6 +814,7 @@ static void set_title(void) {
     if (n > 50) { char s[48]; memcpy(s, tt, 47); s[47] = 0; ksnprintf(t, sizeof t, "%s... - Arc", s); }
     else ksnprintf(t, sizeof t, "%s - Arc", tt);
     app_title(&a, t);
+    tab_title(tt);
 }
 
 static int page_w(void) { return WW - SCROLLBAR > 120 ? WW - SCROLLBAR : 120; }
@@ -1402,29 +1405,96 @@ static void popup_geom(int *px, int *py, int *pw, int *ph, int *vis) {
     if (*px < 0) *px = 0;
 }
 
+/* ---------------- tabs ----------------
+ * Each tab remembers its own pages (history) and where it was scrolled to. One page is alive at a time: going
+ * to another tab opens that tab's page again (from the cache when it can). */
+#define MAXTABS 12
+struct tab { struct hent *h; int hpos, hcount; char title[40]; };
+static struct tab tabs[MAXTABS]; static int ntabs = 1, curtab;
+static int tab_w(void) { int w = (WW - 44) / (ntabs > 0 ? ntabs : 1); return w > 190 ? 190 : w < 40 ? 40 : w; }
+static void tab_save(void) {                               /* the tab being left keeps its history */
+    struct tab *t = &tabs[curtab];
+    if (!t->h) t->h = malloc(sizeof hist);
+    if (hpos >= 0) hist[hpos].scroll = scroll;
+    if (t->h) memcpy(t->h, hist, sizeof hist);
+    t->hpos = hpos; t->hcount = hcount;
+}
+static void tab_show(int i) {                              /* make tab i the one on screen */
+    curtab = i;
+    struct tab *t = &tabs[i];
+    if (t->h && t->hpos >= 0) { memcpy(hist, t->h, sizeof hist); hpos = t->hpos; hcount = t->hcount; request_nav(hist[hpos].url, false, 0, 0, 1, hist[hpos].scroll); }
+    else { hpos = -1; hcount = 0; request_nav("about:home", false, 0, 0, 0, 0); }
+}
+static void tab_switch(int i) { if (i == curtab || i < 0 || i >= ntabs) return; tab_save(); tab_show(i); }
+static void tab_new(void) {
+    if (ntabs >= MAXTABS) return;
+    tab_save();
+    memset(&tabs[ntabs], 0, sizeof tabs[0]); tabs[ntabs].hpos = -1; strncpy0(tabs[ntabs].title, "New tab", sizeof tabs[0].title);
+    tab_show(ntabs++);
+    addr_focus = true; addr[0] = 0; alen = 0;              /* ready to type an address */
+}
+static void tab_close(int i) {
+    if (i < 0 || i >= ntabs) return;
+    if (ntabs == 1) { free(tabs[0].h); memset(&tabs[0], 0, sizeof tabs[0]); tabs[0].hpos = -1; tab_show(0); return; }   /* the last one: a fresh start page */
+    bool was_cur = i == curtab;
+    free(tabs[i].h);
+    for (int k = i + 1; k < ntabs; k++) tabs[k - 1] = tabs[k];
+    ntabs--;
+    if (was_cur) tab_show(i < ntabs ? i : ntabs - 1);
+    else if (i < curtab) curtab--;
+}
+static void tab_title(const char *t) { strncpy0(tabs[curtab].title, t, sizeof tabs[curtab].title); }
+/* which part of the tab row is at x: a tab (0..), its close cross (100 + tab), the + button (200), or -1 */
+static int tab_at(int x, int y) {
+    if (y < 0 || y >= TAB_H) return -1;
+    int w = tab_w();
+    for (int i = 0; i < ntabs; i++) { int tx = 6 + i * w; if (x >= tx && x < tx + w - 2) return x >= tx + w - 24 && w >= 70 ? 100 + i : i; }
+    if (x >= 6 + ntabs * w + 2 && x < 6 + ntabs * w + 30) return 200;
+    return -1;
+}
+static void draw_tabs(struct canvas *c) {
+    const struct font *f = web_font(13, false, false);
+    int w = tab_w();
+    for (int i = 0; i < ntabs; i++) {
+        int tx = 6 + i * w; bool cur = i == curtab;
+        gfx_rrect(c, tx, 5, w - 2, TAB_H - 5, 7, cur ? HL_TERM_BG : 0x1C1C1B, 255);
+        if (cur) gfx_fill(c, tx + 8, TAB_H - 2, w - 18, 2, HL_ACCENT);
+        const char *t = tabs[i].title[0] ? tabs[i].title : "New tab";
+        int maxw = w - (w >= 70 ? 38 : 14), n = strlen(t), tw = 0, k = 0;
+        for (; k < n; k++) { unsigned ch = (unsigned char)t[k]; int gw = f->g[(ch < 32 || ch == 127 ? '?' : ch) - 32].adv; if (tw + gw > maxw) break; tw += gw; }
+        gfx_clip(c, tx + 8, 5, maxw + 2, TAB_H - 5);
+        draw_text(c, f, tx + 10, 23, cur ? HL_TEXT : HL_TEXT_FAINT, t, k);
+        gfx_noclip(c);
+        if (w >= 70) { int cx = tx + w - 14, cy = 17; uint32_t col = cur ? HL_TEXT_DIM : HL_TEXT_FAINT; gfx_line(c, cx - 3, cy - 3, cx + 3, cy + 3, col, 1); gfx_line(c, cx - 3, cy + 3, cx + 3, cy - 3, col, 1); }
+    }
+    int px = 6 + ntabs * w + 16;
+    if (ntabs < MAXTABS) { gfx_fill(c, px - 5, 17, 11, 1, HL_TEXT_DIM); gfx_fill(c, px, 12, 1, 11, HL_TEXT_DIM); }
+}
+
 static void draw_toolbar(struct canvas *c) {
     gfx_fill(c, 0, 0, WW, BAR_H, HL_WIN_BG);
+    draw_tabs(c);
     gfx_fill(c, 0, BAR_H - 1, WW, 1, HL_WIN_BORDER);
-    ui_button(c, 12, 10, 34, 32, "<", BTN_NORMAL, hover_btn == 0, hpos <= 0);
-    ui_button(c, 50, 10, 34, 32, ">", BTN_NORMAL, hover_btn == 4, hpos + 1 >= hcount);
-    ui_button(c, 88, 10, 34, 32, loading ? "X" : "R", BTN_NORMAL, hover_btn == 1, false);
+    ui_button(c, 12, TAB_H + 10, 34, 32, "<", BTN_NORMAL, hover_btn == 0, hpos <= 0);
+    ui_button(c, 50, TAB_H + 10, 34, 32, ">", BTN_NORMAL, hover_btn == 4, hpos + 1 >= hcount);
+    ui_button(c, 88, TAB_H + 10, 34, 32, loading ? "X" : "R", BTN_NORMAL, hover_btn == 1, false);
     int ax = 130, aw = WW - ax - 12 - 64;
     if (aw < 60) aw = 60;
-    gfx_rrect(c, ax, 10, aw, 32, 8, HL_TERM_BG, 255);
-    gfx_rrect_outline(c, ax, 10, aw, 32, 8, addr_focus ? HL_ACCENT : HL_WIN_BORDER, 255);
+    gfx_rrect(c, ax, TAB_H + 10, aw, 32, 8, HL_TERM_BG, 255);
+    gfx_rrect_outline(c, ax, TAB_H + 10, aw, 32, 8, addr_focus ? HL_ACCENT : HL_WIN_BORDER, 255);
     int tx = ax + 12;
     if (!addr_focus && sec.secure) {                       /* padlock */
-        gfx_rrect_outline(c, ax + 12, 17, 10, 10, 4, HL_GREEN, 255);
-        gfx_fill(c, ax + 11, 22, 12, 9, HL_GREEN);
-        gfx_fill(c, ax + 16, 25, 2, 3, HL_TERM_BG);
+        gfx_rrect_outline(c, ax + 12, TAB_H + 17, 10, 10, 4, HL_GREEN, 255);
+        gfx_fill(c, ax + 11, TAB_H + 22, 12, 9, HL_GREEN);
+        gfx_fill(c, ax + 16, TAB_H + 25, 2, 3, HL_TERM_BG);
         tx = ax + 32;
     }
-    gfx_clip(c, tx - 4, 10, aw - (tx - ax) - 4, 32);
+    gfx_clip(c, tx - 4, TAB_H + 10, aw - (tx - ax) - 4, 32);
     int vis = (aw - 24 - (tx - ax - 12)) / 8, start = addr_focus && alen > vis ? alen - vis : 0;
-    gfx_mono_text(c, tx, 18, (addr_focus ? addr : url) + (addr_focus ? start : 0), addr_focus ? HL_TEXT : HL_TEXT_DIM);
-    if (addr_focus) gfx_fill(c, tx + (alen - start) * 8, 18, 2, 16, HL_ACCENT);
+    gfx_mono_text(c, tx, TAB_H + 18, (addr_focus ? addr : url) + (addr_focus ? start : 0), addr_focus ? HL_TEXT : HL_TEXT_DIM);
+    if (addr_focus) gfx_fill(c, tx + (alen - start) * 8, TAB_H + 18, 2, 16, HL_ACCENT);
     gfx_noclip(c);
-    ui_button(c, WW - 12 - 56, 10, 56, 32, "Go", BTN_PRIMARY, hover_btn == 2, false);
+    ui_button(c, WW - 12 - 56, TAB_H + 10, 56, 32, "Go", BTN_PRIMARY, hover_btn == 2, false);
 }
 
 static void draw(void) {
@@ -1577,11 +1647,11 @@ static int item_at(int x, int y, bool links_only) {
 static int link_at(int x, int y) { int i = item_at(x, y, true); return i >= 0 ? lay.it[i].link : -1; }
 
 static int btn_at(int x, int y) {
-    if (ui_in(x, y, 12, 10, 34, 32)) return 0;
-    if (ui_in(x, y, 50, 10, 34, 32)) return 4;
-    if (ui_in(x, y, 88, 10, 34, 32)) return 1;
-    if (ui_in(x, y, WW - 68, 10, 56, 32)) return 2;
-    if (ui_in(x, y, 130, 10, WW - 130 - 76, 32)) return 3;
+    if (ui_in(x, y, 12, TAB_H + 10, 34, 32)) return 0;
+    if (ui_in(x, y, 50, TAB_H + 10, 34, 32)) return 4;
+    if (ui_in(x, y, 88, TAB_H + 10, 34, 32)) return 1;
+    if (ui_in(x, y, WW - 68, TAB_H + 10, 56, 32)) return 2;
+    if (ui_in(x, y, 130, TAB_H + 10, WW - 130 - 76, 32)) return 3;
     return -1;
 }
 
@@ -1810,6 +1880,8 @@ static void handle_event(struct dunc_event *e) {
             if (ui_in(e->x, e->y, px, py, pw, ph)) { int h = popup_first + (e->y - py - 2) / 22; if (h >= 0 && h < popup->fc->nopt) popup->fc->sel = h; }
             popup = 0; draw(); return;
         }
+        int tb = tab_at(e->x, e->y);
+        if (tb >= 0) { if (tb == 200) tab_new(); else if (tb >= 100) tab_close(tb - 100); else tab_switch(tb); draw(); return; }
         int b = btn_at(e->x, e->y);
         if (b == 0) go_back();
         else if (b == 4) go_forward();
@@ -1853,6 +1925,11 @@ static void handle_event(struct dunc_event *e) {
     }
     if (e->type == EV_KEY) {
         int k = e->key, code = KEY_CODE(k);
+        if (k == 20) { tab_new(); draw(); return; }                              /* Ctrl+T: a new tab */
+        if (k == 23) { tab_close(curtab); draw(); return; }                      /* Ctrl+W: close this tab */
+        if (k == 14) { sys_spawn("web"); return; }                               /* Ctrl+N: a new window */
+        if (code == KEY_PGDN && (k & KEYMOD_CTRL) && ntabs > 1) { tab_switch((curtab + 1) % ntabs); draw(); return; }
+        if (code == KEY_PGUP && (k & KEYMOD_CTRL) && ntabs > 1) { tab_switch((curtab + ntabs - 1) % ntabs); draw(); return; }
         if (popup) {
             struct fctl *fc = popup->fc;
             if (code == KEY_DOWN && popup_hover + 1 < fc->nopt) popup_hover++;
