@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 96
-notes Web: custom elements, shadow DOM and templates; big scripts compile much faster
-file kernel b96/thane.elf.gz 17988680 19dbd0b713bd0711c484cfbb47222ea1bab33b6b474f001962b1b0af82d3dd5a
-file initrd b96/initrd.tar.gz 1280000 e94140d700c95df962c5ee9b07ed31735738e9a43ee525d94d9e59e6ee76ab4d
-file bootx64 b96/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b96/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022100ceba6d04baaf5af29e192189c06cba449fb3a40d7bb1669f870aa0ea775c6dd702204dde03de310793f12c35c40e7973b9f5d8b70ad67dd1beeec93296b127243ca4
+build 97
+notes Web: more modern-site support (custom element frameworks, lazy-loaded scripts, long addresses)
+file kernel b97/thane.elf.gz 17996872 9330fa761fe45173ab6e1fff2484e2fd07b4180a0ecc0e14600e7abbab222ba3
+file initrd b97/initrd.tar.gz 1280000 274bf8911f0d221a215d580954998534a5fdb7fc26df79354d51fe3cbd8a7020
+file bootx64 b97/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b97/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 30450220051d7c124bd5b5af4f3f2c8fa5725f71ae324ba97a5a37128b2c96169106d2b7022100da02e3775fcbc2cebf0600d660ad7ea81b422af24aec9b2915b946dc11698774
