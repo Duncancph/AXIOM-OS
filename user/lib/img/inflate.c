@@ -241,8 +241,12 @@ static long inflate_run(struct inf *s, size_t *consumed) {
     return (long)s->outpos;
 }
 
+static long inflate_raw_part(const uint8_t *in, size_t inlen, uint8_t *out, size_t outmax, size_t *consumed,
+                             size_t *produced, const struct img_alloc *a);
 long inflate_raw(const uint8_t *in, size_t inlen, uint8_t *out, size_t outmax, size_t *consumed,
-                 const struct img_alloc *a) {
+                 const struct img_alloc *a) { return inflate_raw_part(in, inlen, out, outmax, consumed, 0, a); }
+static long inflate_raw_part(const uint8_t *in, size_t inlen, uint8_t *out, size_t outmax, size_t *consumed,
+                             size_t *produced, const struct img_alloc *a) {
     if (!in && inlen) return IMG_EARG;
     if (!out && outmax) return IMG_EARG;
     struct inf *s = ia_alloc(a, sizeof *s);
@@ -251,6 +255,7 @@ long inflate_raw(const uint8_t *in, size_t inlen, uint8_t *out, size_t outmax, s
     s->bb = 0; s->bc = 0;
     s->out = out; s->outmax = outmax; s->outpos = 0;
     long r = inflate_run(s, consumed);
+    if (produced) *produced = s->outpos;
     ia_free(a, s);
     return r;
 }
@@ -319,5 +324,37 @@ long gunzip(const uint8_t *in, size_t inlen, uint8_t *out, size_t outmax, const 
         members++;
     }
     if (!members) return IMG_ETRUNC;
+    return (long)total;
+}
+
+/* Like gunzip, but the way browsers read web pages: what could be unpacked is kept when the data ends early
+ * or a checksum doesn't match, bytes after the last member are ignored. *ok_all tells whether it was all
+ * clean. IMG_ESPACE: out is too small (try a bigger one). */
+long gunzip_lenient(const uint8_t *in, size_t inlen, uint8_t *out, size_t outmax, const struct img_alloc *a, int *ok_all) {
+    size_t pos = 0, total = 0;
+    int members = 0;
+    if (ok_all) *ok_all = 1;
+    while (pos < inlen) {
+        const uint8_t *p = in + pos;
+        size_t n = inlen - pos;
+        if (n < 10 || p[0] != 0x1f || p[1] != 0x8b || p[2] != 8) break;     /* not (another) gzip member */
+        unsigned flg = p[3];
+        size_t i = 10;
+        if (flg & 4) { if (n - i < 2) break; size_t xl = rd_le16(p + i); i += 2; if (n - i < xl) break; i += xl; }
+        for (int f = 8; f <= 16; f <<= 1) { if (!(flg & f)) continue; while (i < n && p[i]) i++; if (i >= n) break; i++; }
+        if (flg & 2) i += 2;
+        if (i >= n) break;
+        size_t used = 0, made = 0;
+        long r = inflate_raw_part(p + i, n - i, out + total, outmax - total, &used, &made, a);
+        if (r == IMG_ESPACE) return IMG_ESPACE;
+        if (r < 0) { total += made; members++; if (ok_all) *ok_all = 0; break; }     /* keep what came out */
+        i += used;
+        if (n - i < 8 || rd_le32(p + i) != img_crc32(0, out + total, (size_t)r)) { if (ok_all) *ok_all = 0; }
+        total += (size_t)r;
+        members++;
+        pos += i + 8;
+        if (n - i < 8) break;
+    }
+    if (!members) return IMG_EFORMAT;
     return (long)total;
 }

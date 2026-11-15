@@ -45,7 +45,8 @@ long inflate_raw(const uint8_t *in, size_t inlen, uint8_t *out, size_t outmax, s
                  const struct img_alloc *a);
 long zlib_decompress(const uint8_t *in, size_t inlen, uint8_t *out, size_t outmax, const struct img_alloc *a);
 long gunzip(const uint8_t *in, size_t inlen, uint8_t *out, size_t outmax, const struct img_alloc *a);
-long gzip_size(const uint8_t *in, size_t inlen);   /* ISIZE from the trailer (size mod 2^32), <0 if invalid */
+long gzip_size(const uint8_t *in, size_t inlen);
+long gunzip_lenient(const uint8_t *in, size_t inlen, uint8_t *out, size_t outmax, const struct img_alloc *a, int *ok_all);   /* ISIZE from the trailer (size mod 2^32), <0 if invalid */
 
 uint32_t img_crc32(uint32_t crc, const uint8_t *p, size_t n);    /* start with 0 */
 uint32_t img_adler32(uint32_t adler, const uint8_t *p, size_t n); /* start with 1 */

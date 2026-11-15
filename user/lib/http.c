@@ -551,17 +551,31 @@ long http_request(const char *url_in, const struct http_req *rq, http_sink sink,
         if (!gz) return got;
         /* decode the gzip body and pass it on */
         long r = HTTP_EGZIP;
-        long osz = g.over ? -1 : gzip_size(g.b, g.len);
-        if (osz >= 0 && osz <= GZ_MAX_OUT) {
-            uint8_t *ob = malloc(osz ? osz : 1);
+        if (!g.over && g.len == 0) { free(g.b); return 0; }                  /* an empty body */
+        if (!g.over && g.len >= 2 && !((uint8_t)g.b[0] == 0x1f && (uint8_t)g.b[1] == 0x8b)) {   /* labelled gzip but isn't */
+            for (long off = 0; off < g.len;) { long k = g.len - off > 32768 ? 32768 : g.len - off; bool more = sink((const char *)g.b + off, k, ctx); off += k; if (!more) break; }
+            r = g.len; free(g.b); return r;
+        }
+        if (!g.over) {
+            /* the size in the trailer is only a hint (several members, or cut short): grow until it fits */
+            long hint = gzip_size(g.b, g.len), cap = g.len * 4 + 65536;
+            if (hint > cap && hint <= GZ_MAX_OUT) cap = hint;
             struct img_alloc al = { 0, gz_alloc, gz_free };
-            long n = ob ? gunzip(g.b, g.len, ob, osz, &al) : -1;
-            if (n >= 0) {
-                if (total) *total = n;
-                for (long off = 0; off < n;) { long k = n - off > 32768 ? 32768 : n - off; bool more = sink((const char *)ob + off, k, ctx); off += k; if (!more) break; }
-                r = n;
+            for (;;) {
+                if (cap > GZ_MAX_OUT) cap = GZ_MAX_OUT;
+                uint8_t *ob = malloc(cap);
+                if (!ob) break;
+                int clean = 1;
+                long n = gunzip_lenient(g.b, g.len, ob, cap, &al, &clean);
+                if (n == IMG_ESPACE && cap < GZ_MAX_OUT) { free(ob); cap *= 2; continue; }
+                if (n > 0) {
+                    if (total) *total = n;
+                    for (long off = 0; off < n;) { long k = n - off > 32768 ? 32768 : n - off; bool more = sink((const char *)ob + off, k, ctx); off += k; if (!more) break; }
+                    r = n;
+                }
+                free(ob);
+                break;
             }
-            free(ob);
         }
         free(g.b);
         return r;
