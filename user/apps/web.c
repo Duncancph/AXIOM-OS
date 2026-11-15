@@ -126,6 +126,21 @@ static void poll_events(void) {
     struct dunc_event e;
     for (int i = 0; i < 64 && sys_event(&e, 0) > 0; i++) handle_event(&e);
 }
+static dunc_jmp stuck_jb; static uint64_t stuck_rip; static int stuck_count;
+static void on_stuck_alarm(void *frame) {
+    if (malloc_busy) { sys_alarm(20, on_stuck_alarm); sys_sigreturn(frame); }   /* not in the middle of changing the heap */
+    stuck_rip = ((uint64_t *)frame)[17];                    /* where it was (struct frame: 15 registers, vec, err, rip) */
+    dunc_longjmp(stuck_jb, 1);
+}
+static void recover_from_stuck(void) {
+    stuck_count++;
+    js_abandon(stuck_rip);
+    loading = false; fetch_depth = 0; abort_fetch = false; web_fetch_deadline = 0; web_fetch_timeout = 0; pend = false;
+    need_cascade = false; need_layout = stuck_count < 2;     /* if laying the page out is what got stuck, don't try again */
+    ksnprintf(status_text, sizeof status_text, "This page made Web get stuck (at %lx), so its scripts were turned off. Details: about:console", stuck_rip);
+    strncpy0(page_status, status_text, sizeof page_status);
+    need_draw = true;
+}
 void web_show_status(const char *s) { strncpy0(status_text, s, sizeof status_text); draw(); }
 /* while waiting for a server: keep answering (close, Esc, scrolling) and give up when asked or too late */
 uint64_t web_fetch_deadline;
@@ -890,6 +905,7 @@ static void push_history(void) {
 
 /* mode: 0 a new page (history entry), 1 reload / back / forward (no new entry; restore: scroll position) */
 static void navigate(const char *target, bool post, const char *body, long blen, int mode, int restore) {
+    stuck_count = 0;
     cache_bypass = mode == 1;                              /* reload: everything fresh from the network */
     char u[600]; strncpy0(u, target, sizeof u);
     if (hpos >= 0) hist[hpos].scroll = scroll;
@@ -1606,6 +1622,10 @@ int main(void) {
     if (sys_getarg(arg, sizeof arg) > 0 && arg[0]) open_typed(arg); else navigate("about:home", false, 0, 0, 0, 0);
     draw();
     while (!quit) {
+        /* If one turn of the loop uses 8 s of processor time (a page's script making Web loop somewhere in its
+         * own code), the alarm brings it back here: that page's scripts are turned off and Web carries on. */
+        if (dunc_setjmp(stuck_jb)) recover_from_stuck();
+        sys_alarm(8000, on_stuck_alarm);
         if (pend) {
             pend = false; abort_fetch = false;
             char u[600]; strncpy0(u, pend_url, sizeof u);

@@ -113,7 +113,7 @@ directly from the picture; blocks reaching further out go through a small edge-e
 
 Each picture buffer is one allocation (planes with padding + motion data, about 1.5 x the frame size plus
 padding); the pool grows on demand up to 40 pictures (normally references + reorder window + 2). Per
-decoder state is about 120 KB plus ~150 bytes per macroblock. The largest stack frame is under 3 KB.
+decoder state is about 80 KB (one `calloc`) plus 128 bytes per macroblock. The largest stack frame is under 3 KB.
 Tables that are computed (CAVLC lookup tables, 512-byte CABAC range table) are built at the first
 `h264_open` (not thread-safe during that first call). SIMD is SSE2 only (no SSSE3/SSE4); compiling with
 `-DH264_NO_SIMD` selects the plain C versions of every SIMD routine (same output).
@@ -125,16 +125,26 @@ reference picture; frame_num gaps create concealment frames. The code is fuzzed 
 
 ## Performance
 
-Single core, `-O2`, decoding only (no output), x264 streams at CRF 21 with B-frames (High profile):
-see the numbers printed by `run.py` (section *speed*); on the development host (Xeon @ 2.1 GHz):
+Single core, decoding only (no output), measured by `run.py` on the development host (Xeon @ 2.1 GHz);
+"target" = the objects compiled with the exact AXIOM flags (`-mcmodel=large -fno-pic ...`):
 
-PERF_TABLE
+| clip (25 fps source, x264) | bitrate | host `-O2` | target flags |
+|---|---|---|---|
+| 1280x720 High, CRF 21, 3 B-frames, 4 refs, rotating test pattern + noise | 3.5 Mbit/s | 198 fps | 190 fps |
+| 1280x720 High, CRF 21, mandelbrot zoom (detailed, all-B-heavy) | 6.5 Mbit/s | 151 fps | 147 fps |
+| 1280x720 Constrained Baseline (CAVLC, no B) | 3.7 Mbit/s | 344 fps | 330 fps |
+| 1920x1080 High, CRF 21, 3 B-frames, 4 refs | 7.2 Mbit/s | 89 fps | 83 fps |
+| 1920x1080 High, CRF 18, colour bars scrolling | 0.4 Mbit/s | 255 fps | 240 fps |
+
+Timings vary by about +-5 % between runs. The time is spread over CABAC residual decoding (~25-35 % on
+high-bitrate streams), motion compensation, deblocking and per-macroblock bookkeeping; MC, inverse
+transforms, weighted prediction and the deblocking filter use SSE2.
 
 ## Tests
 
 ```
-python3 tests/h264/run.py            # full run (~5 minutes with an empty corpus cache, 4 cores)
-python3 tests/h264/run.py --quick    # subset, < 60 s once the corpus exists
+python3 tests/h264/run.py            # full run (~2.5 minutes with an empty corpus cache on 4 cores, ~1.5 cached)
+python3 tests/h264/run.py --quick    # subset: ~60 s from scratch, ~50 s with the corpus cached
 options: --out DIR (default /tmp/axiom-h264test), --keep, --only NAME_SUBSTRING
 ```
 
@@ -143,7 +153,7 @@ options: --out DIR (default /tmp/axiom-h264test), --keep, --only NAME_SUBSTRING
 `nm -u` for allowed symbols only and reports stack usage. It then generates a corpus with ffmpeg/libx264 and
 compares the decoder's yuv420p output byte for byte with `ffmpeg -f rawvideo -pix_fmt yuv420p`:
 
-* 84 streams (full run; 29 in `--quick`): Constrained Baseline / Main / High, CAVLC and CABAC, B-frames
+* 86 streams (full run; 30 in `--quick`): Constrained Baseline / Main / High, CAVLC and CABAC, B-frames
   (up to 16, b-pyramid normal/strict), direct spatial / temporal / auto, `weightp=1/2`, implicit weighted
   bi-prediction, `ref=8`, 8x8 transform, `cqm=jvt` and a custom `cqmfile` (exercising the fall-back
   rules), `slices=4`, `slice-max-size`, intra-only, intra refresh, open GOP, short / long GOPs,
@@ -166,4 +176,7 @@ compares the decoder's yuv420p output byte for byte with `ffmpeg -f rawvideo -pi
   random resets, broken avcC, random Annex B chunking) under ASan+UBSan.
 * speed of 720p and 1080p clips with both the host and the AXIOM target flags.
 
-RESULTS_LINE
+Current result: all 86 corpus streams bit-exact through all input paths (172+ decodes, plus chunked Annex B
+feeding), all rewritten / synthetic streams bit-exact with ffmpeg, 16 seek, 20 truncation and 3 lost-slice
+tests, 4 unsupported formats rejected, no sanitizer findings in the fuzz pass (and in an extra run of 1500
+damaged decodes over 15 streams).

@@ -140,3 +140,15 @@ const char *open_file(const char *path) {
     if (sys_spawn_arg(app, arg) < 0) return "The app couldn't start.";
     return 0;
 }
+
+/* setjmp/longjmp (callee-saved registers, stack pointer, return address) */
+__attribute__((naked)) int dunc_setjmp(dunc_jmp b) {
+    __asm__ volatile("mov %rbx, 0(%rdi)\n mov %rbp, 8(%rdi)\n mov %r12, 16(%rdi)\n mov %r13, 24(%rdi)\n"
+                     "mov %r14, 32(%rdi)\n mov %r15, 40(%rdi)\n lea 8(%rsp), %rdx\n mov %rdx, 48(%rdi)\n"
+                     "mov (%rsp), %rdx\n mov %rdx, 56(%rdi)\n xor %eax, %eax\n ret");
+}
+__attribute__((naked)) void dunc_longjmp(dunc_jmp b, int v) {
+    __asm__ volatile("mov %esi, %eax\n test %eax, %eax\n jnz 1f\n inc %eax\n1:\n"
+                     "mov 0(%rdi), %rbx\n mov 8(%rdi), %rbp\n mov 16(%rdi), %r12\n mov 24(%rdi), %r13\n"
+                     "mov 32(%rdi), %r14\n mov 40(%rdi), %r15\n mov 48(%rdi), %rsp\n jmp *56(%rdi)");
+}

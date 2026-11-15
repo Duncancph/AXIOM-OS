@@ -235,6 +235,8 @@ struct task {
     char arg[256];             /* start-up argument (e.g. a file to open) */
     char appid[24];
     bool idle;                 /* a core's idle task */
+    uint32_t alarm_ticks;      /* SYS_ALARM: timer ticks of the app's own running time left, 0 = none */
+    uint64_t alarm_fn;
     int cpu;                   /* the core it last ran on */
 };
 struct frame {
@@ -292,6 +294,7 @@ bool task_kill(int pid);
 void task_reap(void);
 void event_push(struct task *t, const struct dunc_event *ev);
 void sched_tick(struct frame *f);
+void alarm_deliver(struct frame *f);
 void kyield(void);
 uint64_t cpu_time_us(void);   /* also brings the running task's CPU time up to date */         /* yield if the scheduler runs, else spin */
 struct app_image { const char *id, *title; const uint8_t *start, *end; };

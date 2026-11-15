@@ -199,6 +199,7 @@ void js_run_timers(void);
 void js_eval_url(const char *code);             /* a javascript: link */
 void js_console_lines(char *out, long max);     /* for about:console */
 bool js_scripts_pending(void);
+void js_abandon(uint64_t where);   /* Web got stuck in a page's script: drop its scripts without running anything of them */
 void web_show_status(const char *s);
 extern long web_fetch_timeout;
 extern uint64_t web_fetch_deadline;   /* if set: a download gives up at this time (sys_time) */   /* ms; 0 = the default (15 s) */

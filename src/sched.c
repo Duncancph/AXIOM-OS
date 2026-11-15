@@ -303,6 +303,7 @@ void sched_tick(struct frame *f) {
     lapic_eoi();
     if (core0 && (f->cs & 3) == 0 && last_sched_ms && !stall_reported && uptime_ms() - last_sched_ms > 5000) { stall_reported = true; report_stall(f); }
     if ((f->cs & 3) == 3) {
+        if (current->alarm_ticks && --current->alarm_ticks == 0) alarm_deliver(f);   /* counts only the app's own running time */
         schedule();
         if (current->killed) task_exit(-1);
     }

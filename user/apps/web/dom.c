@@ -642,6 +642,9 @@ NATIVE(n_compile) {                                       /* on... attributes: f
     if (r < 0) { report("event handler"); return js_null(); }
     return f;
 }
+#ifdef WEB_TEST_SPIN
+NATIVE(n_test_spin) { volatile unsigned long x = 0; for (;;) x++; return js_undefined(); }   /* test only: a native that never returns */
+#endif
 NATIVE(n_set_protos) {
     proto_elem = A(argc, argv, 0); proto_text = A(argc, argv, 1); proto_comment = A(argc, argv, 2); api = A(argc, argv, 3);
     return js_undefined();
@@ -719,6 +722,9 @@ static const struct { const char *name; js_native fn; int n; } natives[] = {
     { "viewport", n_viewport, 0 }, { "scrollTo", n_scroll_to, 1 }, { "title", n_title, 0 }, { "setTitle", n_set_title, 1 },
     { "url", n_url, 0 }, { "base", n_base, 0 }, { "navigate", n_navigate, 1 }, { "alert", n_alert, 1 }, { "resolve", n_resolve, 1 },
     { "setTimer", n_set_timer, 3 }, { "clearTimer", n_clear_timer, 1 }, { "http", n_http, 4 },
+#ifdef WEB_TEST_SPIN
+    { "testSpin", n_test_spin, 0 },
+#endif
     { "storageLoad", n_storage_load, 0 }, { "storageSave", n_storage_save, 1 }, { "compile", n_compile, 1 }, { "setProtos", n_set_protos, 4 },
 };
 
@@ -754,6 +760,9 @@ void js_page_start(struct doc *d) {
     js_unroot(rt, &dd);
     page_deadline = sys_time() + 15000; skip_said = false; page_cycles = 0; cyc_begin = 0; page_net_ms = 0;
     run_code(dom_prelude, sizeof dom_prelude - 1, "web prelude");
+#ifdef WEB_TEST_SPIN
+    { jsval f = js_function(rt, "axiomTestSpin", n_test_spin, 0, 0); HOLD(f); js_define(rt, js_global(rt), "axiomTestSpin", f, false); DROP(f); }
+#endif
     call_api("start", 0, 0);
     /* the page's scripts run one at a time from Web's main loop (js_page_step), so the window keeps
      * answering - scrolling, clicks, Esc, closing - while a big site downloads and runs dozens of them */
@@ -778,6 +787,18 @@ bool js_page_step(char *status, int n) {
     sq_active = false;
     if (page_on) { call_api("loaded", 0, 0); after_task(); }  /* DOMContentLoaded, then load */
     return false;
+}
+
+void js_abandon(uint64_t where) {
+    char m[160]; ksnprintf(m, sizeof m, "Web got stuck in its own code (at %lx) while running this page's scripts; they were turned off", where);
+    con_add("[stuck] ", m);
+    page_on = false; sq_active = false; nsq = sqpos = 0;
+    for (int i = 0; i < MAXT; i++) timers[i].used = false;
+    if (D && D->root) {                                   /* forget the nodes' script objects (at most a million nodes) */
+        struct node *st[256]; int sp = 0; long seen = 0; st[sp++] = D->root;
+        while (sp && seen++ < 1000000) { struct node *e = st[--sp]; e->jsw = 0; for (struct node *c = e->first; c && seen < 1000000; c = c->next, seen++) { if (sp < 256) st[sp++] = c; else c->jsw = 0; } }
+    }
+    rt = 0; D = 0;                                        /* the runtime is left as it is (it may be half-way through something) */
 }
 
 void js_page_end(void) {

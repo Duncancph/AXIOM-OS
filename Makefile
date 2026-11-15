@@ -184,6 +184,8 @@ test:
 	@mkdir -p build/test
 	gcc -std=gnu17 -O1 -w -fno-builtin -DBT_TEST -DHOST_TEST -o build/test/test_bt tests/test_bt.c src/bt.c common/str.c && build/test/test_bt | tail -8
 	@if command -v ffmpeg >/dev/null && python3 -c 'import numpy' 2>/dev/null; then python3 tests/mp3/run.py --quick > build/test/mp3.log 2>&1; r=$$?; tail -3 build/test/mp3.log; [ $$r = 0 ] || exit 1; else echo 'mp3: skipped (needs ffmpeg and numpy)'; fi
+	@if command -v ffmpeg >/dev/null && python3 -c 'import numpy' 2>/dev/null; then python3 tests/h264/run.py --quick > build/test/h264.log 2>&1; r=$$?; tail -3 build/test/h264.log; [ $$r = 0 ] || exit 1; else echo 'h264: skipped (needs ffmpeg and numpy)'; fi
+	@if command -v ffmpeg >/dev/null && python3 -c 'import numpy' 2>/dev/null; then python3 tests/media/run.py --quick > build/test/media.log 2>&1; r=$$?; tail -3 build/test/media.log; [ $$r = 0 ] || exit 1; else echo 'mp4/aac: skipped (needs ffmpeg and numpy)'; fi
 	gcc -std=gnu17 -O1 -w -fno-builtin -DHOST_TEST -Isrc -o build/test/test_fat tests/test_fat.c src/fat.c common/str.c
 	rm -f build/test/fat.img && truncate -s 64M build/test/fat.img && mkfs.fat -F 32 -n DUNCTEST build/test/fat.img >/dev/null
 	printf 'written by mtools on Linux\n' > build/test/hello.txt && MTOOLS_SKIP_CHECK=1 mcopy -i build/test/fat.img build/test/hello.txt "::/Hello From Linux.txt"

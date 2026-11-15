@@ -112,6 +112,15 @@ bool app_open(struct app *a, int w, int h, const char *title);
 bool app_open_ex(struct app *a, int w, int h, const char *title, int flags);   /* flags: WIN_RESIZABLE */
 bool app_resize(struct app *a, const struct dunc_event *e);   /* handle EV_RESIZE; true if resized */
 void app_flush(struct app *a);
+
+/* Alarms: after ms of the app's own running time (waiting doesn't count), fn(frame) is called wherever the
+ * app is; it can jump out (dunc_longjmp) or carry on where it was (sys_sigreturn(frame)). 0 cancels. */
+static inline void sys_alarm(long ms, void (*fn)(void *frame)) { sys_call(SYS_ALARM, ms, (long)fn, 0, 0, 0); }
+static inline void sys_sigreturn(void *frame) { sys_call(SYS_SIGRETURN, (long)frame, 0, 0, 0, 0); }
+typedef uint64_t dunc_jmp[8];
+int dunc_setjmp(dunc_jmp b) __attribute__((returns_twice));
+void dunc_longjmp(dunc_jmp b, int v) __attribute__((noreturn));
+extern volatile int malloc_busy;
 void app_flush_rect(struct app *a, int x, int y, int w, int h);
 static inline void app_title(struct app *a, const char *t) { sys_call(SYS_WIN_TITLE, a->wi.id, (long)t, 0, 0, 0); }
 

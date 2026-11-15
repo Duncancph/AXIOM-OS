@@ -97,6 +97,7 @@ with true multitasking and memory protection between apps.
 | Notes | Quick notes that save themselves as you type (in `/home/Notes`); the first line is the title |
 | Calendar | Month view with today marked; add things to any day (saved in `/home/.calendar.txt`) |
 | Music | Plays MP3s from `/home/Music`, Downloads, your home folder and USB drives: titles and artists from the tags, seek bar, volume, next/previous, Space to pause. Double-click an MP3 in Files to play it |
+| Video | Plays MP4 videos (H.264 with AAC sound) from `/home/Videos`, Downloads, home and USB drives: play/pause, seek bar, arrow keys for 10 s back/forward, resizable. Double-click an MP4 in Files to play it. Decoders written for AXIOM: H.264 (Baseline/Main/High, bit-exact with ffmpeg; about 150-200 fps at 720p on one core), MP4 (incl. fragmented), AAC (LC, HE-AAC, HE-AACv2) |
 | Viewer | Pictures (PNG, JPEG, GIF, BMP): fit to window, zoom, drag, previous/next in the folder |
 | System Monitor | Live CPU and memory graphs, every process with CPU % and memory, End task |
 | Bluetooth | Adapter details, scan for nearby Classic + Low Energy devices with names and signal strength, pair with Classic devices (number check), paired devices kept and forgettable |

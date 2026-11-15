@@ -294,26 +294,26 @@ static void toggle_pause(void) {
     if (paused) paused_at_ms = clock_ms(); else { wall_start = sys_time(); wall_base_ms = paused_at_ms; }
 }
 
-/* decode until a picture comes out (or the video track ends); false at the end */
-static bool next_picture(void) {
-    if (vt < 0) return false;
+/* decode until a picture comes out: 1 = got one, 0 = not yet (try again next turn), -1 = the video track ended */
+static int next_picture(void) {
+    if (vt < 0) return -1;
     for (int guard = 0; guard < 64; guard++) {
         if (h264_get_frame(vd, &held)) {
             held_ms = held.pts;
             if (seek_floor_ms >= 0 && held_ms < seek_floor_ms - 20) continue;   /* catching up after a seek: not shown */
-            have_held = true; return true;
+            have_held = true; return 1;
         }
         struct mp4_sample s;
         if (!mp4_sample(mv, vt, vs, &s)) {
             static bool flushed;
             if (!flushed) { h264_flush(vd); flushed = true; continue; }
-            flushed = false; return false;
+            flushed = false; return -1;
         }
         vs++;
         if (s.offset < 0 || s.offset + s.size > flen) continue;
         h264_decode(vd, file + s.offset, (int)s.size, mp4_ms(mv, vt, s.pts));
     }
-    return false;
+    return 0;
 }
 
 /* one step of playback; returns how long the main loop may wait */
@@ -328,19 +328,27 @@ static long play_step(void) {
         static uint64_t last; if (sys_time() - last > 250) { last = sys_time(); draw_controls(); app_flush_rect(&a, 0, WH - CTRL_H, WW, CTRL_H); }
         return 20;
     }
-    if (!have_held && !next_picture()) {                  /* no more pictures */
-        if (at < 0 || audio_done) { ended = true; draw_all(); }
-        return 20;
+    if (!have_held) {
+        int np = next_picture();
+        if (np == 0) return 0;                            /* still catching up (e.g. after a seek): carry on next turn */
+        if (np < 0) {                                     /* no more pictures */
+            if (at < 0 || audio_done) { ended = true; draw_all(); }
+            return 20;
+        }
     }
+    bool force = false;
     if (seek_floor_ms >= 0) {                             /* first picture after a seek: show it and line the clock up */
-        seek_floor_ms = -1;
+        seek_floor_ms = -1; force = true;
         if (at < 0) { wall_start = sys_time(); wall_base_ms = held_ms; }
         now = clock_ms();
     }
-    if (held_ms > now + 4) { long w = (long)(held_ms - now); return w > 20 ? 20 : w; }
-    if (now - held_ms > 120 && !held.keyframe) {          /* too late: skip it to catch up */
+    static uint64_t last_shown;
+    if (sys_time() - last_shown > 250) force = true;      /* never more than a quarter second without a new picture */
+    if (!force && held_ms > now + 4) { long w = (long)(held_ms - now); return w > 20 ? 20 : w; }
+    if (!force && now - held_ms > 120 && !held.keyframe) {   /* too late: skip it to catch up */
         frames_dropped++; have_held = false; return 0;
     }
+    last_shown = sys_time();
     shown_ms = held_ms;
     blit(&held);
     draw_controls();

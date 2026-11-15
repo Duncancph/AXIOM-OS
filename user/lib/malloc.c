@@ -43,7 +43,7 @@ static bool grow(size_t need) {
     return true;
 }
 
-void *malloc(size_t n) {
+static void *malloc_(size_t n) {
     if (n > (512u << 20)) return 0;
     size_t need = ((n + 15) & ~(size_t)15) + HDR;
     if (need < sizeof(struct blk)) need = sizeof(struct blk);
@@ -66,7 +66,7 @@ void *malloc(size_t n) {
     return 0;
 }
 
-void free(void *p) {
+static void free_(void *p) {
     if (!p) return;
     struct blk *b = (struct blk *)((uint8_t *)p - HDR);
     if (!(b->size & USED)) return;                        /* double free: ignore */
@@ -77,6 +77,11 @@ void free(void *p) {
     after(b)->prev = BSIZE(b);
     fl_add(b);
 }
+
+/* malloc_busy: set while the heap is being changed (an alarm function must not jump out then) */
+volatile int malloc_busy;
+void *malloc(size_t n) { malloc_busy++; void *p = malloc_(n); malloc_busy--; return p; }
+void free(void *p) { malloc_busy++; free_(p); malloc_busy--; }
 
 void *realloc(void *p, size_t n) {
     if (!p) return malloc(n);

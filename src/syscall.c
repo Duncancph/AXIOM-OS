@@ -61,6 +61,18 @@ static uint64_t sys_kcmd(uint64_t ucmd, uint64_t ubuf, uint64_t len) {
     return n - 1;
 }
 
+/* An app's alarm (SYS_ALARM) went off while it was running its own code: save its registers on its stack
+ * and make it continue in the alarm function, which can jump elsewhere or come back (SYS_SIGRETURN). */
+void alarm_deliver(struct frame *f) {
+    uint64_t fn = current->alarm_fn;
+    current->alarm_ticks = 0;
+    uint64_t sp = (f->rsp - 128 - sizeof(struct frame)) & ~15ULL;   /* below the red zone */
+    if (!fn || !UOK(sp - 16, sizeof(struct frame) + 16, true)) return;
+    memcpy((void *)sp, f, sizeof *f);
+    *(uint64_t *)(sp - 8) = 0;                       /* no return address */
+    f->rdi = sp; f->rsp = sp - 8; f->rip = fn;
+}
+
 uint64_t syscall_dispatch(struct frame *f) {
     uint64_t a = f->rdi, b = f->rsi, c = f->rdx, d = f->rcx, e = f->r8;
     switch (f->rax) {
@@ -68,6 +80,16 @@ uint64_t syscall_dispatch(struct frame *f) {
     case SYS_YIELD: schedule(); return 0;
     case SYS_SLEEP: task_sleep(a); return 0;
     case SYS_TIME: return uptime_ms();
+    case SYS_ALARM:                                  /* after a ms of the app's own running time, call fn (0 = cancel) */
+        current->alarm_ticks = a ? (uint32_t)((a + 3) / 4) : 0; current->alarm_fn = b;
+        return 0;
+    case SYS_SIGRETURN: {                            /* back from the alarm function to where the app was */
+        if (!UOK(a, sizeof(struct frame), false)) return (uint64_t)-1;
+        struct frame s; memcpy(&s, (void *)a, sizeof s);
+        s.cs = 0x23; s.ss = 0x1B; s.rflags = (s.rflags & 0xCD5) | 0x202;   /* user mode, interrupts on, nothing privileged */
+        *f = s;
+        return f->rax;                               /* (the caller stores this in rax) */
+    }
     case SYS_LOG: {
         char s[256];
         if (!copy_str(s, a, sizeof s)) return (uint64_t)-1;
