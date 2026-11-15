@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 104
-notes Arc: absolute, fixed and relative positioning (site headers, overlays and badges sit where they should)
-file kernel b104/thane.elf.gz 18090632 8341ab95dc957ac17bf61dc9ea296cc6e851d827b78f24184304b649a6277031
-file initrd b104/initrd.tar.gz 1280000 8dd6d704f39d0f0c0a63ad3abfbd7ef9694e7fc920d6c0b2012de66be3f2f963
-file bootx64 b104/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b104/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 30450220649b3c3bdf5a985acd5311f8d3b7f6fdb0c700239f8f01a4c00b22f92a71b492022100a0195b39fbab0da0caa383292477e53c4abbdbe4eb73a3a3b653bcb9c5e53108
+build 106
+notes Arc: clearer reasons when a page can't load (Netflix), more redirects and larger headers allowed; MutationObserver and ResizeObserver for scripts
+file kernel b106/thane.elf.gz 18107016 2f0a332fa49554ab6f182e421de9485a97e0ce09212701ff4a188d8b4e0796a0
+file initrd b106/initrd.tar.gz 1280000 c7d73fa2aa6239de58491e4f48dd51755f31e04e828ec340ed06524fc3cf0789
+file bootx64 b106/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b106/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304502206916c85ac5041235659bae6c45b74921479bebfc809b2a8a56369a210f61cd00022100da8e98f1897c61b71589a59852508abae7072499e3add293a96b3c16b989ba0b
