@@ -877,10 +877,10 @@ static void about_page(const char *u) {
             "<li><a href=\"https://news.ycombinator.com/\">news.ycombinator.com</a> - Hacker News</li>"
             "<li><a href=\"https://en.wikipedia.org/wiki/Operating_system\">Wikipedia: Operating system</a></li>"
             "<li><a href=\"http://info.cern.ch/\">info.cern.ch</a> - the world's first website (1991)</li></ul></div>"
-            "<h2>What Web can show</h2><p>Text with style sheets (CSS), pictures (PNG, JPEG, GIF and BMP), tables, lists and forms. "
+            "<h2>What Web can show</h2><p>Text with style sheets (CSS), pictures (PNG, JPEG, GIF and BMP), tables, lists, forms, and video and sound (MP4, MP3, WAV). "
             "Sites can keep you signed in with cookies (<a href=\"about:cookies\">see cookies</a>). "
             "Open files on this computer with addresses like <code>file:///home/page.html</code>.</p>"
-            "<h2>Not shown</h2><p class=dim>Web fonts, video and floating layouts; JavaScript runs, but big web apps need more than Web has (see <a href=\"about:console\">the console</a> for script errors). Sites that only allow TLS 1.2 or older can't be opened yet.</p>"
+            "<h2>Not shown</h2><p class=dim>Web fonts, WebP pictures, streamed video (YouTube) and floating layouts; JavaScript runs, but big web apps need more than Web has (see <a href=\"about:console\">the console</a> for script errors). Sites that only allow TLS 1.2 or older can't be opened yet.</p>"
             "<p class=dim>Keys: Ctrl+L address bar, Backspace or Alt+Left back, Alt+Right forward, F5 reload, Tab next form field, Esc stop.</p>", PAGE_CSS);
         strncpy0(status_text, "Start page", sizeof status_text);
     }

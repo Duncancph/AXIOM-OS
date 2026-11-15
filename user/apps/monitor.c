@@ -1,11 +1,11 @@
 /* System Monitor: live CPU and memory use, and every running process. */
 #include "../lib/dunc.h"
 
-static int WW = 680, WH = 520;
+static int WW = 680, WH = 600;
 #define HIST 60
 static struct app a;
 static struct procinfo procs[96], raw[96], prev[96];   /* raw: as the kernel lists them (prev: the last sample) */
-static int nprocs, nraw, nprev, sel_pid = -1, hover_btn, hover_row = -1;
+static int nprocs, nraw, nprev, sel_pid = -1, hover_btn, hover_row = -1, list_off;
 static uint64_t prev_ticks, last_sample;
 static int cpu_hist[HIST], mem_hist[HIST], cpu_now, proc_cpu[96];
 static struct sysinfo si;
@@ -39,6 +39,12 @@ static void sample(void) {
         procs[k] = procs[i]; proc_cpu[k] = proc_cpu[i]; k++;
     }
     nprocs = k;
+    /* apps first (what you're usually looking for), then the kernel's own tasks; each in pid order */
+    for (int i = 1; i < nprocs; i++) {
+        struct procinfo t = procs[i]; int tc = proc_cpu[i], j = i;
+        while (j > 0 && (procs[j - 1].user < t.user || (procs[j - 1].user == t.user && procs[j - 1].pid > t.pid))) { procs[j] = procs[j - 1]; proc_cpu[j] = proc_cpu[j - 1]; j--; }
+        procs[j] = t; proc_cpu[j] = tc;
+    }
     memmove(cpu_hist, cpu_hist + 1, sizeof(int) * (HIST - 1)); cpu_hist[HIST - 1] = cpu_now;
     memmove(mem_hist, mem_hist + 1, sizeof(int) * (HIST - 1));
     mem_hist[HIST - 1] = si.mem_total ? (int)(si.mem_used * 100 / si.mem_total) : 0;
@@ -64,7 +70,10 @@ static void stat_card(struct canvas *c, int x, int y, int w, const char *label, 
     graph(c, x + 16, y + 68, w - 32, 66, hist, col);
 }
 
-static int row_y(int i) { return 262 + i * 30; }
+static int row_y(int i) { return 262 + (i - list_off) * 30; }
+static int rows_fit(void) { int n = (WH - 50 - 262) / 30 + 1; return n < 1 ? 1 : n; }
+static void clamp_off(void) { int mx = nprocs - rows_fit(); if (list_off > mx) list_off = mx; if (list_off < 0) list_off = 0; }
+static bool row_shown(int i) { return i >= list_off && i < list_off + rows_fit(); }
 static int sel_index(void) { for (int i = 0; i < nprocs; i++) if (procs[i].pid == sel_pid) return i; return -1; }
 
 static void draw(void) {
@@ -100,7 +109,13 @@ static void draw(void) {
     for (int i = 0; i < 6; i++) gfx_text(c, &font_ui_bold, colx[i], 242, UI_MUTED, hdr[i]);
     gfx_fill(c, 30, 250, WW - 60, 1, UI_BORDER);
     static const char *st[] = { "", "Ready", "Running", "Sleeping", "Waiting", "Exiting" };
-    for (int i = 0; i < nprocs && row_y(i) + 26 < WH - 24; i++) {
+    clamp_off();
+    if (nprocs > rows_fit()) {                           /* not all fit: say so (the list scrolls) */
+        char m[64]; int below = nprocs - list_off - rows_fit();
+        if (below > 0) ksnprintf(m, sizeof m, "%d more below - scroll the list", below); else ksnprintf(m, sizeof m, "%d more above - scroll the list", list_off);
+        gfx_text(c, &font_ui, WW - 40 - gfx_text_width(&font_ui, m), WH - 26, UI_MUTED, m);
+    }
+    for (int i = list_off; i < nprocs && row_shown(i); i++) {
         int y = row_y(i);
         if (procs[i].pid == sel_pid) gfx_rrect(c, 28, y, WW - 56, 28, 6, 0x2A2A28, 255);
         else if (i == hover_row) gfx_rrect(c, 28, y, WW - 56, 28, 6, UI_PANEL2, 255);
@@ -132,14 +147,15 @@ int main(void) {
         if (e.type == EV_CLOSE) break;
         if (e.type == EV_RESIZE) { if (app_resize(&a, &e)) { WW = a.wi.w; WH = a.wi.h; draw(); } continue; }
 
+        if (e.type == EV_WHEEL) { list_off += e.key; clamp_off(); hover_row = -1; draw(); continue; }
         if (e.type == EV_MOUSE_MOVE || e.type == EV_MOUSE_LEAVE) {
             int hb = e.type == EV_MOUSE_MOVE && ui_in(e.x, e.y, WW - 130, 178, 110, 30);
             int hr = -1;
-            for (int i = 0; i < nprocs; i++) if (e.type == EV_MOUSE_MOVE && ui_in(e.x, e.y, 28, row_y(i), WW - 56, 28)) hr = i;
+            for (int i = 0; i < nprocs; i++) if (e.type == EV_MOUSE_MOVE && row_shown(i) && ui_in(e.x, e.y, 28, row_y(i), WW - 56, 28)) hr = i;
             if (hb != hover_btn || hr != hover_row) { hover_btn = hb; hover_row = hr; draw(); }
         }
         if (e.type == EV_MOUSE_DOWN && e.button == 1) {
-            for (int i = 0; i < nprocs; i++) if (ui_in(e.x, e.y, 28, row_y(i), WW - 56, 28)) { sel_pid = procs[i].pid; draw(); }
+            for (int i = 0; i < nprocs; i++) if (row_shown(i) && ui_in(e.x, e.y, 28, row_y(i), WW - 56, 28)) { sel_pid = procs[i].pid; draw(); }
             if (ui_in(e.x, e.y, WW - 130, 178, 110, 30)) {
                 int k = sel_index();
                 if (k >= 0 && procs[k].user) {
