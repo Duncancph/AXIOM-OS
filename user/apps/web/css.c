@@ -818,6 +818,69 @@ static bool color_val(const char *s, int n, uint32_t *out) {
     return css_parse_color(s, n, out);
 }
 
+/* a plain number * 100 ("1", "0.5", ".25") */
+static int num100(const char *s, int n) {
+    long v = 0, frac = 0, div = 1; int i = 0;
+    while (i < n && s[i] == ' ') i++;
+    for (; i < n && s[i] >= '0' && s[i] <= '9'; i++) v = v * 10 + (s[i] - '0');
+    if (i < n && s[i] == '.') for (i++; i < n && s[i] >= '0' && s[i] <= '9' && div < 1000; i++) { frac = frac * 10 + (s[i] - '0'); div *= 10; }
+    v = v * 100 + frac * 100 / div;
+    return v > 30000 ? 30000 : (int)v;
+}
+/* grid-template-columns: "200px 1fr", "repeat(3, 1fr)", "repeat(auto-fill, minmax(240px, 1fr))", "minmax(0, 2fr) auto" */
+static bool parse_len(const char *s, int n, int fs, struct len *out, bool allow_pct);
+static void grid_track(struct style *st, const char *s, int n) {
+    while (n && s[0] == ' ') { s++; n--; }
+    while (n && s[n - 1] == ' ') n--;
+    if (!n || st->ngrid >= 12) return;
+    if (pre_ci(s, n, "minmax(")) {                       /* the larger end decides: fr, else the minimum */
+        const char *c = s + 7, *e = s + n - 1, *comma = c; int d = 0;
+        while (comma < e && (d || *comma != ',')) { if (*comma == '(') d++; else if (*comma == ')') d--; comma++; }
+        const char *b = comma + 1; int bl = (int)(e - b);
+        while (bl && *b == ' ') { b++; bl--; }
+        bool fr = bl > 2 && b[bl - 2] == 'f' && b[bl - 1] == 'r';
+        if (fr || eq_ci(b, bl, "auto") || has_ci(b, bl, "content")) { grid_track(st, b, bl); return; }
+        grid_track(st, b, bl); return;
+    }
+    if (pre_ci(s, n, "fit-content(")) { st->grid[st->ngrid].t = GT_AUTO; st->grid[st->ngrid++].v = 0; return; }
+    if (n > 2 && s[n - 2] == 'f' && s[n - 1] == 'r') { st->grid[st->ngrid].t = GT_FR; st->grid[st->ngrid++].v = num100(s, n - 2); return; }
+    struct len l;
+    if (parse_len(s, n, st->fsize, &l, true) && (l.t == L_PX || l.t == L_PCT)) { st->grid[st->ngrid].t = l.t == L_PX ? GT_PX : GT_PCT; st->grid[st->ngrid++].v = l.v; return; }
+    st->grid[st->ngrid].t = GT_AUTO; st->grid[st->ngrid++].v = 0;      /* auto, min-content, max-content */
+}
+static void grid_list(struct style *st, const char *v, int vl, int depth) {
+    int i = 0;
+    while (i < vl) {
+        while (i < vl && v[i] == ' ') i++;
+        int b = i, d = 0;
+        while (i < vl && (d || v[i] != ' ')) { if (v[i] == '(') d++; else if (v[i] == ')') d--; i++; }
+        if (i == b) break;
+        if (v[b] == '[') continue;                         /* line names */
+        if (pre_ci(v + b, i - b, "repeat(") && depth < 2) {
+            const char *c = v + b + 7, *e = v + i - 1, *comma = c;
+            while (comma < e && *comma != ',') comma++;
+            const char *body = comma + 1; int bl = (int)(e - body);
+            if (has_ci(c, (int)(comma - c), "auto-fi")) {  /* auto-fill / auto-fit: as many as fit */
+                const char *m = body; int ml = bl; while (ml && *m == ' ') { m++; ml--; }
+                struct len l; int minw = 0;
+                if (pre_ci(m, ml, "minmax(")) { const char *q = m + 7, *qe = q; while (qe < m + ml && *qe != ',') qe++; if (parse_len(q, (int)(qe - q), st->fsize, &l, false) && l.t == L_PX) minw = l.v; }
+                else if (parse_len(m, ml, st->fsize, &l, false) && l.t == L_PX) minw = l.v;
+                st->grid_auto_min = minw > 0 ? minw : 200; st->ngrid = 0;
+                return;
+            }
+            int cnt = 0; for (const char *q = c; q < comma && *q >= '0' && *q <= '9'; q++) cnt = cnt * 10 + (*q - '0');
+            for (int k = 0; k < cnt && st->ngrid < 12; k++) grid_list(st, body, bl, depth + 1);
+            continue;
+        }
+        grid_track(st, v + b, i - b);
+    }
+}
+static void grid_tracks(struct style *st, const char *v, int vl) {
+    st->ngrid = 0; st->grid_auto_min = 0;
+    if (eq_ci(v, vl, "none") || eq_ci(v, vl, "subgrid") || eq_ci(v, vl, "initial")) return;
+    grid_list(st, v, vl, 0);
+}
+
 /* the 4 values of margin/padding/border-width shorthands */
 static int four(const char *s, int n, const char **t, int *tl) {
     int k = tokens(s, n, t, tl, 4);
@@ -941,8 +1004,8 @@ static void apply(struct style *st, const struct style *ps, const char *prop, co
             {"inline-block", D_INLINE_BLOCK}, {"list-item", D_LIST_ITEM}, {"table", D_TABLE}, {"inline-table", D_INLINE_TABLE},
             {"table-row-group", D_ROW_GROUP}, {"table-header-group", D_ROW_GROUP}, {"table-footer-group", D_ROW_GROUP},
             {"table-row", D_ROW}, {"table-cell", D_CELL}, {"table-caption", D_CAPTION}, {"table-column", D_NONE},
-            {"table-column-group", D_NONE}, {"flex", D_FLEX}, {"inline-flex", D_INLINE_FLEX}, {"grid", D_BLOCK},
-            {"inline-grid", D_INLINE_BLOCK}, {"flow-root", D_BLOCK}, {"contents", D_INLINE}, {"run-in", D_BLOCK},
+            {"table-column-group", D_NONE}, {"flex", D_FLEX}, {"inline-flex", D_INLINE_FLEX}, {"grid", D_GRID},
+            {"inline-grid", D_INLINE_GRID}, {"flow-root", D_BLOCK}, {"contents", D_INLINE}, {"run-in", D_BLOCK},
             {"-webkit-box", D_BLOCK}, {"-ms-flexbox", D_FLEX}, {"-webkit-flex", D_FLEX}, {"block flex", D_FLEX}, {"inline flex", D_INLINE_FLEX},
             {"block flow", D_BLOCK}, {"inline flow-root", D_INLINE_BLOCK} };
         if (eq_ci(v, vl, "flow-root")) st->bfc = 1;
@@ -981,17 +1044,20 @@ static void apply(struct style *st, const struct style *ps, const char *prop, co
                 const char *o = a; while (o < a + al && *o != '(') o++;
                 const char *q = o + 1;
                 long sr = 0, sg = 0, sb = 0, sa = 0; int ns = 0;
+                bool radial = pre_ci(t[i], tl[i], "radial-gradient("), clear_stop = false;
                 while (q < a + al) {
                     const char *b = q; int depth = 0;
                     while (q < a + al && (depth || (*q != ',' && *q != ')'))) { if (*q == '(') depth++; else if (*q == ')') depth--; q++; }
                     const char *tt[3]; int ttl[3]; int kk = tokens(b, q - b, tt, ttl, 3);
                     if (kk && (color_val(tt[0], ttl[0], &c) || eq_ci(tt[0], ttl[0], "transparent"))) {
                         if (eq_ci(tt[0], ttl[0], "transparent")) c = 0;
+                        if (!(c >> 24)) clear_stop = true;
                         if (c == CURRENT) c = 0xFF000000 | st->color;
                         long ca = c >> 24; sa += ca; sr += ca * (c >> 16 & 255); sg += ca * (c >> 8 & 255); sb += ca * (c & 255); ns++;
                     }
                     q++;
                 }
+                if (radial && clear_stop) ns = 0;          /* a glow that fades out: nothing is closer than a flat patch */
                 if (ns && !img_only) {
                     long ma = sa / ns;
                     st->bg = ma < 13 ? 0 : (uint32_t)(ma > 255 ? 255 : ma) << 24 | (uint32_t)(sr / sa) << 16 | (uint32_t)(sg / sa) << 8 | (uint32_t)(sb / sa);
@@ -1139,7 +1205,45 @@ static void apply(struct style *st, const struct style *ps, const char *prop, co
                       has_ci(v, vl, "space-around") || has_ci(v, vl, "space-evenly") ? JC_AROUND : has_ci(v, vl, "end") || has_ci(v, vl, "right") ? JC_END : JC_START;
         return;
     }
-    if (P("gap") || P("column-gap") || P("grid-gap")) { struct len l; int k = tokens(v, vl, t, tl, 2); if (k && parse_len(t[k - 1], tl[k - 1], st->fsize, &l, false) && l.t == L_PX) st->gap = l.v < 0 ? 0 : l.v > 200 ? 200 : l.v; return; }
+    if (P("gap") || P("column-gap") || P("grid-gap") || P("grid-column-gap")) {
+        struct len l; int k = tokens(v, vl, t, tl, 2);
+        if (k && parse_len(t[k - 1], tl[k - 1], st->fsize, &l, false) && l.t == L_PX) st->gap = l.v < 0 ? 0 : l.v > 200 ? 200 : l.v;
+        if (k && (P("gap") || P("grid-gap")) && parse_len(t[0], tl[0], st->fsize, &l, false) && l.t == L_PX) st->rgap = l.v < 0 ? 0 : l.v > 200 ? 200 : l.v;
+        return;
+    }
+    if (P("row-gap") || P("grid-row-gap")) { struct len l; if (parse_len(v, vl, st->fsize, &l, false) && l.t == L_PX) st->rgap = l.v < 0 ? 0 : l.v > 200 ? 200 : l.v; return; }
+    if (P("flex-grow")) { st->fgrow = (int16_t)num100(v, vl); return; }
+    if (P("flex-shrink")) { st->fshrink = (int16_t)num100(v, vl); return; }
+    if (P("flex-basis")) { struct len l; if (eq_ci(v, vl, "auto") || eq_ci(v, vl, "content")) st->fbasis.t = L_AUTO; else if (parse_len(v, vl, st->fsize, &l, true)) st->fbasis = l; return; }
+    if (P("flex")) {
+        if (eq_ci(v, vl, "none")) { st->fgrow = 0; st->fshrink = 0; st->fbasis.t = L_AUTO; return; }
+        if (eq_ci(v, vl, "auto")) { st->fgrow = 100; st->fshrink = 100; st->fbasis.t = L_AUTO; return; }
+        if (eq_ci(v, vl, "initial")) { st->fgrow = 0; st->fshrink = 100; st->fbasis.t = L_AUTO; return; }
+        int k = tokens(v, vl, t, tl, 3), nn = 0; bool basis = false;
+        st->fgrow = 0; st->fshrink = 100; st->fbasis.t = L_AUTO;
+        for (int i = 0; i < k; i++) {
+            bool unitless = true; for (int j = 0; j < tl[i]; j++) if (!((t[i][j] >= '0' && t[i][j] <= '9') || t[i][j] == '.')) unitless = false;
+            struct len l;
+            if (unitless && tl[i] && nn < 2) { if (nn++ == 0) st->fgrow = (int16_t)num100(t[i], tl[i]); else st->fshrink = (int16_t)num100(t[i], tl[i]); }
+            else if (eq_ci(t[i], tl[i], "auto")) { st->fbasis.t = L_AUTO; basis = true; }
+            else if (parse_len(t[i], tl[i], st->fsize, &l, true)) { st->fbasis = l; basis = true; }
+        }
+        if (!basis && nn) { st->fbasis.t = L_PX; st->fbasis.v = 0; }       /* flex: 1 -> 1 1 0 */
+        return;
+    }
+    if (P("align-items") || P("align-self")) {
+        int a = has_ci(v, vl, "center") ? 2 : has_ci(v, vl, "end") ? 3 : has_ci(v, vl, "start") || has_ci(v, vl, "baseline") ? 1 : 0;
+        if (P("align-items")) st->align_items = (uint8_t)a; else st->align_self = (uint8_t)(eq_ci(v, vl, "auto") ? 0 : a ? a : 4);
+        return;
+    }
+    if (P("place-items")) { st->align_items = has_ci(v, vl, "center") ? 2 : has_ci(v, vl, "end") ? 3 : has_ci(v, vl, "start") ? 1 : 0; return; }
+    if (P("grid-template-columns")) { grid_tracks(st, v, vl); return; }
+    if (P("grid-column") || P("grid-column-end") || P("grid-area")) {
+        const char *sp_ = 0; for (int i = 0; i + 4 <= vl; i++) if (pre_ci(v + i, vl - i, "span")) { sp_ = v + i + 4; break; }
+        if (sp_) { int n_ = 0; while (sp_ < v + vl && *sp_ == ' ') sp_++; while (sp_ < v + vl && *sp_ >= '0' && *sp_ <= '9') n_ = n_ * 10 + (*sp_++ - '0'); st->col_span = (uint8_t)(n_ < 1 ? 1 : n_ > 12 ? 12 : n_); }
+        else if (P("grid-column") && has_ci(v, vl, "-1")) st->col_span = 255;
+        return;
+    }
     /* box model */
     static const char *const sides[4] = { "top", "right", "bottom", "left" };
     if (pl >= 6 && (!memcmp(prop, "margin", 6) || (pl >= 7 && !memcmp(prop, "padding", 7)))) {
@@ -1315,6 +1419,7 @@ static void style_elem(struct node *e, const struct style *ps) {
     /* not inherited: initial values */
     st->display = D_INLINE; st->bg = 0; st->deco = 0; st->valign = VA_BASELINE;
     for (int i = 0; i < 4; i++) { st->m[i].t = L_PX; st->p[i].t = L_PX; st->bc[i] = CURRENT; st->bw[i] = 3; }
+    st->fshrink = 100;
     st->w.t = L_AUTO; st->h.t = L_AUTO; st->minw.t = L_AUTO; st->maxw.t = L_NONE;
     e->st = st;
 

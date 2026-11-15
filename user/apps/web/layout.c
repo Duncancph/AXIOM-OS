@@ -266,7 +266,7 @@ static void inline_intrinsic(struct node *e, int cbw, int *line, int *mn, int *m
         }
         int cmn, cmx;
         intrinsic(c, cbw, &cmn, &cmx);
-        if (dsp == D_INLINE || dsp == D_INLINE_BLOCK || dsp == D_INLINE_TABLE || dsp == D_INLINE_FLEX) {
+        if (dsp == D_INLINE || dsp == D_INLINE_BLOCK || dsp == D_INLINE_TABLE || dsp == D_INLINE_FLEX || dsp == D_INLINE_GRID) {
             *line += cmx; if (cmn > *mn) *mn = cmn;
         } else {
             if (*line > *mx) *mx = *line;
@@ -666,7 +666,7 @@ static void flow_node_(struct fctx *c, struct node *n, struct ictx ic) {
         inline_element(c, n, ic);
         return;
     }
-    if (d == D_INLINE_BLOCK || d == D_INLINE_TABLE || d == D_INLINE_FLEX) {
+    if (d == D_INLINE_BLOCK || d == D_INLINE_TABLE || d == D_INLINE_FLEX || d == D_INLINE_GRID) {
         in.st = st; in.deco = ic.deco | st->deco; if (n->link >= 0) in.link = n->link;
         if (n->tag == T_IMG) { atomic_image(c, n, &in); return; }
         if (is_control(n)) { atomic_control(c, n, &in); return; }
@@ -934,9 +934,9 @@ __attribute__((noinline)) static void layout_table(struct fctx *c, struct node *
 __attribute__((noinline)) static bool layout_flex(struct fctx *cc, struct node *e, struct ictx ic) {
     const struct style *st = e->st;
     if (flex_depth >= 16) return false;
-    struct node **items = ar_alloc(&L->ar, 64 * (sizeof(struct node *) + 3 * sizeof(int)));
+    struct node **items = ar_alloc(&L->ar, 64 * (sizeof(struct node *) + 6 * sizeof(int)));
     if (!items) return false;
-    int *basis = (int *)(items + 64), *mins = basis + 64, *w = mins + 64;
+    int *basis = (int *)(items + 64), *mins = basis + 64, *w = mins + 64, *it0 = w + 64, *it1 = it0 + 64, *ih = it1 + 64;
     int n = 0;
     for (struct node *c = e->ffirst; c; c = c->fnext) {
         if (c->type == N_TEXT) { for (int i = 0; i < c->tlen; i++) if (!is_ws(c->text[i])) return false; continue; }
@@ -952,6 +952,10 @@ __attribute__((noinline)) static bool layout_flex(struct fctx *cc, struct node *
         const struct style *is = items[i]->st;
         int mn, mx; intrinsic(items[i], W, &mn, &mx);
         if (is->w.t == L_PX || is->w.t == L_PCT) mx = rlen(is->w, W) + hextra(is, W) + (is->bsizing ? 0 : rlen(is->p[1], W) + rlen(is->p[3], W) + bwid(is, 1) + bwid(is, 3));
+        if (is->fbasis.t == L_PX || is->fbasis.t == L_PCT) {       /* flex-basis instead of the width */
+            mx = rlen(is->fbasis, W) + hextra(is, W);
+            if (is->fgrow > 0 && mx < mn) mn = mx;                 /* flex: 1 items share the row evenly */
+        }
         if (mx > W) mx = W;
         if (mn > mx) mn = mx;
         basis[i] = mx; mins[i] = mn;
@@ -967,13 +971,21 @@ __attribute__((noinline)) static bool layout_flex(struct fctx *cc, struct node *
             sum += add; j++;
         }
         for (int k = i; k < j; k++) w[k] = basis[k];
-        if (sum > W) {                                    /* shrink towards the minimum widths */
+        if (sum > W) {                                    /* shrink towards the minimum widths (flex-shrink: 0 items keep theirs) */
             int over = sum - W, room = 0;
-            for (int k = i; k < j; k++) room += basis[k] - mins[k];
-            for (int k = i; k < j; k++) { int r = basis[k] - mins[k]; w[k] -= room ? (int)((long)over * r / room) : 0; if (w[k] < mins[k]) w[k] = mins[k]; }
+            for (int k = i; k < j; k++) if (items[k]->st->fshrink > 0) room += basis[k] - mins[k];
+            for (int k = i; k < j; k++) { int r = items[k]->st->fshrink > 0 ? basis[k] - mins[k] : 0; w[k] -= room ? (int)((long)over * r / room) : 0; if (w[k] < mins[k]) w[k] = mins[k]; }
             sum = 0; for (int k = i; k < j; k++) sum += w[k] + (k > i ? gap : 0);
         }
         int free = W - sum; if (free < 0) free = 0;
+        {                                                  /* flex-grow: the room left over is shared out */
+            long tg = 0; for (int k = i; k < j; k++) tg += items[k]->st->fgrow;
+            if (tg > 0 && free > 0) {
+                int given = 0;
+                for (int k = i; k < j; k++) { int add = (int)((long)free * items[k]->st->fgrow / (tg < 100 ? 100 : tg)); w[k] += add; given += add; }
+                free -= given;
+            }
+        }
         int x = cc->left, between = gap;
         int autoidx = -1;
         for (int k = i; k < j; k++) if (items[k]->st->m[3].t == L_AUTO && k > i) { autoidx = k; break; }
@@ -988,6 +1000,7 @@ __attribute__((noinline)) static bool layout_flex(struct fctx *cc, struct node *
             if (k == autoidx) x += free;
             struct fctx t; memset(&t, 0, sizeof t);
             t.left = x; t.width = w[k]; t.y = y; t.x = x; t.line_first = L->nit; t.bst = items[k]->st;
+            it0[k] = L->nit;
             struct ictx in = ic; in.bgst = 0;
             const struct style *is = items[k]->st;
             int ml = is->m[3].t == L_AUTO ? 0 : rlen(is->m[3], W), mr = is->m[1].t == L_AUTO ? 0 : rlen(is->m[1], W);
@@ -1001,10 +1014,17 @@ __attribute__((noinline)) static bool layout_flex(struct fctx *cc, struct node *
                 layout_block(&t, items[k], in, bw < 0 ? 0 : bw);
             }
             int h = t.y + (t.pm > 0 ? t.pm : 0) - y;
+            it1[k] = L->nit; ih[k] = h;
             if (h > lineh) lineh = h;
             x += w[k] + between;
         }
-        y += lineh + (j < n ? gap : 0);
+        for (int k = i; k < j; k++) {                      /* align-items / align-self: centre or bottom in the row */
+            const struct style *is = items[k]->st;
+            int al = is->align_self ? (is->align_self == 4 ? 0 : is->align_self) : st->align_items;
+            int dy = al == 2 ? (lineh - ih[k]) / 2 : al == 3 ? lineh - ih[k] : 0;
+            if (dy > 0) { for (int q = it0[k]; q < it1[k]; q++) L->it[q].y += dy; items[k]->by += dy; items[k]->y += dy; }
+        }
+        y += lineh + (j < n ? (st->rgap ? st->rgap : gap) : 0);
         i = j;
     }
     flush_line(cc, false);
@@ -1062,6 +1082,96 @@ __attribute__((noinline)) static void replaced_block(struct fctx *cc, struct nod
     n->st = &flat;
     if (n->tag == T_IMG) atomic_image(cc, n, &ri); else atomic_control(cc, n, &ri);
     n->st = keep;
+}
+
+/* ---------------- flex columns (when the items are aligned or spaced) and grids ---------------- */
+static bool only_boxes(struct node *e) {                  /* no loose text among the children */
+    for (struct node *c = e->ffirst; c; c = c->fnext)
+        if (c->type == N_TEXT) for (int i = 0; i < c->tlen; i++) if (!is_ws(c->text[i])) return false;
+    return true;
+}
+/* one item in a cell x..x+cw at y; returns its height */
+static int place_cell(struct node *it, struct ictx ic, const struct style *pst, int x, int cw, int y) {
+    struct fctx t; memset(&t, 0, sizeof t);
+    t.left = x; t.width = cw; t.y = y; t.x = x; t.line_first = L->nit; t.bst = it->st;
+    struct ictx in = ic; in.bgst = 0;
+    const struct style *is = it->st;
+    int ml = is->m[3].t == L_AUTO ? 0 : rlen(is->m[3], cw), mr = is->m[1].t == L_AUTO ? 0 : rlen(is->m[1], cw);
+    if (it->tag == T_IMG || is_control(it)) {
+        struct fctx lc = t; lc.bst = pst;
+        flow_node(&lc, it, in); flush_line(&lc, false);
+        return lc.y - y;
+    }
+    int bw = cw - ml - mr;
+    layout_block(&t, it, in, bw < 0 ? 0 : bw);
+    return t.y + (t.pm > 0 ? t.pm : 0) - y;
+}
+__attribute__((noinline)) static bool layout_flex_col(struct fctx *cc, struct node *e, struct ictx ic) {
+    const struct style *st = e->st;
+    if (flex_depth >= 16 || !only_boxes(e)) return false;
+    int W = cc->width, y = cc->y; bool first = true;
+    flex_depth++;
+    for (struct node *c = e->ffirst; c; c = c->fnext) {
+        if (c->type != N_ELEM || !c->st || c->st->display == D_NONE) continue;
+        if (c->st->pos == 1 || c->st->pos == 2) { defer_abs(cc, c, ic); continue; }
+        const struct style *is = c->st;
+        int al = is->align_self ? (is->align_self == 4 ? 0 : is->align_self) : st->align_items;
+        int x = cc->left, cw = W;
+        if (al && is->w.t != L_PCT) {                      /* not stretched: as wide as its content */
+            int mn, mx; intrinsic(c, W, &mn, &mx);
+            if (is->w.t == L_PX) mx = rlen(is->w, W) + hextra(is, W);
+            cw = mx > W ? W : mx;
+            x += al == 2 ? (W - cw) / 2 : al == 3 ? W - cw : 0;
+        }
+        if (!first) y += st->rgap;
+        first = false;
+        y += place_cell(c, ic, st, x, cw, y);
+    }
+    flush_line(cc, false);
+    cc->y = y; cc->pm = 0; cc->line_first = L->nit;
+    flex_depth--;
+    return true;
+}
+__attribute__((noinline)) static bool layout_grid(struct fctx *cc, struct node *e, struct ictx ic) {
+    const struct style *st = e->st;
+    if (flex_depth >= 16 || (!st->ngrid && !st->grid_auto_min) || !only_boxes(e)) return false;
+    int W = cc->width, gap = st->gap, rgap = st->rgap, n, cw[64];
+    if (st->grid_auto_min) {
+        n = (W + gap) / (st->grid_auto_min + gap); if (n < 1) n = 1; if (n > 64) n = 64;
+        for (int i = 0; i < n; i++) cw[i] = (W - (n - 1) * gap) / n;
+    } else {
+        n = st->ngrid;
+        long fixed = (long)(n - 1) * gap, fr = 0;
+        for (int i = 0; i < n; i++) {
+            if (st->grid[i].t == GT_PX) { cw[i] = st->grid[i].v; fixed += cw[i]; }
+            else if (st->grid[i].t == GT_PCT) { cw[i] = (int)((long)W * st->grid[i].v / 10000); fixed += cw[i]; }
+            else fr += st->grid[i].t == GT_FR ? (st->grid[i].v > 0 ? st->grid[i].v : 1) : 100;
+        }
+        long room = W - fixed; if (room < 0) room = 0;
+        for (int i = 0; i < n; i++) if (st->grid[i].t == GT_FR || st->grid[i].t == GT_AUTO)
+            cw[i] = (int)(room * (st->grid[i].t == GT_FR ? (st->grid[i].v > 0 ? st->grid[i].v : 1) : 100) / (fr ? fr : 1));
+    }
+    flex_depth++;
+    int y = cc->y, col = 0, rowh = 0; bool any = false;
+    for (struct node *c = e->ffirst; c; c = c->fnext) {
+        if (c->type != N_ELEM || !c->st || c->st->display == D_NONE) continue;
+        if (c->st->pos == 1 || c->st->pos == 2) { defer_abs(cc, c, ic); continue; }
+        int span = c->st->col_span == 255 ? n : c->st->col_span ? c->st->col_span : 1;
+        if (span > n) span = n;
+        if (col && col + span > n) { y += rowh + rgap; col = 0; rowh = 0; }
+        int x = cc->left, w = 0;
+        for (int i = 0; i < col; i++) x += cw[i] + gap;
+        for (int i = col; i < col + span; i++) w += cw[i] + (i > col ? gap : 0);
+        int h = place_cell(c, ic, st, x, w, y);
+        if (h > rowh) rowh = h;
+        col += span; any = true;
+        if (col >= n) { y += rowh + rgap; col = 0; rowh = 0; }
+    }
+    if (col) y += rowh; else if (any) y -= rgap;
+    flush_line(cc, false);
+    cc->y = y; cc->pm = 0; cc->line_first = L->nit;
+    flex_depth--;
+    return true;
 }
 
 /* ---------------- absolute and fixed boxes ----------------
@@ -1233,8 +1343,13 @@ static void layout_block_(struct fctx *c, struct node *n, struct ictx ic, int fo
     struct ictx in = ic; in.st = st; in.deco = ic.deco | st->deco; in.bgst = 0; if (n->link >= 0) in.link = n->link;
     if (!st->vis) in.hidden = true;
     depth++;
-    if (n->tag == T_IMG || is_control(n)) replaced_block(&cc, n, &in, w);   /* a replaced element shown as a block */ else if (!((st->display == D_FLEX || st->display == D_INLINE_FLEX) && !st->flex_col && layout_flex(&cc, n, in)))
-        flow_children(&cc, n, in);
+    if (n->tag == T_IMG || is_control(n)) replaced_block(&cc, n, &in, w);   /* a replaced element shown as a block */ else {
+        bool flexd = st->display == D_FLEX || st->display == D_INLINE_FLEX, done = false;
+        if (flexd && !st->flex_col) done = layout_flex(&cc, n, in);
+        else if (flexd && (st->align_items || st->rgap)) done = layout_flex_col(&cc, n, in);
+        else if (st->display == D_GRID || st->display == D_INLINE_GRID) done = layout_grid(&cc, n, in);
+        if (!done) flow_children(&cc, n, in);
+    }
     depth--;
     flush_line(&cc, false);
     if (cc.mark) { int a, d; metrics(st, &a, &d, 0, 0); draw_marker(&cc, cc.y + a); }

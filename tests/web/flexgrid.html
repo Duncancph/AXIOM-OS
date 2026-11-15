@@ -1,0 +1,23 @@
+<html><body style="margin:0;font-size:16px">
+<div style="display:flex;width:600px;background:#eee;align-items:center;gap:10px">
+  <div style="width:100px;height:60px;background:#f00">Fixed</div>
+  <input style="flex:1" value="grows">
+  <div style="flex:0 0 80px;background:#0f0">Basis80</div>
+</div>
+<div style="display:flex;width:600px">
+  <div style="flex:1;background:#fcc">One</div><div style="flex:2;background:#cfc">Two</div><div style="flex:1;background:#ccf">Three</div>
+</div>
+<div style="display:flex;flex-direction:column;align-items:center;width:600px;background:#ddd;row-gap:8px">
+  <div style="background:#ff0">Centred A</div><div style="background:#0ff">Centred longer B</div>
+</div>
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;width:600px">
+  <div style="background:#faa">g1</div><div style="background:#afa">g2</div><div style="background:#aaf">g3</div><div style="background:#ffa">g4</div>
+  <div style="grid-column:1 / -1;background:#aff">full row</div>
+</div>
+<div style="display:grid;grid-template-columns:150px 1fr;width:600px">
+  <div style="background:#ccc">side</div><div style="background:#999">main</div>
+</div>
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;width:600px">
+  <div style="background:#e88">a1</div><div style="background:#8e8">a2</div><div style="background:#88e">a3</div><div style="background:#ee8">a4</div>
+</div>
+</body></html>

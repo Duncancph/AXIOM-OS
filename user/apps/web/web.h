@@ -79,9 +79,10 @@ int html_entity(const char *s, long n, char *out);
 long utf8_lenient_to_cp1252(char *s, long n);
 
 /* ---------------- styles ---------------- */
-enum { D_NONE, D_BLOCK, D_INLINE, D_INLINE_BLOCK, D_LIST_ITEM, D_TABLE, D_ROW_GROUP, D_ROW, D_CELL, D_CAPTION, D_INLINE_TABLE, D_FLEX, D_INLINE_FLEX };
+enum { D_NONE, D_BLOCK, D_INLINE, D_INLINE_BLOCK, D_LIST_ITEM, D_TABLE, D_ROW_GROUP, D_ROW, D_CELL, D_CAPTION, D_INLINE_TABLE, D_FLEX, D_INLINE_FLEX, D_GRID, D_INLINE_GRID };
 enum { TT_NONE, TT_UPPER, TT_LOWER, TT_CAP };
 enum { JC_START, JC_CENTER, JC_END, JC_BETWEEN, JC_AROUND };
+enum { GT_PX, GT_PCT, GT_FR, GT_AUTO };
 enum { WS_NORMAL, WS_PRE, WS_NOWRAP, WS_PREWRAP, WS_PRELINE };
 enum { TA_LEFT, TA_RIGHT, TA_CENTER, TA_JUSTIFY };
 enum { LS_DISC, LS_CIRCLE, LS_SQUARE, LS_DECIMAL, LS_LALPHA, LS_UALPHA, LS_LROMAN, LS_UROMAN, LS_NONE };
@@ -106,7 +107,16 @@ struct style {
     int z;                            /* z-index */
     int indent;                       /* text-indent px */
     int spacing;                      /* table border-spacing px */
-    int gap;                          /* flex gap px */
+    int gap;                          /* flex/grid gap between columns, px */
+    int rgap;                         /* gap between rows, px */
+    int16_t fgrow, fshrink;           /* flex-grow, flex-shrink, * 100 */
+    struct len fbasis;                /* flex-basis (L_AUTO: the width) */
+    uint8_t align_items, align_self;  /* 0 stretch (self: 0 auto), 1 start, 2 center, 3 end */
+    /* grid-template-columns: tracks (type GT_PX: px, GT_PCT: percent * 100, GT_FR: fr * 100, GT_AUTO), or
+     * as many columns of at least grid_auto_min px as fit (repeat(auto-fill, minmax(Npx, 1fr))) */
+    uint8_t ngrid; struct { uint8_t t; int32_t v; } grid[12];
+    int grid_auto_min;
+    uint8_t col_span;                 /* grid-column: span N (0: 1), 255: the whole row (1 / -1) */
     const char *bgimage;              /* background-image url (resolved) */
     uint8_t bgrep, bgcenter;          /* background-repeat: 0 repeat, 1 no-repeat, 2 repeat-x, 3 repeat-y; position centred */
     struct cvar *vars;
