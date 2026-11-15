@@ -298,12 +298,12 @@ class SbrWriter:
             bw.put(nrt, 2)
             ne = nrt + 1
             border = 16 + x
-            for _ in range(nrt):
-                maxrel = min(3, (border - 1 - (ne - 1)) // 2 - 1)   # keep borders > 0 and strictly decreasing
+            for i in range(nrt):
+                remaining = nrt - i - 1
+                maxrel = min(3, (border - 2 * remaining - 3) // 2)
                 rel = int(r.integers(0, max(0, maxrel) + 1))
                 bw.put(rel, 2)
                 border -= 2 * rel + 2
-                ne -= 1
             ne = nrt + 1
             self.pointer(bw, ne)
             frs = [int(r.integers(0, 2)) for _ in range(ne)]
@@ -317,10 +317,10 @@ class SbrWriter:
             bw.put(nrl, 2)
             ne = nrl + 1
             border = lead
-            for _ in range(nrl):
-                rel = int(r.integers(0, 3))
-                if border + 2 * rel + 2 >= 16:
-                    rel = 0
+            for i in range(nrl):
+                remaining = nrl - i - 1
+                maxrel = min(3, (16 - border - 2 * remaining - 3) // 2)
+                rel = int(r.integers(0, max(0, maxrel) + 1))
                 bw.put(rel, 2)
                 border += 2 * rel + 2
             self.pointer(bw, ne)

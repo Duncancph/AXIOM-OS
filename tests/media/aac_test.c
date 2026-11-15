@@ -95,7 +95,24 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(cmd, "decode") || !strcmp(cmd, "seek")) {
         int s16 = argc > 4 && !strcmp(argv[4], "s16");
-        int all = argc > 5 && !strcmp(argv[5], "all");
+        int all = 0, strip = 0;
+        static uint8_t ascbuf[64];
+        for (int i = 5; i < argc; i++) {
+            if (!strcmp(argv[i], "all")) all = 1;
+            if (!strncmp(argv[i], "asc=", 4)) {   /* ADTS input decoded with this AudioSpecificConfig instead */
+                const char *h = argv[i] + 4;
+                cfg_len = 0;
+                while (h[0] && h[1] && cfg_len < 64) { unsigned v; sscanf(h, "%2x", &v); ascbuf[cfg_len++] = (uint8_t)v; h += 2; }
+                cfg = ascbuf;
+                strip = 1;
+            }
+        }
+        if (strip)
+            for (long i = 0; i < naus; i++) {
+                int hl = (data[aus[i].off + 1] & 1) ? 7 : 9;
+                aus[i].off += hl;
+                aus[i].len -= hl;
+            }
         aacdec *d = aac_open(cfg, cfg_len);
         if (!d) { printf("open failed\n"); return 1; }
         d->all_channels = all;
