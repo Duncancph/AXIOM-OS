@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 77
-notes Web: pages whose scripts measure the page in a loop (YouTube) no longer get stuck
-file kernel b77/thane.elf.gz 14702360 92113e6e52997d1dc5f5b85b7664038abbaa31ff9abc9a164564bf29faa0a833
-file initrd b77/initrd.tar.gz 1280000 d88e6ecc5103c031c06e5c26cdc0037ffc04d5d72d3d69d99350ba7082e3526e
-file bootx64 b77/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b77/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3046022100f91fef8b1d2ae07ec628819dc24f551560c5db2ba7e773e4564f3d67ccb9094d022100cb16e95076e991dbee728dfae1bbef50fa98260fa398e6cd89f22673e11a728c
+build 79
+notes Web: pictures load while scripts run; slow ad servers can't hold pages up
+file kernel b79/thane.elf.gz 14706456 259a6f13793267b1f34ab52040cccd307c5288a1e5291e3e2e9d43d799010eac
+file initrd b79/initrd.tar.gz 1280000 6ee489b6235c2bb27cae160466ebb0adca12c36474da4316e0d84fe7171ebb36
+file bootx64 b79/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b79/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3046022100a3c4d2fb9d4ce7dbc894813b4d881f67b9a80b0ba7cad06607cdba3b01470f85022100dfb21c517c633139496d5ccc2cdc13c26b8055678c2af87ad0eaee55ca78f375
