@@ -254,9 +254,8 @@ static void loc_op(FS *fs, int o, int slot) {
 
 /* ---------------- resolution ---------------- */
 static Binding *implicit(js_rt *rt, Arena *ar, Scope *s, jsval name, int kind) {
-    Binding *b = 0;
-    for (Binding *x = s->first; x; x = x->next)
-        if (x->name == name) return x;
+    Binding *b = scope_find(s, name);
+    if (b) return b;
     b = (Binding *)arena_alloc(ar, sizeof(Binding));
     b->name = name;
     b->kind = (uint8_t)kind;
@@ -264,11 +263,7 @@ static Binding *implicit(js_rt *rt, Arena *ar, Scope *s, jsval name, int kind) {
     b->slot = -1;
     b->env_idx = -1;
     b->param_index = -1;
-    if (s->last)
-        s->last->next = b;
-    else
-        s->first = b;
-    s->last = b;
+    scope_link(ar, s, b);
     FuncNode *f = s->func;
     if (kind == B_THIS) f->this_b = b;
     if (kind == B_NEWTARGET) f->nt_b = b;
@@ -292,11 +287,7 @@ static void resolve_all(js_rt *rt, ParseResult *pr) {
         FuncNode *rf = s0->func;
         Binding *found = 0;
         for (Scope *s = s0; s; s = s->parent) {
-            for (Binding *b = s->first; b; b = b->next)
-                if (b->name == name) {
-                    found = b;
-                    break;
-                }
+            found = scope_find(s, name);
             if (found) break;
             if (s->kind == SC_FUNC) {
                 FuncNode *f = s->func;
@@ -1953,11 +1944,12 @@ static void gen_stmt(FS *fs, Node *n) {
         /* binding in the enclosing scope */
         Binding *b = 0;
         for (Scope *s = fs->cur; s; s = s->parent) {
-            for (Binding *x = s->first; x; x = x->next)
-                if (x->name == cls->name && x->kind == B_CLASS) {
-                    b = x;
-                    break;
-                }
+            Binding *x = scope_find(s, cls->name);
+            if (x && x->kind != B_CLASS) for (x = s->first; x && !(x->name == cls->name && x->kind == B_CLASS); x = x->next) {}
+            if (x) {
+                b = x;
+                break;
+            }
             if (b || s->kind == SC_FUNC) break;
         }
         put_binding(fs, b, cls->name, M_INIT_LET, false);

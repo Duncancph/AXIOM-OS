@@ -940,11 +940,40 @@ static Scope *new_scope(P *p, int kind) {
     return s;
 }
 
-static Binding *find_in(Scope *s, jsval name) {
+/* a scope's names: a list, and a hash table once there are many (a minified bundle can have tens of
+ * thousands in one function, with a million references to look up) */
+static uint32_t bhash(jsval v) { uint64_t x = (uint64_t)v; x ^= x >> 33; x *= 0xFF51AFD7ED558CCDULL; x ^= x >> 33; return (uint32_t)x; }
+static void ht_put(Scope *s, Binding *b) {
+    uint32_t h = bhash(b->name) & s->hmask;
+    while (s->ht[h]) { if (s->ht[h]->name == b->name) return; h = (h + 1) & s->hmask; }   /* the first one stays */
+    s->ht[h] = b;
+}
+static void ht_build(Arena *ar, Scope *s, uint32_t cap) {
+    Binding **t = (Binding **)arena_alloc(ar, cap * sizeof(Binding *));
+    if (!t) { s->ht = 0; return; }
+    memset(t, 0, cap * sizeof(Binding *));
+    s->ht = t; s->hmask = cap - 1;
+    for (Binding *b = s->first; b; b = b->next) ht_put(s, b);
+}
+Binding *scope_find(Scope *s, jsval name) {
+    if (s->ht) {
+        uint32_t h = bhash(name) & s->hmask;
+        for (Binding *b; (b = s->ht[h]); h = (h + 1) & s->hmask) if (b->name == name) return b;
+        return 0;
+    }
     for (Binding *b = s->first; b; b = b->next)
         if (b->name == name) return b;
     return 0;
 }
+void scope_link(Arena *ar, Scope *s, Binding *b) {
+    b->next = 0;
+    if (s->last) s->last->next = b; else s->first = b;
+    s->last = b;
+    s->nb++;
+    if (s->ht) { if ((uint32_t)s->nb * 2 > s->hmask + 1) ht_build(ar, s, (s->hmask + 1) * 2); else ht_put(s, b); }
+    else if (s->nb > 16) ht_build(ar, s, 64);
+}
+static Binding *find_in(Scope *s, jsval name) { return scope_find(s, name); }
 static Binding *add_binding(P *p, Scope *s, jsval name, int kind) {
     Binding *b = (Binding *)pal(p, sizeof(Binding));
     b->name = name;
@@ -955,11 +984,7 @@ static Binding *add_binding(P *p, Scope *s, jsval name, int kind) {
     b->param_index = -1;
     b->tdz = kind == B_LET || kind == B_CONST || kind == B_CLASS;
     b->is_const = kind == B_CONST;
-    if (s->last)
-        s->last->next = b;
-    else
-        s->first = b;
-    s->last = b;
+    scope_link(p->ar, s, b);
     return b;
 }
 static void redeclared(P *p, jsval name) { p_error(p, "Identifier '%S' has already been declared", vstr(name)); }

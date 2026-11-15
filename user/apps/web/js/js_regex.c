@@ -997,6 +997,9 @@ static int parse_alt(RC *c) {
     return 0;
 }
 
+static void relocate(int32_t *code, int from, int to, int delta);
+/* a|b|c: SPLIT a1, n1; a1: A; JMP end; n1: SPLIT a2, n2; ... ; the last alternative; end.
+   A loop, not recursion: patterns like a list of 2000 HTML entity names have that many alternatives. */
 static int parse_disj(RC *c) {
     if (++c->depth > 200 || check_stack(c->rt)) {
         c->err = "Regular expression too large";
@@ -1004,10 +1007,11 @@ static int parse_disj(RC *c) {
     }
     int start = c->re->ncode;
     if (parse_alt(c) < 0) return -1;
-    if (peekc(c) == '|') {
-        /* restructure: SPLIT a, b ; a: alt1 ; JMP end ; b: rest */
+    int *jumps = 0, nj = 0, cj = 0;
+    while (peekc(c) == '|') {
         int len = c->re->ncode - start;
         int32_t *alt = (int32_t *)malloc((size_t)(len ? len : 1) * 4);
+        if (!alt) { free(jumps); c->err = "Regular expression too large"; return -1; }
         memcpy(alt, c->re->code + start, (size_t)len * 4);
         c->re->ncode = start;
         emit(c, R_SPLIT);
@@ -1019,15 +1023,18 @@ static int parse_disj(RC *c) {
         free(alt);
         relocate(c->re->code, a, a + len, a - start);
         emit(c, R_JMP);
-        int jslot = c->re->ncode;
+        if (nj == cj) { cj = cj ? cj * 2 : 16; int *nb = (int *)realloc(jumps, (size_t)cj * sizeof(int)); if (!nb) { free(jumps); c->err = "Regular expression too large"; return -1; } jumps = nb; }
+        jumps[nj++] = c->re->ncode;
         emit(c, 0);
         int b = c->re->ncode;
-        c->i++;
-        if (parse_disj(c) < 0) return -1;
         c->re->code[sa] = a;
         c->re->code[sa + 1] = b;
-        c->re->code[jslot] = c->re->ncode;
+        c->i++;
+        start = c->re->ncode;
+        if (parse_alt(c) < 0) { free(jumps); return -1; }
     }
+    for (int k = 0; k < nj; k++) c->re->code[jumps[k]] = c->re->ncode;
+    free(jumps);
     c->depth--;
     return 0;
 }

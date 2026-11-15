@@ -62,6 +62,7 @@ struct Scope {
     FuncNode *func;
     Binding *first, *last;
     int env_size;
+    Binding **ht; uint32_t hmask; int nb;   /* big scopes (minified bundles): names hashed */
 };
 
 enum {
@@ -127,6 +128,8 @@ typedef struct Arena {
     struct ArenaBlk *blk;
 } Arena;
 void *arena_alloc(Arena *a, size_t n);
+Binding *scope_find(Scope *s, jsval name);            /* the first binding of that name in s (not its parents) */
+void scope_link(Arena *ar, Scope *s, Binding *b);     /* add b at the end of s */
 void arena_free(Arena *a);
 
 typedef struct ParseResult {
