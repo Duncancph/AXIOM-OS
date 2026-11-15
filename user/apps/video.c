@@ -365,8 +365,9 @@ static long play_step(void) {
     last_shown = sys_time();
     shown_ms = held_ms;
     blit(&held);
-    draw_controls();
-    app_flush(&a);
+    app_flush_rect(&a, vx, vy, vw, vh);                   /* just the picture; the controls only when the time shown changes */
+    static long last_sec = -1;
+    if (shown_ms / 1000 != last_sec) { last_sec = shown_ms / 1000; draw_controls(); app_flush_rect(&a, 0, WH - CTRL_H, WW, CTRL_H); }
     frames_shown++;
     have_held = false;
     return 0;

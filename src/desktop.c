@@ -1267,7 +1267,11 @@ void desktop_thread(void *arg) {
 
         int n = ndmg; struct rect todo[32];
         memcpy(todo, dmg, sizeof(struct rect) * n); ndmg = 0;
-        for (int i = 0; i < n; i++) compose(todo[i]);
-        task_sleep(8);
+        for (int i = 0; i < n; i++) {
+            compose(todo[i]);
+            /* between pieces of redrawing (a playing video makes a lot of it), keep the mouse pointer moving */
+            if (i + 1 < n) { ps2_poll(); xhci_poll(); int ddx, ddy, bb2, wh2; while (mouse_pop(&ddx, &ddy, &bb2, &wh2)) handle_mouse(ddx, ddy, bb2, wh2); }
+        }
+        task_sleep(n ? 4 : 8);                           /* while the screen is changing, look at the mouse more often */
     }
 }
