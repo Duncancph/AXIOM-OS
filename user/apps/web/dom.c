@@ -210,7 +210,7 @@ static struct node *new_node(int type, const char *name) {
     if (!n) return 0;
     n->type = type; n->link = -1;
     if (type == N_ELEM) {
-        char t[64]; strncpy0(t, name, sizeof t); lower(t);
+        char t[128]; strncpy0(t, name, sizeof t); lower(t);
         n->name = ardup(t, strlen(t));
         n->tag = tag_lookup(t, strlen(t));
     }

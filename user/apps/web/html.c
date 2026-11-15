@@ -365,7 +365,7 @@ void html_parse(struct doc *d, const char *s, long n) {
             add_text("<", 1); i++; continue;
         }
         long ns = p; while (p < n && is_name_char(s[p])) p++;
-        char name[32]; int nl = p - ns < 31 ? p - ns : 31;
+        char name[128]; int nl = p - ns < 127 ? p - ns : 127;   /* custom element names can be long */
         for (int k = 0; k < nl; k++) name[k] = lc(s[ns + k]);
         name[nl] = 0;
         /* attributes */
