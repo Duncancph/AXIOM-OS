@@ -88,21 +88,30 @@ def build():
     objdir = p("target")
     os.makedirs(objdir, exist_ok=True)
     maxstack = (0, "")
+    objs = []
     for c in CSRC:
         o = os.path.join(objdir, os.path.basename(c)[:-2] + ".o")
         r = run(["gcc"] + TARGET_FLAGS + ["-Werror", "-fstack-usage", "-c", c, "-o", o])
         if r.returncode:
             fail("target compile %s:\n%s" % (c, r.stderr.decode()))
             continue
-        und = set(run(["nm", "-u", o]).stdout.decode().split()) - {"U"}
-        if und - ALLOWED:
-            fail("%s uses %s" % (c, sorted(und - ALLOWED)))
+        objs.append(o)
         su = o[:-2] + ".su"
         if os.path.exists(su):
             for line in open(su):
                 parts = line.split("\t")
                 if len(parts) >= 2 and int(parts[1]) > maxstack[0]:
                     maxstack = (int(parts[1]), parts[0])
+    # the library as a whole (all objects linked together) may only import the allowed functions
+    lib = os.path.join(objdir, "media_lib.o")
+    r = run(["ld", "-r", "-o", lib] + objs)
+    if r.returncode:
+        fail("ld -r: " + r.stderr.decode())
+    else:
+        und = set(run(["nm", "-u", lib]).stdout.decode().split()) - {"U"}
+        if und - ALLOWED:
+            fail("library uses %s" % sorted(und - ALLOWED))
+        print("nm -u (whole library): %s" % " ".join(sorted(und)))
     print("target build ok, largest stack frame %d bytes (%s)" % maxstack)
     if maxstack[0] > 16000:
         fail("stack frame too large: %s" % (maxstack,))

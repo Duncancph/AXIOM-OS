@@ -99,6 +99,7 @@ struct aac_ics {
     int group_len[8];
     const uint16_t *swb;
     int num_swb;
+    int pdp;                 /* predictor_data_present bit */
     int pred_present, pred_reset_group;
     uint8_t pred_used[48];
     int ltp_present, ltp_lag;
@@ -134,6 +135,7 @@ struct aac_elem {
     int type, ch[2], nch;
     struct aac_sbr *sbr;
     int sbr_seen;            /* SBR data parsed in this frame */
+    int decoded;             /* element present in this frame */
 };
 
 /* output roles for the downmix */
@@ -166,7 +168,10 @@ struct aacdec {
     uint32_t rand_state;
     uint8_t *buf;
     int bufcap;
+    float *fbuf;             /* aac_decode's float output before the int16 conversion */
     int frames;
+    /* test hook: element types and end bit positions of the last frame (EL_END: its start) */
+    int dbg_n, dbg_type[64], dbg_end[64];
 };
 
 /* aac.c */
@@ -176,8 +181,17 @@ int aac_decode_ics(aacdec *d, struct aac_chan *c, struct aac_bits *b, int common
 struct aac_sbr *aac_sbr_new(int core_rate);
 void aac_sbr_free(struct aac_sbr *s);
 void aac_sbr_reset(struct aac_sbr *s);
-/* parses one SBR extension payload of cnt bytes (b at the extension_type nibble's end); returns 0 if bad */
-int aac_sbr_parse(struct aac_sbr *s, struct aac_bits *b, int bits, int is_cpe, int crc, int *ps_seen);
-/* in place: in[0..1023] core output -> out[0..2047]; ch1 may be 0. With PS (mono element), ch1 receives
-   the right channel. */
-void aac_sbr_apply(struct aac_sbr *s, float *ch0, float *ch1, int is_cpe, int ps_out);
+/* parses one SBR extension payload (b positioned after the extension_type nibble, limited to the payload);
+   id_aac: EL_SCE / EL_CPE of the element it belongs to. */
+int aac_sbr_parse(struct aac_sbr *s, struct aac_bits *b, int bits, int id_aac, int crc, int ps_allowed, int *ps_seen);
+/* in place: L/R hold the 1024 core samples, receive 2048 output samples. ps_mode (mono element with PS):
+   R receives the right channel. */
+void aac_sbr_apply(struct aac_sbr *s, int id_aac, float *L, float *R, int ps_mode);
+
+struct aac_ps;
+struct aac_ps *aac_ps_new(void);
+void aac_ps_free(struct aac_ps *p);
+void aac_ps_reset(struct aac_ps *p);
+int aac_ps_parse(struct aac_ps *p, struct aac_bits *b, int bits_left);   /* returns bits used */
+int aac_ps_started(struct aac_ps *p);
+void aac_ps_apply(struct aac_ps *p, float L[2][38][64], float R[2][38][64], int top);

@@ -225,7 +225,7 @@ struct h264_slice {
     int luma_log2_wd, chroma_log2_wd;
     int16_t lw[2][32], lo[2][32], cw[2][32][2], co[2][32][2];
     uint8_t wflag[2][32];        /* explicit: weights differ from default for this ref */
-    int8_t implicit_w[32][32];   /* implicit: w1 (w0 = 64 - w1); 32 = default */
+    int16_t implicit_w[32][32];  /* implicit: w1 (w0 = 64 - w1); 32 = default */
     struct h264_pic *ref[2][33];
     int ref_poc[2][33];
     int ref_long[2][33];
@@ -308,6 +308,10 @@ struct h264dec {
     int recovery_seen;
     /* current picture */
     struct h264_slice sl;             /* current slice */
+    struct h264_slice nsl;            /* slice header being parsed */
+    int skip_pic, have_prev_ref, cur_poc_msb, cur_top_poc;
+    size_t img_size, pic_size;
+    uint8_t direct8_cur;
     struct h264_slice first_sl;       /* first slice of the current picture (marking) */
     int cur_pps_id, cur_frame_num, cur_idr_pic_id, cur_poc_lsb, cur_nal_ref_idc, cur_idr;
     int cur_delta_poc_bottom, cur_delta_poc0, cur_delta_poc1;
