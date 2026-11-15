@@ -7,12 +7,49 @@
 #undef bool
 #include "dom_prelude.h"
 
-static js_rt *rt;
-static struct doc *D;
-static jsval wrappers;                 /* every node's JS object, by node->jsw - 1 (kept for the page's life) */
-static long nwrappers;
-static jsval proto_elem, proto_text, proto_comment, proto_media, proto_shadow, api;   /* set by the prelude */
-static bool page_on;
+/* Each page has its own scripts (a realm: its own JS engine, globals and timers): the tab's page, and one
+ * for each frame in it. R is the one in use; the others wait (web.c switches with js_realm_use). */
+#define MAXT 256
+struct timer { jsval fn; uint64_t due; long every; int id; bool used; };
+struct realm {
+    js_rt *rt;
+    struct doc *D;
+    jsval wrappers;                    /* every node's JS object, by node->jsw - 1 (kept for the page's life) */
+    long nwrappers;
+    jsval proto_elem, proto_text, proto_comment, proto_media, proto_shadow, api;   /* set by the prelude */
+    bool page_on, skip_said, sq_active;
+    uint64_t page_deadline, page_cycles, page_net_ms;
+    struct node *squeue[512]; int nsq, sqpos;
+    struct node *sev_node[64]; bool sev_ok[64]; int nsev;
+    struct timer timers[MAXT]; int next_tid;
+    void *owner;                       /* web.c's frame (0: the tab's page) */
+    struct realm *next;                /* the frames' realms */
+};
+static struct realm main_realm = { .next_tid = 1 }, *R = &main_realm, *frames;
+#define rt (R->rt)
+#define D (R->D)
+#define wrappers (R->wrappers)
+#define nwrappers (R->nwrappers)
+#define proto_elem (R->proto_elem)
+#define proto_text (R->proto_text)
+#define proto_comment (R->proto_comment)
+#define proto_media (R->proto_media)
+#define proto_shadow (R->proto_shadow)
+#define api (R->api)
+#define page_on (R->page_on)
+#define skip_said (R->skip_said)
+#define sq_active (R->sq_active)
+#define page_deadline (R->page_deadline)
+#define page_cycles (R->page_cycles)
+#define page_net_ms (R->page_net_ms)
+#define squeue (R->squeue)
+#define nsq (R->nsq)
+#define sqpos (R->sqpos)
+#define sev_node (R->sev_node)
+#define sev_ok (R->sev_ok)
+#define nsev (R->nsev)
+#define timers (R->timers)
+#define next_tid (R->next_tid)
 
 /* ---------------- console (about:console) ---------------- */
 static char conlog[16384]; static long conlen;
@@ -51,11 +88,11 @@ static uint64_t h_now(void *c) { struct rtc_time t; sys_rtc(&t);
     if (t.mon > 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0)) days++;
     return (uint64_t)((days * 86400 + t.hour * 3600 + t.min * 60 + t.sec) * 1000 + sys_time() % 1000); }
 static uint64_t h_mono(void *c) { return sys_time(); }
-static uint64_t run_start, page_deadline, last_look;
+static uint64_t run_start, last_look;
 /* How much processor time the page's scripts have used, counted with the cycle counter (timer jobs
  * are often far shorter than a millisecond). A page that keeps scripts busy without end (YouTube's
  * app, for one) used to have its scripts turned off after 20 s; now, like other browsers, they run on. */
-static uint64_t cyc_begin, page_cycles, cal_tsc0, cal_ms0;
+static uint64_t cyc_begin, cal_tsc0, cal_ms0;
 static inline uint64_t cyc(void) { uint32_t lo, hi; __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi)); return (uint64_t)hi << 32 | lo; }
 static uint64_t cycles_per_ms(void) {
     uint64_t t = sys_time();
@@ -67,9 +104,6 @@ static bool busy_said; static uint64_t bar_wait;     /* bar_wait: when a click f
 static void script_begin(void) { bar_wait = 0; run_start = sys_time(); cyc_begin = cyc(); busy_said = false; }
 static void script_end(void) { if (cyc_begin) page_cycles += cyc() - cyc_begin; cyc_begin = 0; }
 static uint64_t page_cpu_ms(void) { return (page_cycles + (cyc_begin ? cyc() - cyc_begin : 0)) / cycles_per_ms(); }
-static bool skip_said;
-static uint64_t page_net_ms;
-static struct node *squeue[512]; static int nsq, sqpos; static bool sq_active;
 static void scripts_off(const char *why) { con_add("[stopped] ", why); page_on = false; }
 /* Called often while a script runs: stops scripts that run too long, and keeps the window answering
  * (the close button quits, Esc stops the page's scripts). */
@@ -294,7 +328,6 @@ static struct node *parse_fragment(const char *s, long n) {
 static void run_script_node(struct node *s);
 static bool connected(struct node *n);
 /* load/error events for scripts the page added, sent from the main loop (not inside the script that added them) */
-static struct node *sev_node[64]; static bool sev_ok[64]; static int nsev;
 
 /* ---------------- natives: the tree ---------------- */
 #define NATIVE(name) static jsval name(js_rt *rt_, jsval self, int argc, jsval *argv, void *data)
@@ -610,10 +643,6 @@ NATIVE(n_alert) { char *t = T(A(argc, argv, 0), 0); web_message("The page says",
 NATIVE(n_resolve) { char *u = js_to_cstring(rt, A(argc, argv, 0)); static char abs[8192]; abs[0] = 0; if (u) { resolve_url(D->base, u, abs, sizeof abs); free(u); } return js_str(rt, abs, -1); }
 
 /* ---------------- natives: timers ---------------- */
-#define MAXT 256
-struct timer { jsval fn; uint64_t due; long every; int id; bool used; };
-static struct timer timers[MAXT];
-static int next_tid = 1;
 NATIVE(n_set_timer) {
     jsval fn = A(argc, argv, 0);
     if (!js_is_function(fn)) return js_int(0);
@@ -631,7 +660,7 @@ NATIVE(n_clear_timer) {
     for (int i = 0; i < MAXT; i++) if (timers[i].used && timers[i].id == id) { timers[i].used = false; timers[i].fn = js_undefined(); }
     return js_undefined();
 }
-long js_timer_wait(void) {
+static long one_timer_wait(void) {
     if (!page_on) return -1;
     long best = -1; uint64_t now = sys_time();
     for (int i = 0; i < MAXT; i++) if (timers[i].used) { long w = timers[i].due > now ? (long)(timers[i].due - now) : 0; if (best < 0 || w < best) best = w; }
@@ -645,7 +674,7 @@ static void report(const char *where) {
     con_add(pre, t); free(t);
 }
 static void after_task(void) { script_end(); script_begin(); js_run_jobs(rt); script_end(); }
-void js_run_timers(void) {
+static void one_run_timers(void) {
     if (!page_on) return;
     while (nsev && page_on) {                                /* scripts that finished loading */
         struct node *n = sev_node[0]; bool ok = sev_ok[0];
@@ -856,7 +885,47 @@ static jsval call_api(const char *fname, int argc, jsval *argv) {
     return res;
 }
 
+/* postMessage between a page and its frames: the message (as JSON) waits here and is handed over from
+ * Web's main loop, like other browsers do (never inside the sender's script) */
+struct pmsg { struct realm *to, *from; char *json; char origin[200]; };
+static struct pmsg pq[64]; static int npq;
+NATIVE(n_post) {                                          /* D.post(target, json, origin): target null: the parent, 'self', or an <iframe> */
+    jsval t = A(argc, argv, 0);
+    struct realm *to = 0;
+    if (js_is_null(t) || js_is_undefined(t)) to = R->owner ? &main_realm : R;     /* the top page's parent is itself */
+    else if (js_is_string(t)) to = R;
+    else { struct node *f = N(t); to = f ? web_frame_realm(f) : 0; }
+    if (!to || npq >= 64) return js_bool(0);
+    char *j = T(A(argc, argv, 1), 0), *o = T(A(argc, argv, 2), 0);
+    if (!j) { free(o); return js_bool(0); }
+    struct pmsg *m = &pq[npq++];
+    m->to = to; m->from = R; m->json = j; strncpy0(m->origin, o ? o : "null", sizeof m->origin); free(o);
+    return js_bool(1);
+}
+static void deliver_messages(void) {
+    while (npq) {
+        struct pmsg m = pq[0];
+        for (int i = 1; i < npq; i++) pq[i - 1] = pq[i];
+        npq--;
+        if (!m.to) { free(m.json); continue; }
+        struct realm *o = R; R = m.to;
+        if (!page_on) { R = o; free(m.json); continue; }
+        jsval args[3] = { js_undefined(), js_undefined(), js_undefined() };
+        for (int i = 0; i < 3; i++) js_root(rt, &args[i]);
+        args[0] = js_str(rt, m.json, -1); args[1] = js_str(rt, m.origin, -1);
+        if (m.from == m.to) args[2] = js_str(rt, "self", -1);
+        else if (m.to == &main_realm && m.from && m.from->owner) args[2] = W(web_frame_node(m.from->owner));
+        else args[2] = js_str(rt, "parent", -1);
+        call_api("message", 3, args);
+        for (int i = 0; i < 3; i++) js_unroot(rt, &args[i]);
+        after_task();
+        R = o;
+        free(m.json);
+    }
+}
+NATIVE(n_is_frame) { return R->owner ? js_bool(1) : js_bool(0); }
 static const struct { const char *name; js_native fn; int n; } natives[] = {
+    { "post", n_post, 3 }, { "isFrame", n_is_frame, 0 },
     { "type", n_type, 1 }, { "tag", n_tag, 1 }, { "parent", n_parent, 1 }, { "first", n_first, 1 }, { "last", n_last, 1 },
     { "next", n_next, 1 }, { "prev", n_prev, 1 }, { "root", n_root, 0 }, { "head", n_head, 0 }, { "body", n_body, 0 },
     { "attr", n_attr, 2 }, { "setAttr", n_set_attr, 3 }, { "removeAttr", n_remove_attr, 2 }, { "attrNames", n_attr_names, 1 },
@@ -894,7 +963,7 @@ void js_page_start(struct doc *d) {
     rt = js_new(&host);
     if (!rt) return;
     page_on = true;
-    conlen = 0; conlog[0] = 0;
+    if (R == &main_realm) { conlen = 0; conlog[0] = 0; }
     wrappers = js_array(rt); nwrappers = 0;
     js_root(rt, &wrappers); js_root(rt, &proto_elem); js_root(rt, &proto_text); js_root(rt, &proto_comment); js_root(rt, &api);
     proto_media = js_undefined(); js_root(rt, &proto_media);
@@ -920,11 +989,16 @@ void js_page_start(struct doc *d) {
     nsq = ns; sqpos = 0; sq_active = true;
 }
 
-bool js_scripts_pending(void) { return sq_active; }
+
 void dom_check_soon(void) { if (rt && page_on) js_check_soon(rt); }
-void js_stop_scripts(void) { if (sq_active && page_on) scripts_off("stopped with Esc"); }
+void js_stop_scripts(void) {
+    struct realm *o = R; R = &main_realm;
+    if (sq_active && page_on) scripts_off("stopped with Esc");
+    for (struct realm *r = frames; r; r = r->next) { R = r; if (sq_active && page_on) scripts_off("a frame's scripts, stopped with Esc"); }
+    R = o;
+}
 /* run the next of the page's scripts; false when there are none left (then "loaded" fires) */
-bool js_page_step(char *status, int n) {
+static bool one_page_step(char *status, int n) {
     if (!sq_active) return false;
     if (page_on && sqpos < nsq) {
         struct node *s = squeue[sqpos++];
@@ -980,4 +1054,53 @@ bool js_event(struct node *target, const char *type, int x, int y, int key) {
 void js_eval_url(const char *code) {
     if (!page_on) return;
     run_code(code, strlen(code), "javascript: link");
+}
+
+/* ---------------- realms: the frames' scripts ---------------- */
+#undef next_tid
+#undef sq_active
+void *js_realm_new(void *owner) {
+    struct realm *r = calloc(1, sizeof *r);
+    if (!r) return 0;
+    r->next_tid = 1; r->owner = owner;
+    r->next = frames; frames = r;
+    return r;
+}
+void *js_realm_use(void *r) { struct realm *old = R; R = r ? r : &main_realm; return old; }
+void *js_realm_owner(void) { return R->owner; }
+void js_realm_free(void *p) {
+    struct realm *r = p;
+    if (!r) return;
+    struct realm *old = R == r ? &main_realm : R;
+    R = r; js_page_end(); R = old;
+    for (struct realm **q = &frames; *q; q = &(*q)->next) if (*q == r) { *q = r->next; break; }
+    for (int i = 0; i < npq; i++) { if (pq[i].to == r) pq[i].to = 0; if (pq[i].from == r) pq[i].from = 0; }
+    free(r);
+}
+bool js_scripts_pending(void) {
+    if (main_realm.sq_active) return true;
+    for (struct realm *r = frames; r; r = r->next) if (r->sq_active) return true;
+    return false;
+}
+bool js_page_step(char *status, int n) {
+    if (main_realm.sq_active) { struct realm *o = R; R = &main_realm; bool m = one_page_step(status, n); R = o; return m; }
+    for (struct realm *r = frames; r; r = r->next) if (r->sq_active) {
+        struct realm *o = R; R = r; one_page_step(status, n); R = o;
+        return true;
+    }
+    return false;
+}
+long js_timer_wait(void) {
+    struct realm *o = R; R = &main_realm;
+    long best = npq ? 0 : one_timer_wait();
+    for (struct realm *r = frames; r; r = r->next) { R = r; long w = one_timer_wait(); if (w >= 0 && (best < 0 || w < best)) best = w; if (nsev && page_on) best = 0; }
+    R = o;
+    return best;
+}
+void js_run_timers(void) {
+    deliver_messages();
+    struct realm *o = R; R = &main_realm;
+    one_run_timers();
+    for (struct realm *r = frames, *nx; r; r = nx) { nx = r->next; R = r; one_run_timers(); }
+    R = o;
 }

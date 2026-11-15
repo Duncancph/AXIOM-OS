@@ -244,6 +244,14 @@ extern uint64_t web_fetch_deadline;   /* if set: a download gives up at this tim
 void dom_check_soon(void);
 void js_stop_scripts(void);
 bool js_page_step(char *status, int n);
+/* frames' scripts run in realms of their own: js_realm_use(r) makes r the one the js_ calls above act on
+ * (0: the tab's page) and returns the one in use before */
+void *js_realm_new(void *owner);
+void *js_realm_use(void *r);
+void *js_realm_owner(void);                     /* the frame whose scripts are running (0: the page's) */
+void js_realm_free(void *r);
+void *web_frame_realm(struct node *iframe);     /* an <iframe>'s scripts (0: none yet) */
+struct node *web_frame_node(void *frame);       /* a frame's <iframe>, in the page */
 extern int web_time_scale;              /* 1; 10 on a slow test machine (setting web.test_slow) */
 extern int web_script_waiting;          /* set while a running script waits for the network: events are held back */
 void web_requeue_event(const struct dunc_event *e);   /* an event seen while a script ran, handled afterwards */

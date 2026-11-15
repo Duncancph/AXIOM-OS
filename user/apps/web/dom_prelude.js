@@ -542,6 +542,18 @@
   var start = D.viewport ? Date.now() : 0;
   function performanceNow() { return Date.now() - start; }
   g.window = g; g.self = g; g.top = g; g.parent = g; g.frames = g; g.globalThis = g;
+  // postMessage: between this page and its frames (each runs its own scripts). The data goes as JSON.
+  function packMsg(data) { var j; try { j = JSON.stringify({ v: data }); } catch (e) { throw new Error('DataCloneError: the message could not be copied'); } return j === undefined ? '{}' : j; }
+  function myOrigin() { try { return g.location.origin || 'null'; } catch (e) { return 'null'; } }
+  function originOk(o) { return !o || o === '*' || o === '/' || o === myOrigin() || true; }
+  g.postMessage = function (data, o) { D.post('self', packMsg(data), myOrigin()); };
+  if (D.isFrame && D.isFrame()) {
+    // a frame: its parent is the page around it, reached only through messages (like a page from another site)
+    var par = { postMessage: function (data, o) { D.post(null, packMsg(data), myOrigin()); }, closed: false, length: 0 };
+    par.window = par; par.self = par; par.top = par; par.parent = par; par.frames = par;
+    g.parent = par; g.top = par;
+    try { Object.defineProperty(g, 'frameElement', { value: null, configurable: true }); } catch (e) { }
+  }
   g.document = doc;
   ['addEventListener', 'removeEventListener', 'dispatchEvent'].forEach(function (k) { g[k] = EventTarget.prototype[k]; });
   g.Node = Node; g.Element = Element; g.HTMLElement = HTMLElement; g.Text = Text; g.Comment = Comment; g.CharacterData = CharacterData;
@@ -983,6 +995,13 @@
   var keyCodes = { Backspace: 8, Tab: 9, Enter: 13, Escape: 27, ' ': 32, PageUp: 33, PageDown: 34, End: 35, Home: 36, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Insert: 45, Delete: 46 };
   hidden(g, '__axiom', {
     start: function () { },
+    // a message from a frame, the parent or this page itself (D.post); src: 'self', 'parent' or the <iframe>
+    message: function (json, origin, src) {
+      var data; try { data = JSON.parse(json).v; } catch (e) { return; }
+      var source = src === 'self' ? g : src === 'parent' ? g.parent : (src && src.contentWindow) || null;
+      var ev = new MessageEvent('message', { data: data, origin: origin, source: source });
+      g.dispatchEvent(ev);
+    },
     loaded: function () {
       doc.readyState = 'interactive';
       doc.dispatchEvent(new Event('readystatechange'));
@@ -1495,4 +1514,16 @@
     g.ResizeObserverEntry = function () { throw new TypeError('Illegal constructor'); };
   })();
   D.setProtos(P, TP, TP, g.__axiom, MP, SRP);
+  // <iframe>: contentWindow is the frame's window as another site's page sees it: messages only
+  var IP = Object.getPrototypeOf(document.createElement('iframe'));
+  try {
+    Object.defineProperty(IP, 'contentWindow', { configurable: true, get: function () {
+      if (this.tagName !== 'IFRAME') return undefined;
+      if (!this._cw) { var el = this; var w = { postMessage: function (data, o) { var j; try { j = JSON.stringify({ v: data }); } catch (e) { throw new Error('DataCloneError'); } D.post(el, j === undefined ? '{}' : j, g.location.origin || 'null'); }, closed: false, length: 0 };
+        w.window = w; w.self = w; w.parent = g; w.top = g.top; w.frames = w;
+        Object.defineProperty(this, '_cw', { value: w, enumerable: false }); }
+      return this._cw;
+    } });
+    Object.defineProperty(IP, 'contentDocument', { configurable: true, get: function () { return null; } });
+  } catch (e) { }
 })(this);

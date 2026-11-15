@@ -385,6 +385,7 @@ static bool decode_into(struct imgent *e, const uint8_t *data, long n) {
 
 /* the next picture to load: one on screen first */
 static bool images_stopped;
+static struct imgent *svgs;
 static struct imgent *next_image(void) {
     struct imgent *first = 0;
     if (images_stopped) return 0;
@@ -396,6 +397,8 @@ static struct imgent *next_image(void) {
         if (it->y + it->h >= top && it->y <= bot) return im;
         if (!first) first = im;
     }
+    if (!first)                                          /* frames load even when hidden (scripts talk to them) */
+        for (struct imgent *e = svgs; e; e = e->next) if (e->frame && e->state == IS_PENDING) return e;
     return first;
 }
 static uint64_t last_layout_t;
@@ -423,7 +426,29 @@ static bool svg_file(struct imgent *e, char *b, long n) {
     ar_reset(&t->ar); free(t);
     return ok;
 }
-struct frame { struct doc *doc; struct layout lay; void *css; char *srcdoc; int w, h; uint32_t *px; };
+struct frame {
+    struct doc *doc; struct layout lay; void *css; char *srcdoc;
+    int w, h;                    /* the size it was laid out at (-1: to do again) */
+    int vw, vh;                  /* its box's size */
+    bool painted;                /* px is up to date */
+    uint32_t *px;
+    void *realm;                 /* its scripts (dom.c) */
+    struct node *node;           /* its <iframe> */
+    char *pend_url;              /* the <iframe> got another address: loaded next (from the main loop) */
+    char url[600];
+};
+static void frame_layout(struct frame *f, int w, int h) {   /* lay the frame's page out at its box's size */
+    if (!f->doc || (f->w == w && f->h == h)) return;
+    void *outer = css_save(); css_restore(f->css);
+    css_cascade(f->doc, w);
+    int vh = layout_viewport_h; layout_viewport_h = h;
+    layout_doc(f->doc, &f->lay, w);
+    layout_viewport_h = vh;
+    f->css = css_save(); css_restore(outer);
+    f->w = w; f->h = h; f->painted = false;
+    need_layout = true;                                   /* (laying the frame out used the shared layout state) */
+}
+static void free_doc(struct doc *d);
 static void load_styles(struct doc *d);
 static struct doc *parse_page(char *s, long n, const char *ctype, const char *base);
 static void frame_init(struct doc *d, struct node *e, int depth) {     /* form controls in a frame's page */
@@ -435,6 +460,12 @@ static void frame_init(struct doc *d, struct node *e, int depth) {     /* form c
 }
 static void load_frame(struct imgent *e) {
     struct frame *f = e->frame;
+    if (f->pend_url) {                                    /* another address: the old page goes */
+        js_realm_free(f->realm); f->realm = 0;
+        free_doc(f->doc); f->doc = 0; layout_free(&f->lay); memset(&f->lay, 0, sizeof f->lay);
+        free(f->css); f->css = 0; free(f->srcdoc); f->srcdoc = 0; f->painted = false; f->w = -1;
+        free(e->url); e->url = f->pend_url; f->pend_url = 0;
+    }
     e->state = IS_LOADING;
     char *b = 0, ct[96] = "text/html", final[600]; int status = 0; long n;
     strncpy0(final, e->url ? e->url : "about:blank", sizeof final);
@@ -451,8 +482,12 @@ static void load_frame(struct imgent *e) {
     load_styles(d);
     f->css = css_save();
     css_restore(outer);
-    f->doc = d; f->w = f->h = -1;
+    f->doc = d; f->w = f->h = -1; f->vw = e->w; f->vh = e->h;
+    strncpy0(f->url, final, sizeof f->url);
     e->state = IS_OK; need_draw = true;
+    f->realm = js_realm_new(f);                           /* its scripts, in a realm of their own */
+    if (f->realm) { void *o = js_realm_use(f->realm); js_page_start(d); js_realm_use(o); }
+    if (js_page_active() && !js_realm_owner()) js_event(f->node, "load", 0, 0, 0);   /* the <iframe>'s load event, in the page */
 }
 static void load_image(struct imgent *e) {
     if (e->frame) { load_frame(e); return; }
@@ -724,8 +759,12 @@ static struct imgent *svgs; static uint32_t svg_gen_now = 1;   /* the page's <sv
  * A frame's page is fetched like a picture (when its box comes into view), parsed and styled on its own (its
  * style sheets are kept aside while the outer page's are in use) and laid out at the box's size, then drawn
  * into a picture of that size. Its scripts don't run yet. */
+void *web_frame_realm(struct node *n) { return n && n->tag == T_IFRAME && n->img && n->img->frame ? ((struct frame *)n->img->frame)->realm : 0; }
+struct node *web_frame_node(void *f) { return f ? ((struct frame *)f)->node : 0; }
 static void frame_free(struct frame *f) {
     if (!f) return;
+    free(f->pend_url);
+    js_realm_free(f->realm);                              /* its scripts stop first: they use its page */
     free_doc(f->doc); layout_free(&f->lay); free(f->css); free(f->px); free(f->srcdoc); free(f);
 }
 static void svgs_free(void) { while (svgs) { struct imgent *e = svgs; svgs = e->next; frame_free(e->frame); free(e->px); free(e->url); free(e); } }
@@ -737,6 +776,17 @@ static void init_node(struct doc *d, struct node *c) {
         }
         if (c->tag == T_INPUT || c->tag == T_TEXTAREA || c->tag == T_SELECT || c->tag == T_BUTTON) form_init_control(d, c);
         if (c->tag == T_VIDEO || c->tag == T_AUDIO) media_attach(d, c);
+        if (c->tag == T_IFRAME && c->img && c->img->frame) {      /* a script gave the frame another address */
+            struct imgent *e = c->img; struct frame *f = e->frame;
+            const char *src = node_attr(c, "src"); static char u[1024];
+            if (src && src[0] && !node_attr(c, "srcdoc") && !pre_ci(src, "javascript:")) {
+                resolve_url(d->base, src, u, sizeof u);
+                if (strcmp(u, e->url ? e->url : "") && (!f->pend_url || strcmp(u, f->pend_url))) {
+                    free(f->pend_url); f->pend_url = malloc(strlen(u) + 1);
+                    if (f->pend_url) { memcpy(f->pend_url, u, strlen(u) + 1); if (e->state != IS_LOADING) e->state = IS_PENDING; }
+                }
+            }
+        }
         if (c->tag == T_IFRAME && !c->img) {             /* a frame: its page is loaded like a picture */
             struct imgent *e = calloc(1, sizeof *e); struct frame *f = calloc(1, sizeof *f);
             const char *src = node_attr(c, "src"), *sd = node_attr(c, "srcdoc");
@@ -746,7 +796,7 @@ static void init_node(struct doc *d, struct node *c) {
                 else if (src && src[0] && !pre_ci(src, "about:") && !pre_ci(src, "javascript:")) resolve_url(d->base, src, u, sizeof u);
                 else u[0] = 0;
                 e->url = malloc(strlen(u) + 1); if (e->url) memcpy(e->url, u, strlen(u) + 1);
-                e->frame = f; e->w = 300; e->h = 150;
+                e->frame = f; e->w = 300; e->h = 150; f->node = c;
                 e->state = (sd || u[0]) && e->url ? IS_PENDING : IS_FAILED;    /* nothing to load: an empty frame */
                 e->next = svgs; svgs = e; c->img = e;
             } else { free(e); free(f); }
@@ -1324,21 +1374,16 @@ static void draw_frame(struct canvas *c, struct imgent *e, struct ditem *it, int
     int w = it->w, h = it->h;
     if (w <= 0 || h <= 0) return;
     if (e->state != IS_OK || !f->doc) { gfx_fill(c, x, y, w, h, 0xFFFFFF); return; }
-    if (f->w != w || f->h != h || !f->px) {
-        if ((long)w * h > 8l * 1024 * 1024) return;
-        void *outer = css_save(); css_restore(f->css);
-        css_cascade(f->doc, w);
-        int vh = layout_viewport_h; layout_viewport_h = h;
-        layout_doc(f->doc, &f->lay, w);
-        layout_viewport_h = vh;
-        f->css = css_save(); css_restore(outer);
-        free(f->px); f->px = malloc((size_t)w * h * 4);
-        if (!f->px) return;
+    if ((long)w * h > 8l * 1024 * 1024) return;
+    f->vw = w; f->vh = h;
+    if (f->w != w || f->h != h) { free(f->px); f->px = 0; }
+    frame_layout(f, w, h);
+    if (!f->px) { f->px = malloc((size_t)w * h * 4); f->painted = false; if (!f->px) return; }
+    if (!f->painted) {
         struct canvas fc; gfx_init(&fc, f->px, w, h, w);
         gfx_fill(&fc, 0, 0, w, h, f->lay.canvas_bg);
         draw_items(&fc, &f->lay, 0, -64, h, false);
-        f->w = w; f->h = h;
-        need_layout = true;                               /* (laying the frame out used the shared layout state) */
+        f->painted = true;
     }
     gfx_blit(c, x, y, f->px, w, h, w);
 }
@@ -1797,10 +1842,17 @@ void web_requeue_event(const struct dunc_event *e) {
     if (nrequeued < 8) requeued[nrequeued++] = *e;
 }
 void web_dom_changed(struct node *added) {
+    struct frame *f = js_realm_owner();
+    if (f) {                                              /* a frame's script changed its page */
+        if (added && added->type == N_ELEM) frame_init(f->doc, added, 0);
+        f->w = -1; need_draw = true; return;
+    }
     if (added && doc && added->type == N_ELEM) { init_node(doc, added); walk_init(doc, added, 0); }
     need_cascade = true; need_layout = true; styles_scan = true; svg_gen_now++;
 }
 void web_text_changed(struct node *n) {                    /* a <button>'s label is drawn from its text */
+    struct frame *f = js_realm_owner();
+    if (f) { f->w = -1; need_draw = true; return; }
     for (struct node *p = n; p && p->type == N_ELEM; p = 0) if (p->tag == T_STYLE && p->css_done) styles_reload = true;   /* a sheet was rewritten */
     if (n && n->parent && n->type == N_TEXT && n->parent->tag == T_STYLE && n->parent->css_done) styles_reload = true;
     for (int k = 0; n && k < 20; n = n->parent, k++)
@@ -1814,10 +1866,11 @@ void web_text_changed(struct node *n) {                    /* a <button>'s label
         }
 }
 void web_navigate(const char *u) {                         /* later, from the main loop: a script may still be running */
+    if (js_realm_owner()) return;                           /* (a frame going to another page: not yet) */
     pend = true; strncpy0(pend_url, u, sizeof pend_url);
     free(pend_body); pend_body = 0; pend_blen = 0; pend_post = false; pend_mode = 0; pend_scroll = 0;
 }
-void web_page_url(char *out, int n) { strncpy0(out, url, n); }
+void web_page_url(char *out, int n) { struct frame *f = js_realm_owner(); strncpy0(out, f ? f->url : url, n); }
 
 /* ---------------- for <video>/<audio> (web/media.c) ---------------- */
 void web_redraw_node(struct node *n) {
@@ -1875,7 +1928,7 @@ long web_download(const char *u, long cap, char **out, int *status, char *ctype,
     *out = f.b;
     return f.len;
 }
-void web_set_title(const char *t) { set_title(); }
+void web_set_title(const char *t) { if (!js_realm_owner()) set_title(); }
 /* Scripts asking for sizes and positions after changing the page need it laid out again. Some (animation
  * libraries) change and measure in a loop; on a big page each layout is slow, so it's redone at most 4
  * times a second (scripts get the last one's numbers in between) and the time limits are checked next. */
@@ -1888,10 +1941,12 @@ static void layout_for_script(void) {
     dom_check_soon();
 }
 void web_viewport(int *w, int *h, int *s, int *dh) {
+    struct frame *f = js_realm_owner();
+    if (f) { frame_layout(f, f->vw, f->vh); *w = f->vw; *h = f->vh; *s = 0; *dh = f->lay.doc_h; return; }
     layout_for_script();
     *w = page_w(); *h = view_h(); *s = scroll; *dh = lay.doc_h;
 }
-void web_scroll_to(int y) { scroll = y; scroll_by(0); need_draw = true; }
+void web_scroll_to(int y) { if (js_realm_owner()) return; scroll = y; scroll_by(0); need_draw = true; }
 void web_busy_status(const char *msg) { strncpy0(status_text, msg, sizeof status_text); draw(); }
 void web_message(const char *title, const char *msg) {
     char m[200]; strncpy0(m, msg, sizeof m);
@@ -1899,14 +1954,16 @@ void web_message(const char *title, const char *msg) {
     ksnprintf(status_text, sizeof status_text, "The page says: %s", m); need_draw = true;
 }
 bool web_node_rect(struct node *n, int *x, int *y, int *w, int *h) {
-    layout_for_script();
+    struct frame *f = js_realm_owner();
+    struct layout *ly = &lay;
+    if (f) { frame_layout(f, f->vw, f->vh); ly = &f->lay; } else layout_for_script();
     if (n->bgen == layout_pass && n->bgen) { *x = n->bx; *y = n->by; *w = n->bw; *h = n->bh; return true; }   /* a block's box */
     int x0 = 1 << 30, y0 = 1 << 30, x1 = -(1 << 30), y1 = -(1 << 30);
-    for (int i = 0; i < lay.nit; i++) {
-        struct node *s = lay.it[i].src; int k = 0;
+    for (int i = 0; i < ly->nit; i++) {
+        struct node *s = ly->it[i].src; int k = 0;
         while (s && s != n && k++ < 120) s = s->parent;
         if (s != n) continue;
-        struct ditem *it = &lay.it[i];
+        struct ditem *it = &ly->it[i];
         if (it->x < x0) x0 = it->x;
         if (it->y < y0) y0 = it->y;
         if (it->x + it->w > x1) x1 = it->x + it->w;
@@ -1933,6 +1990,30 @@ static struct node *elem_at(int x, int y) {
     return doc ? doc->body : 0;
 }
 
+/* a click in a frame: its scripts get it, at the place in its page */
+static bool frame_click(int x, int y) {
+    int dy = y - BAR_H + scroll;
+    if (y < BAR_H || y >= WH - STATUS_H) return false;
+    for (int i = lay.nit - 1; i >= 0; i--) {
+        struct ditem *it = &lay.it[i];
+        if (it->kind != DI_IMG || (it->deco & 0x80) || !it->n || !it->n->img || !it->n->img->frame) continue;
+        if (x < it->x || x >= it->x + it->w || dy < it->y || dy >= it->y + it->h) continue;
+        struct frame *f = it->n->img->frame;
+        if (!f->doc || !f->realm) return true;
+        int fx = x - it->x, fy = dy - it->y;
+        struct node *t = f->doc->body;
+        for (int k = f->lay.nit - 1; k >= 0; k--) {
+            struct ditem *q = &f->lay.it[k];
+            if (fx >= q->x && fx < q->x + q->w && fy >= q->y && fy < q->y + q->h && q->src) { t = q->src; break; }
+        }
+        void *o = js_realm_use(f->realm);
+        if (js_page_active() && t) { js_event(t, "mousedown", fx, fy, 0); js_event(t, "mouseup", fx, fy, 0); js_event(t, "click", fx, fy, 0); }
+        js_realm_use(o);
+        need_draw = true;
+        return true;
+    }
+    return false;
+}
 static void handle_event(struct dunc_event *e) {
     if (e->type == EV_CLOSE) { quit = true; abort_fetch = true; return; }
     if (e->type == EV_RESIZE) {
@@ -1979,6 +2060,7 @@ static void handle_event(struct dunc_event *e) {
             scroll = (int)((long)(e->y - BAR_H) * (lay.doc_h - vh) / (vh > 0 ? vh : 1)); scroll_by(0);
         } else if (e->y > BAR_H && e->y < WH - STATUS_H && doc) {
             addr_focus = false;
+            if (frame_click(e->x, e->y)) return;            /* a click inside a frame goes to its page's scripts */
             if (js_page_active()) {                          /* scripts see the click first and may cancel what it would do */
                 struct node *t = elem_at(e->x, e->y);
                 int px = e->x, py = e->y - BAR_H + scroll;
