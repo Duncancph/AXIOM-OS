@@ -76,7 +76,13 @@ static void draw(void) {
     stat_card(c, 20, 18, cw, "CPU", v, "in use", cpu_hist, UI_ACCENT);
     ksnprintf(v, sizeof v, "%lu MiB", si.mem_used >> 20);
     ksnprintf(s, sizeof s, "of %lu MiB", si.mem_total >> 20);
-    stat_card(c, 36 + cw, 18, cw, "Memory", v, s, mem_hist, 0xD8D3B8);
+    char ml[80] = "Memory";
+    if (si.cache_size) {                                      /* the disk cache: spare memory holding recently used files */
+        uint64_t cu = si.cache_used >> 20;
+        if (cu >= 1024) ksnprintf(ml, sizeof ml, "Memory   -   %lu.%lu GB of files cached", cu / 1024, cu % 1024 * 10 / 1024);
+        else ksnprintf(ml, sizeof ml, "Memory   -   %lu MB of files cached", cu);
+    }
+    stat_card(c, 36 + cw, 18, cw, ml, v, s, mem_hist, 0xD8D3B8);
 
     gfx_text(c, &font_ui_bold, 20, 198, UI_TEXT, "Processes");
     uint64_t up = si.uptime_ms / 1000;

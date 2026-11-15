@@ -262,6 +262,12 @@ extern struct task *current;
 #endif
 void bkl_lock(void);
 void bkl_unlock(void);
+struct blockdev;
+void bcache_init(void);
+void bcache_attach(struct blockdev *bd);
+void bcache_detach(struct blockdev *bd);
+uint64_t bcache_bytes(void);
+uint64_t bcache_capacity(void);
 void smp_init(void);
 void smp_settled(void);                /* start-up went fine: forget the safety marker */                   /* find the cores; start them if the setting says so */
 void cpu_setup(struct cpu *c);         /* GDT, TSS and %gs for a core */

@@ -46,6 +46,7 @@ struct sysinfo {
     char cpu[64];
     char kernel[32];
     int ncpus_found, ncpus_on;          /* processor cores: found, in use */
+    uint64_t cache_used, cache_size;    /* the disk cache: bytes of files kept in memory, and its room */
 };
 
 enum { BT_INFO, BT_SCAN, BT_RESULTS, BT_PAIR, BT_PAIR_STATUS, BT_PAIR_CONFIRM, BT_PAIRED, BT_FORGET };

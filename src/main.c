@@ -125,6 +125,7 @@ void kmain(uint32_t magic, uint64_t mbi) {
     vfs_init();
     if (bootinfo.mod_start) initrd_load((const uint8_t *)bootinfo.mod_start, (const uint8_t *)bootinfo.mod_end);
     apps_refresh();
+    bcache_init();
     pci_scan();
     LOG_OK("PCI: %d devices\n", pci_count);
     intelgfx_probe();

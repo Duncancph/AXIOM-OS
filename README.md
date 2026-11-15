@@ -12,6 +12,9 @@ with true multitasking and memory protection between apps.
 - 64-bit x86 kernel in C and assembly, booted by GRUB (Multiboot2)
 - **Preemptive multitasking**: the local APIC timer switches between programs 250 times a second,
   so a frozen or busy app can't lock up the computer
+- **Disk cache**: recently read parts of every drive stay in spare memory (up to 4 GB, using memory
+  above 4 GB when the computer has it), so files, folders and apps open faster the second time.
+  Writes go to the drive straight away (write-through). System Monitor shows how much is cached.
 - **Multi-core** (Settings > About > Use all processor cores; off by default): the other cores are started
   from the ACPI core list and run apps side by side. One core at a time runs kernel code (a big kernel
   lock); kernel threads stay on the first core. If a start with all cores doesn't finish, the next start

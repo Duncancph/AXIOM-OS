@@ -139,6 +139,32 @@ static int hex2(const char *q) { int h = 0; for (int i = 0; i < 2; i++) { int x 
 
 #define ENOFILE -1000
 /* any URL (http, https, file, data) into a new malloc'd buffer; returns the length or a negative error */
+/* The web cache: pictures, style sheets, scripts and fonts this window has downloaded stay in memory,
+ * so going back or opening more pages of the same site doesn't download them again. Pages themselves
+ * and data asked for by scripts aren't kept (they change); reload (R) downloads everything again. */
+struct wcache { struct wcache *next; char *url, *data, ctype[80]; long len; uint64_t used; };
+static struct wcache *wc_list; static long wc_bytes, wc_max; static uint64_t wc_tick; static bool cache_bypass;
+static bool wc_kind(const char *ct) {
+    char l[40]; int k = 0; for (; ct[k] && ct[k] != ';' && k < 39; k++) l[k] = lc(ct[k]); l[k] = 0;
+    return pre_ci(l, "image/") || pre_ci(l, "font/") || !strcmp(l, "text/css") || !strcmp(l, "text/javascript") ||
+           !strcmp(l, "application/javascript") || !strcmp(l, "application/x-javascript") || !strcmp(l, "application/font-woff");
+}
+static struct wcache *wc_find(const char *u) { for (struct wcache *c = wc_list; c; c = c->next) if (!strcmp(c->url, u)) return c; return 0; }
+static void wc_put(const char *u, const char *data, long len, const char *ct) {
+    if (!wc_max) { struct sysinfo si; sys_sysinfo(&si); wc_max = (long)(si.mem_total / 8 < (256l << 20) ? si.mem_total / 8 : (256l << 20)); }
+    if (len <= 0 || len > wc_max / 8 || wc_find(u)) return;
+    while (wc_list && wc_bytes + len > wc_max) {            /* make room: the least recently used goes */
+        struct wcache **pp = &wc_list, **old = &wc_list;
+        for (; *pp; pp = &(*pp)->next) if ((*pp)->used < (*old)->used) old = pp;
+        struct wcache *c = *old; *old = c->next; wc_bytes -= c->len; free(c->url); free(c->data); free(c);
+    }
+    struct wcache *c = calloc(1, sizeof *c); if (!c) return;
+    c->url = malloc(strlen(u) + 1); c->data = malloc(len + 1);
+    if (!c->url || !c->data) { free(c->url); free(c->data); free(c); return; }
+    memcpy(c->url, u, strlen(u) + 1); memcpy(c->data, data, len); c->len = len; strncpy0(c->ctype, ct, sizeof c->ctype); c->used = ++wc_tick;
+    c->next = wc_list; wc_list = c; wc_bytes += len;
+}
+
 static long fetch_any(const char *u, long cap, char **out, char *ctype, int ctlen, int *status, char *final, int fulen,
                       const char *method, const char *body, long blen) {
     *out = 0; if (ctype) ctype[0] = 0; if (status) *status = 0;
@@ -177,13 +203,27 @@ static long fetch_any(const char *u, long cap, char **out, char *ctype, int ctle
         return r;
     }
     if (!pre_ci(u, "http:") && !pre_ci(u, "https:")) return HTTP_EURL;
+    bool get = (!method || !strcmp(method, "GET")) && !body;
+    struct wcache *hit = get && !cache_bypass ? wc_find(u) : 0;
+    if (hit && hit->len <= cap) {                           /* from the web cache */
+        char *b = malloc(hit->len + 1); if (!b) return NET_ENOMEM;
+        memcpy(b, hit->data, hit->len); hit->used = ++wc_tick;
+        if (ctype) strncpy0(ctype, hit->ctype, ctlen);
+        if (status) *status = 200;
+        *out = b; return hit->len;
+    }
     struct fbuf f = { malloc(cap + 1), 0, cap, false };
     if (!f.b) return NET_ENOMEM;
     struct http_req rq = { method, body, blen, "application/x-www-form-urlencoded", 0, 0, 0 };
     fetch_depth++;
+    int st_local = 0; char ct_local[80] = "";
+    if (!status) status = &st_local;                       /* the cache needs them even when the caller doesn't */
+    if (!ctype) { ctype = ct_local; ctlen = sizeof ct_local; }
     long r = http_request(u, &rq, fbuf_sink, &f, status, 0, ctype, ctlen, final, fulen);
     fetch_depth--;
     if (r < 0 && !f.len) { free(f.b); return r; }
+    char ctbuf[80] = ""; if (ctype) strncpy0(ctbuf, ctype, sizeof ctbuf);
+    if (get && r >= 0 && !f.trunc && status && *status == 200 && wc_kind(ctbuf)) wc_put(u, f.b, f.len, ctbuf);
     *out = f.b;
     return f.len;
 }
@@ -840,6 +880,7 @@ static void push_history(void) {
 
 /* mode: 0 a new page (history entry), 1 reload / back / forward (no new entry; restore: scroll position) */
 static void navigate(const char *target, bool post, const char *body, long blen, int mode, int restore) {
+    cache_bypass = mode == 1;                              /* reload: everything fresh from the network */
     char u[600]; strncpy0(u, target, sizeof u);
     if (hpos >= 0) hist[hpos].scroll = scroll;
     addr_focus = false; popup = 0;

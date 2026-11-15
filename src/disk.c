@@ -126,6 +126,7 @@ bool disk_add(struct blockdev *bd, int kind) {
     for (int i = 0; i < MAXD; i++) if (!disks[i].used) { d = &disks[i]; break; }
     if (!d || !secbuf) return false;
     memset(d, 0, sizeof *d);
+    bcache_attach(bd);                                   /* recently read parts stay in memory */
     d->used = true; d->id = next_id++; d->kind = kind; d->bd = bd;
     scan(d);
     for (int i = 0; i < d->nparts; i++)
@@ -145,6 +146,7 @@ void disk_remove(struct blockdev *bd) {
             desktop_notify("AXIOM drive removed", "Your files are on that drive. Until it's back, new files are kept in memory only.");
         }
         d->used = false;
+        bcache_detach(bd);
     }
 }
 
