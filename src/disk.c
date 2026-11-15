@@ -5,7 +5,7 @@
  * partitions (Windows, Linux, recovery) are never mounted or written, except when the user asks the
  * installer to erase that disk.
  *
- * The system volume is a FAT32 EFI system partition:
+ * The system volume is a FAT32 EFI system partition (it may be shared with another system, e.g. Ubuntu):
  *   /EFI/BOOT/BOOTX64.EFI   GRUB (standalone image, finds /duncos/thane.elf on any disk)
  *   /duncos/                kernel, initial files, grub.cfg            -> /system/boot
  *   /home/                  the user's files                            -> /home
