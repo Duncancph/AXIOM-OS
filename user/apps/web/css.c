@@ -509,7 +509,8 @@ void css_add_sheet(const char *text, long len, const char *base_url, int import_
 static const char UA_CSS[] =
     "html, body, div, p, h1, h2, h3, h4, h5, h6, ul, ol, dl, dt, dd, pre, blockquote, form, fieldset, address, section, article, aside,"
     " nav, header, footer, main, figure, figcaption, hr, center, details, summary, hgroup, menu, dir, legend, listing, xmp, plaintext,"
-    " search, dialog, optgroup, noscript { display: block }"
+    " search, dialog, optgroup { display: block }"
+    " noscript { display: none }"
     "head, title, meta, link, style, script, base, template, area, map, param, source, track, datalist, noframes, iframe, svg, math,"
     " canvas, audio, object, embed, colgroup, col, option, frame, frameset, input[type=hidden], [hidden], dialog { display: none }"
     " video { display: inline } audio[controls] { display: inline }"

@@ -934,6 +934,8 @@ static void about_page(const char *u) {
             "<h1>Arc <span class=dim style=\"font-size:22px\">0.4</span></h1>"
             "<p>A browser for <b>AXIOM</b>, running on the Axiom Core kernel's own TCP/IP stack. Secure <b>https://</b> sites use TLS 1.3, "
             "and every site's certificate is checked against the trusted authorities.</p>"
+            "<form action=\"https://lite.duckduckgo.com/lite/\" method=get><p><input type=text name=q size=44 placeholder=\"Search the web\"> <input type=submit value=Search></p></form>"
+            "<p class=dim>You can also type what you're looking for in the address bar. Searches use DuckDuckGo (Google turns Arc away with a robot check).</p>"
             "<div class=card><h2>Try</h2><ul>"
             "<li><a href=\"https://text.npr.org/\">text.npr.org</a> - news in plain text</li>"
             "<li><a href=\"https://lite.duckduckgo.com/lite/\">lite.duckduckgo.com</a> - web search, lite edition</li>"
@@ -982,6 +984,41 @@ static void push_history(void) {
 }
 
 /* mode: 0 a new page (history entry), 1 reload / back / forward (no new entry; restore: scroll position) */
+/* ---------------- searching ---------------- */
+/* Web search goes to DuckDuckGo's lite pages: they work without scripts and don't turn small browsers away
+ * (Google answers Arc with a robot check). */
+#define SEARCH_URL "https://lite.duckduckgo.com/lite/?q="
+static bool has_str(const char *h, const char *n) { for (; *h; h++) { int i = 0; while (n[i] && h[i] == n[i]) i++; if (!n[i]) return true; } return false; }
+static bool google_note;                               /* the page being opened replaces a refused Google search */
+static void search_url(const char *words, int n, char *out, int max) {     /* words -> address (form-encoded) */
+    int o = ksnprintf(out, max, "%s", SEARCH_URL);
+    for (int i = 0; i < n && o < max - 4; i++) {
+        unsigned char c = (unsigned char)words[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~') out[o++] = (char)c;
+        else if (c == ' ') out[o++] = '+';
+        else o += ksnprintf(out + o, max - o, "%%%02X", c);
+    }
+    out[o] = 0;
+}
+static int hexd(int c) { return c >= '0' && c <= '9' ? c - '0' : lc(c) >= 'a' && lc(c) <= 'f' ? lc(c) - 'a' + 10 : -1; }
+/* the q= value of a Google search address (still form-encoded), decoded into plain words; false if none */
+static bool google_query(const char *u, char *out, int max) {
+    const char *q = 0;
+    for (const char *p = u; *p && !q; p++) if ((*p == '?' || *p == '&') && p[1] == 'q' && p[2] == '=') q = p + 3;
+    if (!q) return false;
+    int o = 0;
+    for (; *q && *q != '&' && *q != '#' && o < max - 1; q++) {
+        if (*q == '+') out[o++] = ' ';
+        else if (*q == '%' && hexd(q[1]) >= 0 && hexd(q[2]) >= 0) { out[o++] = (char)(hexd(q[1]) * 16 + hexd(q[2])); q += 2; }
+        else out[o++] = *q;
+    }
+    out[o] = 0;
+    return o > 0;
+}
+static bool is_google_search(const char *u) {
+    return (pre_ci(u, "https://www.google.") || pre_ci(u, "http://www.google.") || pre_ci(u, "https://google.") || pre_ci(u, "http://google.")) && has_str(u, "/search?");
+}
+
 static void navigate(const char *target, bool post, const char *body, long blen, int mode, int restore) {
     stuck_count = 0;
     cache_bypass = mode == 1;                              /* reload: everything fresh from the network */
@@ -1011,6 +1048,17 @@ static void navigate(const char *target, bool post, const char *body, long blen,
         long n = fetch_any(u, MAXPAGE, &b, ctype, sizeof ctype, &status, final, sizeof final, post ? "POST" : "GET", body, blen);
         loading = false;
         if (quit) { free(b); return; }
+        /* Google sent its "unusual traffic" robot check, which Arc can't pass: show the same search elsewhere */
+        if (n >= 0 && has_str(final, "google.") && has_str(final, "/sorry/") && is_google_search(u)) {
+            char words[300], su[600];
+            if (google_query(u, words, sizeof words)) {
+                free(b);
+                search_url(words, strlen(words), su, sizeof su);
+                google_note = true;
+                navigate(su, false, 0, 0, mode, 0);
+                return;
+            }
+        }
         if (pend || (abort_fetch && n <= 0)) {           /* stopped, or another page was asked for */
             free(b);
             strncpy0(status_text, pend ? "" : "Stopped", sizeof status_text);
@@ -1077,6 +1125,7 @@ static void navigate(const char *target, bool post, const char *body, long blen,
         scroll = 0;
     }
     if (mode == 0) push_history();
+    if (google_note) { google_note = false; strncpy0(status_text, "Google turned Arc away with a robot check, so these are DuckDuckGo's results", sizeof status_text); }
     strncpy0(page_status, status_text, sizeof page_status);
     if (restore > 0) { scroll = restore; scroll_by(0); }
     else if (fragment_of(url)[0]) scroll_to_fragment(fragment_of(url));
@@ -1105,7 +1154,14 @@ static void open_typed(const char *t) {
     if (t[0] == '/') ksnprintf(u, sizeof u, "file://%s", t);
     else if (pre_ci(t, "mailto:") || pre_ci(t, "javascript:") || pre_ci(t, "tel:")) strncpy0(u, "about:unsupported", sizeof u);
     else if (scheme_len(t) && (pre_ci(t, "http") || pre_ci(t, "about:") || pre_ci(t, "file:") || pre_ci(t, "data:"))) strncpy0(u, t, sizeof u);
-    else ksnprintf(u, sizeof u, "https://%s", t);
+    else {
+        /* words (a space, or nothing that looks like a site name) are searched for; anything else is an address */
+        bool space = false, dot = false; int n = strlen(t);
+        while (n && t[n - 1] == ' ') n--;
+        for (int i = 0; i < n; i++) { if (t[i] == ' ') space = true; if (t[i] == '.' || t[i] == ':' || t[i] == '/') dot = true; }
+        if (n && (space || (!dot && strncmp(t, "localhost", 9)))) search_url(t, n, u, sizeof u);
+        else ksnprintf(u, sizeof u, "https://%s", t);
+    }
     request_nav(u, false, 0, 0, 0, 0);
 }
 
