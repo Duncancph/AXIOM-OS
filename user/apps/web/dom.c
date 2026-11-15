@@ -590,9 +590,9 @@ NATIVE(n_http) {
     if (page_net_ms > 20000) n = -1;
     else {
         uint64_t t0 = sys_time(), c0 = cyc(); (void)c0;
-        web_fetch_timeout = 5000;
+        web_fetch_timeout = 5000; web_fetch_deadline = sys_time() + 10000;
         n = web_http(method ? method : "GET", abs, body, body ? strlen(body) : 0, hdr, &out, &status, ctype, sizeof ctype, final, sizeof final);
-        web_fetch_timeout = 0;
+        web_fetch_timeout = 0; web_fetch_deadline = 0;
         uint64_t waited = sys_time() - t0;
         page_net_ms += waited;
         /* waiting for the network isn't the script running: don't count it against the time limits */
@@ -674,7 +674,10 @@ static void run_script_node(struct node *s) {
     if (src && src[0]) {
         char u[600]; resolve_url(D->base, src, u, sizeof u);
         char *t = 0, ct[96], fin[600]; int st = 0;           /* scripts are run as sent (UTF-8), not converted like page text */
+        uint64_t now = sys_time();                        /* a script file gets until the page's time is up (5 s at least) */
+        web_fetch_deadline = page_deadline > now + 5000 ? page_deadline : now + 5000;
         long n = web_http("GET", u, 0, 0, 0, &t, &st, ct, sizeof ct, fin, sizeof fin);
+        web_fetch_deadline = 0;
         if (n > 1500000) { char m[700]; ksnprintf(m, sizeof m, "%s is too big to run here (%ld KB)", u, n / 1024); con_add("[skipped] ", m); free(t); }
         else if (n >= 0 && t && st < 400) { run_code(t, n, u); free(t); }
         else { char m[700]; ksnprintf(m, sizeof m, "couldn't load %s", u); con_add("[error] ", m); }
@@ -768,6 +771,7 @@ bool js_page_step(char *status, int n) {
         struct node *s = squeue[sqpos++];
         const char *src = node_attr(s, "src");
         ksnprintf(status, n, "Running the page's scripts: %d of %d%s%s  (Esc stops them)", sqpos, nsq, src ? " - " : "", src ? src : "");
+        web_show_status(status);                         /* shown before it runs: if one gets stuck, this names it */
         run_script_node(s);
         return true;
     }

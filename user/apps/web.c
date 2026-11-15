@@ -126,13 +126,22 @@ static void poll_events(void) {
     struct dunc_event e;
     for (int i = 0; i < 64 && sys_event(&e, 0) > 0; i++) handle_event(&e);
 }
+void web_show_status(const char *s) { strncpy0(status_text, s, sizeof status_text); draw(); }
+/* while waiting for a server: keep answering (close, Esc, scrolling) and give up when asked or too late */
+uint64_t web_fetch_deadline;
+static bool web_wait(void) {
+    poll_events();
+    if (abort_fetch || quit) return false;
+    if (web_fetch_deadline && sys_time() > web_fetch_deadline) return false;
+    return true;
+}
 static bool fbuf_sink(const char *d, long n, void *ctx) {
     struct fbuf *f = ctx;
     long k = f->len + n > f->max ? f->max - f->len : n;
     if (k > 0) { memcpy(f->b + f->len, d, k); f->len += k; }
     if (k < n) f->trunc = true;
     poll_events();
-    return !f->trunc && !abort_fetch && !quit;
+    return !f->trunc && !abort_fetch && !quit && !(web_fetch_deadline && sys_time() > web_fetch_deadline);
 }
 static int b64v(int c) { return c >= 'A' && c <= 'Z' ? c - 'A' : c >= 'a' && c <= 'z' ? c - 'a' + 26 : c >= '0' && c <= '9' ? c - '0' + 52 : c == '+' || c == '-' ? 62 : c == '/' || c == '_' ? 63 : -1; }
 static int hex2(const char *q) { int h = 0; for (int i = 0; i < 2; i++) { int x = lc(q[i]); if (!((x >= '0' && x <= '9') || (x >= 'a' && x <= 'f'))) return -1; h = h * 16 + (x >= 'a' ? x - 'a' + 10 : x - '0'); } return h; }
@@ -1592,6 +1601,7 @@ int main(void) {
     http_options = HTTP_OPT_COOKIES | HTTP_OPT_GZIP;
     css_init();
     if (!app_open_ex(&a, WW, WH, "Web", WIN_RESIZABLE)) return 1;
+    http_wait_hook = web_wait;
     WW = a.wi.w; WH = a.wi.h;
     if (sys_getarg(arg, sizeof arg) > 0 && arg[0]) open_typed(arg); else navigate("about:home", false, 0, 0, 0, 0);
     draw();

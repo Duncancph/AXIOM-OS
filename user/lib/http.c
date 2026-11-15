@@ -9,7 +9,21 @@ struct http_security http_sec;
 static struct tls tls_conn;
 static bool roots_loaded;
 static long t_send(void *c, const void *b, size_t n) { return tcp_write(*(int *)c, b, (uint32_t)n); }
-static long t_recv(void *c, void *b, size_t n, long to) { return tcp_read(*(int *)c, b, (uint32_t)n, to); }
+/* Waiting for data in short slices, asking the app between them (http_wait_hook) whether to go on:
+ * so an app stays responsive (and can give up) however slow the server is. */
+bool (*http_wait_hook)(void);
+static long net_read(int h, void *b, uint32_t n, long to) {
+    if (!http_wait_hook || to <= 250) return tcp_read(h, b, n, to);
+    uint64_t end = sys_time() + (uint64_t)to;
+    for (;;) {
+        uint64_t now = sys_time();
+        long slice = end > now ? (long)(end - now) : 0; if (slice > 250) slice = 250;
+        long r = tcp_read(h, b, n, slice);
+        if (r != NET_EAGAIN) return r;
+        if (sys_time() >= end || !http_wait_hook()) return NET_EAGAIN;
+    }
+}
+static long t_recv(void *c, void *b, size_t n, long to) { return net_read(*(int *)c, b, (uint32_t)n, to); }
 static void t_rand(void *b, size_t n) { sys_call(SYS_RANDOM, (long)b, (long)n, 0, 0, 0); }
 
 static int64_t unix_now(void) {
@@ -43,7 +57,7 @@ int http_trust_pem(const char *pem, long n) { load_roots(); return x509_add_root
 /* a connection: plain TCP or TLS on top of it */
 struct conn { int h; bool tls; };
 static long c_write(struct conn *c, const void *b, uint32_t n) { return c->tls ? tls_write(&tls_conn, b, n) : tcp_write(c->h, b, n); }
-static long c_read(struct conn *c, void *b, uint32_t n, long to) { return c->tls ? tls_read(&tls_conn, b, n, to) : tcp_read(c->h, b, n, to); }
+static long c_read(struct conn *c, void *b, uint32_t n, long to) { return c->tls ? tls_read(&tls_conn, b, n, to) : net_read(c->h, b, n, to); }
 static void c_close(struct conn *c) { if (c->tls) tls_close(&tls_conn); tcp_shut(c->h); }
 
 const char *net_strerror(int e) {

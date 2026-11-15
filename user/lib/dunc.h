@@ -62,6 +62,7 @@ long http_fetch(const char *url, http_sink sink, void *ctx, int *status, long *t
 struct http_req { const char *method; const char *body; long body_len; const char *content_type; const char *referer;
                   const char *extra_headers;   /* optional "Name: value\r\n" lines */
                   long timeout_ms; };          /* optional: how long to wait for data (default 15 s) */
+extern bool (*http_wait_hook)(void);   /* optional: called ~4x a second while waiting for a server; false = give up */
 long http_request(const char *url, const struct http_req *rq, http_sink sink, void *ctx, int *status, long *total,
                   char *ctype, int ctlen, char *final_url, int fulen);
 /* Options for this program (default 0): HTTP_OPT_COOKIES keeps a cookie jar (persistent cookies are saved in
