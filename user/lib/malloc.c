@@ -20,12 +20,46 @@ struct blk { size_t prev, size; struct blk *next, *prevf; };
 #define HDR 16
 #define USED 1ul
 #define BSIZE(b) ((b)->size & ~USED)
-static struct blk *freelist, *heap_end;      /* heap_end: the zero-size "end" header */
+/* Free blocks are kept in bins by size, so a fitting one is found at once instead of walking one long list:
+ * bins 0..63 hold one size each (multiples of 16 below 1024), the rest four per power of two. A bitmap tells
+ * which bins have anything. */
+#define NBINS 160
+static struct blk *bins[NBINS], *heap_end;   /* heap_end: the zero-size "end" header */
+static uint64_t binmap[3];
+static int bin_of(size_t sz) {
+    if (sz < 1024) return (int)(sz >> 4);
+    int lg = 63 - __builtin_clzl(sz);
+    int i = 64 + (lg - 10) * 4 + (int)((sz >> (lg - 2)) & 3);
+    return i >= NBINS ? NBINS - 1 : i;
+}
 
 static struct blk *after(struct blk *b) { return (struct blk *)((uint8_t *)b + BSIZE(b)); }
 static struct blk *before(struct blk *b) { return (struct blk *)((uint8_t *)b - b->prev); }
-static void fl_add(struct blk *b) { b->next = freelist; b->prevf = 0; if (freelist) freelist->prevf = b; freelist = b; }
-static void fl_del(struct blk *b) { if (b->prevf) b->prevf->next = b->next; else freelist = b->next; if (b->next) b->next->prevf = b->prevf; }
+static void fl_add(struct blk *b) {
+    int i = bin_of(BSIZE(b));
+    b->next = bins[i]; b->prevf = 0; if (bins[i]) bins[i]->prevf = b; bins[i] = b;
+    binmap[i >> 6] |= 1ul << (i & 63);
+}
+static void fl_del(struct blk *b) {
+    int i = bin_of(BSIZE(b));
+    if (b->prevf) b->prevf->next = b->next; else bins[i] = b->next;
+    if (b->next) b->next->prevf = b->prevf;
+    if (!bins[i]) binmap[i >> 6] &= ~(1ul << (i & 63));
+}
+/* a free block of at least need bytes: from need's own bin if one there fits, else the first of a bigger bin */
+static struct blk *find_fit(size_t need) {
+    int i = bin_of(need);
+    int tries = 0;
+    for (struct blk *b = bins[i]; b && tries < 64; b = b->next, tries++) if (BSIZE(b) >= need) return b;
+    for (i++; i < NBINS; i++) {
+        uint64_t m = binmap[i >> 6] >> (i & 63);
+        if (!m) { i |= 63; continue; }
+        i += __builtin_ctzl(m);
+        if (i >= NBINS) break;
+        for (struct blk *b = bins[i]; b; b = b->next) if (BSIZE(b) >= need) return b;   /* (the last bin holds mixed sizes) */
+    }
+    return 0;
+}
 
 static bool grow(size_t need) {
     size_t len = need + HDR > (1u << 20) ? ((need + HDR + 65535) & ~(size_t)65535) : (1u << 20);
@@ -48,8 +82,8 @@ static void *malloc_(size_t n) {
     size_t need = ((n + 15) & ~(size_t)15) + HDR;
     if (need < sizeof(struct blk)) need = sizeof(struct blk);
     for (int pass = 0; pass < 2; pass++) {
-        for (struct blk *b = freelist; b; b = b->next) {
-            if (BSIZE(b) < need) continue;
+        struct blk *b = find_fit(need);
+        if (b) {
             fl_del(b);
             if (BSIZE(b) - need >= 64) {                     /* split off the rest */
                 struct blk *r = (struct blk *)((uint8_t *)b + need);

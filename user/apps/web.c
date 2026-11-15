@@ -137,6 +137,24 @@ static void poll_events(void) {
     }
 }
 static dunc_jmp stuck_jb; static uint64_t stuck_rip; static int stuck_count;
+/* A sampling profiler for finding slow spots (hidden setting web.profile = 1): every 10 ms of processor time
+ * the place Arc is at is counted; the busiest places go to the system log once a minute as "PROF address count". */
+static bool profiling; static uint32_t prof[1 << 16]; static uint64_t prof_last; static uint32_t prof_total;
+static void prof_dump(void) {
+    for (int k = 0; k < 60; k++) {
+        int best = -1; for (int i = 0; i < 1 << 16; i++) if (prof[i] && (best < 0 || prof[i] > prof[best])) best = i;
+        if (best < 0) break;
+        char m[80]; ksnprintf(m, sizeof m, "PROF %lx %u of %u", 0x8000000000ul + ((uint64_t)best << 5), prof[best], prof_total); sys_log(m);
+        prof[best] = 0;
+    }
+    memset(prof, 0, sizeof prof); prof_total = 0;
+}
+static void on_prof_alarm(void *frame) {
+    uint64_t rip = ((uint64_t *)frame)[17];
+    prof[((rip - 0x8000000000ul) >> 5) & 0xFFFF]++; prof_total++;
+    sys_alarm(10, on_prof_alarm);
+    sys_sigreturn(frame);
+}
 static void on_stuck_alarm(void *frame) {
     if (malloc_busy) { sys_alarm(20, on_stuck_alarm); sys_sigreturn(frame); }   /* not in the middle of changing the heap */
     stuck_rip = ((uint64_t *)frame)[17];                    /* where it was (struct frame: 15 registers, vec, err, rip) */
@@ -144,7 +162,7 @@ static void on_stuck_alarm(void *frame) {
 }
 /* a script is running and making progress (called from the script engine's regular check): start the 8 s again,
  * so only Arc's own code going round in circles sets the alarm off, not a long script */
-void web_still_alive(void) { sys_alarm(8000 * web_time_scale, on_stuck_alarm); }
+void web_still_alive(void) { if (!profiling) sys_alarm(8000 * web_time_scale, on_stuck_alarm); }
 static void recover_from_stuck(void) {
     stuck_count++;
     js_abandon(stuck_rip);
@@ -1858,6 +1876,7 @@ int main(void) {
     char arg[256];
     http_options = HTTP_OPT_COOKIES | HTTP_OPT_GZIP;
     { char ts[8] = ""; sys_setting_get("web.test_slow", ts, sizeof ts); if (ts[0] == '1') web_time_scale = 40; }   /* emulator testing only */
+    { char ts[8] = ""; sys_setting_get("web.profile", ts, sizeof ts); if (ts[0] == '1') { profiling = true; prof_last = sys_time(); sys_alarm(10, on_prof_alarm); } }
     css_init();
     if (!app_open_ex(&a, WW, WH, "Arc", WIN_RESIZABLE)) return 1;
     http_wait_hook = web_wait;
@@ -1868,7 +1887,8 @@ int main(void) {
         /* If one turn of the loop uses 8 s of processor time (a page's script making Web loop somewhere in its
          * own code), the alarm brings it back here: that page's scripts are turned off and Web carries on. */
         if (dunc_setjmp(stuck_jb)) recover_from_stuck();
-        sys_alarm(8000 * web_time_scale, on_stuck_alarm);
+        if (!profiling) sys_alarm(8000 * web_time_scale, on_stuck_alarm);
+        else if (sys_time() - prof_last > 60000) { prof_last = sys_time(); prof_dump(); }
         if (pend) {
             pend = false; abort_fetch = false;
             char u[600]; strncpy0(u, pend_url, sizeof u);
