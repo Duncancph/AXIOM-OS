@@ -244,12 +244,12 @@ static const char *GRUBCFG_FMT =
     "set timeout=2\nset default=0\ninsmod all_video\ninsmod gfxterm\n"
     "menuentry \"AXIOM\" {\n"
     "    multiboot2 /duncos/thane.elf\n    module2 /duncos/initrd.tar initrd\n"
-    "    module2 /duncos/thane.elf kernel\n    module2 /EFI/BOOT/BOOTX64.EFI bootx64\n%s"
+    "    module2 /duncos/thane.elf kernel\n    module2 /EFI/axiom/axiomx64.efi bootx64\n%s"
     "    set gfxpayload=%s1920x1200x32,1920x1080x32,1920x800x32,1680x1050x32,1600x900x32,1440x900x32,1366x768x32,1280x1024x32,1280x800x32,1280x720x32,1024x768x32,auto\n"
     "    boot\n}\n"
     "menuentry \"AXIOM (safe graphics 1024x768)\" {\n"
     "    multiboot2 /duncos/thane.elf\n    module2 /duncos/initrd.tar initrd\n"
-    "    module2 /duncos/thane.elf kernel\n    module2 /EFI/BOOT/BOOTX64.EFI bootx64\n%s"
+    "    module2 /duncos/thane.elf kernel\n    module2 /EFI/axiom/axiomx64.efi bootx64\n%s"
     "    set gfxpayload=1024x768x32,auto\n    boot\n}\n";
 
 static char gfx_pref[32];
@@ -270,7 +270,7 @@ static int write_grubcfg(const char *dir) {
     if (vfs_stat(pk, &st) == FS_OK && n < (int)sizeof cfg - 400)       /* the version before the last update */
         n += ksnprintf(cfg + n, sizeof cfg - n, "menuentry \"AXIOM (previous version)\" {\n"
                        "    multiboot2 /duncos/thane-prev.elf\n    module2 /duncos/initrd-prev.tar initrd\n"
-                       "    module2 /duncos/thane-prev.elf kernel\n    module2 /EFI/BOOT/BOOTX64.EFI bootx64\n    set gfxpayload=auto\n    boot\n}\n");
+                       "    module2 /duncos/thane-prev.elf kernel\n    module2 /EFI/axiom/axiomx64.efi bootx64\n    set gfxpayload=auto\n    boot\n}\n");
     ksnprintf(path, sizeof path, "%s/grub.cfg", dir);
     static char old[2400]; long on = vfs_read(path, old, 0, sizeof old);
     if (on == n && !memcmp(old, cfg, n)) return FS_OK;     /* unchanged: don't write */
@@ -351,10 +351,19 @@ static void installer(void *arg) {
         if (!vol) { r = FS_EIO; goto done; }
     }
     vfs_mount_at("/install", "/", "Installer", "disk", &fat_ops, vol);
-    static const char *dirs[] = { "/install/EFI", "/install/EFI/BOOT", "/install/duncos", "/install/home", "/install/apps", "/install/config" };
-    for (int i = 0; i < 6; i++) vfs_mkdir(dirs[i]);
+    static const char *dirs[] = { "/install/EFI", "/install/EFI/BOOT", "/install/EFI/axiom", "/install/duncos", "/install/home", "/install/apps", "/install/config" };
+    for (int i = 0; i < 7; i++) vfs_mkdir(dirs[i]);
     progress(12, "Copying the boot loader");
-    if ((r = put("/install/EFI/BOOT/BOOTX64.EFI", "bootx64"))) { strncpy0(why, "the boot loader isn't available (start AXIOM from its USB stick or disk)", sizeof why); goto unmount; }
+    /* AXIOM's own copy (\EFI\axiom), which its boot menu and other systems' menus (e.g. Ubuntu's GRUB) start */
+    if ((r = put("/install/EFI/axiom/axiomx64.efi", "bootx64"))) { strncpy0(why, "the boot loader isn't available (start AXIOM from its USB stick or disk)", sizeof why); goto unmount; }
+    {   /* the disk's default start-up file: AXIOM's, unless another system (Ubuntu, Windows...) shares the disk and owns it */
+        bool shared = false;
+        struct dunc_dirent ents[16]; int ne = vfs_list("/install/EFI", ents, 16);
+        for (int i = 0; i < ne; i++) if (ents[i].is_dir && strcmp(ents[i].name, "BOOT") && strcmp(ents[i].name, "axiom") && strcmp(ents[i].name, "Boot") && strcmp(ents[i].name, "AXIOM")) shared = true;
+        struct dunc_stat st;
+        if (inst_mode != INSTALL_UPDATE || !shared || vfs_stat("/install/EFI/BOOT/BOOTX64.EFI", &st) != FS_OK)
+            put("/install/EFI/BOOT/BOOTX64.EFI", "bootx64");
+    }
     kyield();
     if (inst_mode == INSTALL_UPDATE) {                    /* keep the version that works now, for the boot menu */
         struct dunc_stat st;
