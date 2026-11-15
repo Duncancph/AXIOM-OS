@@ -131,9 +131,14 @@ static JSObject *native_with(js_rt *rt, js_native fn, int len, jsval keep) {
     add_prop(rt, f, rt->atoms[A_callerSym], keep, 0);
     return f;
 }
-static jsval kept(JSObject *self) { return self->props[self->nprops - 1].val; }
+/* found by its key: properties added later (the reject function's own "length") come after it */
+static jsval kept(js_rt *rt, JSObject *self) {
+    for (uint32_t i = self->nprops; i-- > 0;)
+        if (self->props[i].key == rt->atoms[A_callerSym]) return self->props[i].val;
+    return JS_UNDEF;
+}
 #define SELF ((JSObject *)data)
-#define KEPT (kept(SELF))
+#define KEPT (kept(rt, SELF))
 
 NATIVE(resolving_fn) {
     /* KEPT = Cell(a = promise, b = Cell(flag)) ; length 1 = resolve, 2 = reject (via magic in name slot) */
@@ -452,8 +457,8 @@ static void comb_done(js_rt *rt, JSObject *st, bool any) {
     jsval r = call_fn(rt, any ? cap->b : cap->a, JS_UNDEF, 1, &v);
     (void)r;
 }
-static bool comb_enter(JSObject *self, JSObject **st, uint32_t *idx) {
-    Cell *c = (Cell *)vptr(kept(self));
+static bool comb_enter(js_rt *rt, JSObject *self, JSObject **st, uint32_t *idx) {
+    Cell *c = (Cell *)vptr(kept(rt, self));
     Cell *f2 = (Cell *)vptr(c->b); /* b = Cell(index, called) */
     if (f2->b == JS_TRUE) return false;
     f2->b = JS_TRUE;
@@ -464,7 +469,7 @@ static bool comb_enter(JSObject *self, JSObject **st, uint32_t *idx) {
 NATIVE(all_elem) {
     JSObject *st;
     uint32_t idx;
-    if (!comb_enter(SELF, &st, &idx)) return JS_UNDEF;
+    if (!comb_enter(rt, SELF, &st, &idx)) return JS_UNDEF;
     JSObject *vals = vobj(st->u.it.a);
     if (idx < vals->u.arr.len) vals->u.arr.elems[idx] = ARG(0);
     if (--st->u.it.i == 0) comb_done(rt, st, false);
@@ -473,7 +478,7 @@ NATIVE(all_elem) {
 NATIVE(settled_elem) {
     JSObject *st;
     uint32_t idx;
-    if (!comb_enter(SELF, &st, &idx)) return JS_UNDEF;
+    if (!comb_enter(rt, SELF, &st, &idx)) return JS_UNDEF;
     bool rej = SELF->u.nat.length == 2;
     JSObject *o = new_plain(rt);
     add_prop(rt, o, ATOM(status), rej ? ATOM(rejected) : ATOM(fulfilled), P_DEFAULT);
@@ -486,7 +491,7 @@ NATIVE(settled_elem) {
 NATIVE(any_elem) {
     JSObject *st;
     uint32_t idx;
-    if (!comb_enter(SELF, &st, &idx)) return JS_UNDEF;
+    if (!comb_enter(rt, SELF, &st, &idx)) return JS_UNDEF;
     JSObject *vals = vobj(st->u.it.a);
     if (idx < vals->u.arr.len) vals->u.arr.elems[idx] = ARG(0);
     if (--st->u.it.i == 0) comb_done(rt, st, true);

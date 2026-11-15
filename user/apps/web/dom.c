@@ -591,7 +591,9 @@ NATIVE(n_http) {
     else {
         uint64_t t0 = sys_time(), c0 = cyc(); (void)c0;
         web_fetch_timeout = 5000; web_fetch_deadline = sys_time() + 10000;
+        web_script_waiting++;
         n = web_http(method ? method : "GET", abs, body, body ? strlen(body) : 0, hdr, &out, &status, ctype, sizeof ctype, final, sizeof final);
+        web_script_waiting--;
         web_fetch_timeout = 0; web_fetch_deadline = 0;
         uint64_t waited = sys_time() - t0;
         page_net_ms += waited;
@@ -679,7 +681,9 @@ static void run_script_node(struct node *s) {
         char *t = 0, ct[96], fin[600]; int st = 0;           /* scripts are run as sent (UTF-8), not converted like page text */
         uint64_t now = sys_time();                        /* a script file gets until the page's time is up (5 s at least) */
         web_fetch_deadline = page_deadline > now + 5000 ? page_deadline : now + 5000;
+        web_script_waiting++;
         long n = web_http("GET", u, 0, 0, 0, &t, &st, ct, sizeof ct, fin, sizeof fin);
+        web_script_waiting--;
         web_fetch_deadline = 0;
         if (n > 1500000) { char m[700]; ksnprintf(m, sizeof m, "%s is too big to run here (%ld KB)", u, n / 1024); con_add("[skipped] ", m); free(t); }
         else if (n >= 0 && t && st < 400) { run_code(t, n, u); free(t); }

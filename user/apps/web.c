@@ -124,7 +124,18 @@ static void poll_events(void) {
     if (now - last_poll < 30) return;
     last_poll = now;
     struct dunc_event e;
-    for (int i = 0; i < 64 && sys_event(&e, 0) > 0; i++) handle_event(&e);
+    for (int i = 0; i < 64 && sys_event(&e, 0) > 0; i++) {
+        /* A page's script is waiting for a server: handling a click or a key now could run the page's
+         * scripts again in the middle of that one (or leave the page), which the script engine can't
+         * survive. Only closing and Esc act now; clicks and keys wait until the script has finished. */
+        if (web_script_waiting) {
+            if (e.type == EV_CLOSE) sys_exit(0);
+            if (e.type == EV_KEY && e.key == 27) { abort_fetch = true; continue; }
+            if (e.type != EV_MOUSE_MOVE) web_requeue_event(&e);
+            continue;
+        }
+        handle_event(&e);
+    }
 }
 static dunc_jmp stuck_jb; static uint64_t stuck_rip; static int stuck_count;
 static void on_stuck_alarm(void *frame) {
@@ -144,6 +155,7 @@ static void recover_from_stuck(void) {
 void web_show_status(const char *s) { strncpy0(status_text, s, sizeof status_text); draw(); }
 /* while waiting for a server: keep answering (close, Esc, scrolling) and give up when asked or too late */
 uint64_t web_fetch_deadline;
+int web_script_waiting;
 static bool web_wait(void) {
     poll_events();
     if (abort_fetch || quit) return false;

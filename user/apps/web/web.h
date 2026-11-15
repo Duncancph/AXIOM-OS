@@ -206,4 +206,5 @@ extern uint64_t web_fetch_deadline;   /* if set: a download gives up at this tim
 void dom_check_soon(void);
 void js_stop_scripts(void);
 bool js_page_step(char *status, int n);
+extern int web_script_waiting;          /* set while a running script waits for the network: events are held back */
 void web_requeue_event(const struct dunc_event *e);   /* an event seen while a script ran, handled afterwards */
