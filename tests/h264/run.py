@@ -1,0 +1,629 @@
+#!/usr/bin/env python3
+"""Tests the AXIOM H.264 decoder (user/lib/video) against ffmpeg's decoder.
+
+Usage: python3 tests/h264/run.py [--quick] [--keep] [--out DIR] [--only SUBSTR]
+
+1. Builds tests/h264/h264_test.c + user/lib/video/*.c for the host twice (ASan+UBSan for correctness,
+   -O2 for speed), and compiles the decoder with the freestanding target flags (warnings are errors,
+   `nm -u` must list only the allowed libc symbols, reports per-function stack use).
+2. Generates a corpus with ffmpeg + libx264 from lavfi test sources (testsrc2, mandelbrot, smptehdbars with
+   motion, noise, cellauto, ...): Constrained Baseline / Main / High, CAVLC and CABAC, B-frames, b-pyramid,
+   direct spatial/temporal, weighted prediction (weightp=1/2, weightb implicit), many refs, 8x8 transform,
+   custom scaling matrices (cqm=jvt and a cqmfile exercising the fall-back rules), multiple slices,
+   intra-only, intra refresh, odd sizes with cropping, lossless (transform bypass), crf 0..51, long / short /
+   open GOPs, tune zerolatency/fastdecode/..., presets ultrafast..veryslow, constrained intra, POC types 0/1/2.
+3. Decodes every stream both as an Annex B byte stream (one access unit per call, and in odd-sized chunks)
+   and as MP4 samples through the avcC path, and requires the yuv420p output to be bit-exact with
+   `ffmpeg -f rawvideo -pix_fmt yuv420p`.
+4. Seeking (h264_reset + feed from a keyframe, incl. open GOP), resolution changes, truncated files, lost
+   NAL units (must recover exactly at the next IDR), unsupported streams (must fail cleanly), a mutation
+   fuzz pass under ASan+UBSan, and decode speed for 720p / 1080p clips.
+Exits non-zero on any failure."""
+import os, random, shutil, struct, subprocess, sys, tempfile, time
+from concurrent.futures import ThreadPoolExecutor
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import mp4samples
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SRC = os.path.join(ROOT, "user", "lib", "video")
+QUICK = "--quick" in sys.argv
+KEEP = "--keep" in sys.argv
+OUT = sys.argv[sys.argv.index("--out") + 1] if "--out" in sys.argv else os.path.join(tempfile.gettempdir(), "axiom-h264test")
+ONLY = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None
+CORPUS = os.path.join(OUT, "corpus")
+os.makedirs(CORPUS, exist_ok=True)
+FAILS = []
+JOBS = max(1, min(8, os.cpu_count() or 1))
+R = random.Random(1234)
+
+
+def fail(msg):
+    FAILS.append(msg)
+    print("FAIL:", msg, flush=True)
+
+
+def run(cmd, **kw):
+    return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kw)
+
+
+# ---------------------------------------------------------------- build
+CSRC = sorted(os.path.join(SRC, f) for f in os.listdir(SRC) if f.endswith(".c"))
+DRIVER = os.path.join(ROOT, "tests", "h264", "h264_test.c")
+ASAN = os.path.join(OUT, "h264_test_asan")
+FAST = os.path.join(OUT, "h264_test")
+TARGET_FLAGS = ("-std=gnu11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -m64 "
+                "-mcmodel=large -msse2 -mfpmath=sse -fno-tree-loop-distribute-patterns -Wall -Wextra "
+                "-Wno-unused-parameter").split()
+ALLOWED = {"memset", "memcpy", "memmove", "memcmp", "malloc", "free", "realloc", "calloc"}
+
+
+def build():
+    print("== build", flush=True)
+    r = run(["gcc", "-std=gnu11", "-O1", "-g", "-DH264_HOST_TEST", "-fsanitize=address,undefined",
+             "-fno-sanitize-recover=all", "-Wall", "-Wextra", "-Wno-unused-parameter", "-o", ASAN, DRIVER] + CSRC)
+    if r.returncode: print(r.stderr); sys.exit("asan build failed")
+    r = run(["gcc", "-std=gnu11", "-O2", "-DH264_HOST_TEST", "-o", FAST, DRIVER] + CSRC)
+    if r.returncode: print(r.stderr); sys.exit("host build failed")
+    objs, stack = [], []
+    tdir = os.path.join(OUT, "target")
+    os.makedirs(tdir, exist_ok=True)
+    for c in CSRC:
+        o = os.path.join(tdir, os.path.basename(c)[:-2] + ".o")
+        r = run(["gcc"] + TARGET_FLAGS + ["-Werror", "-fstack-usage", "-c", c, "-o", o], cwd=tdir)
+        if r.returncode or r.stderr.strip():
+            fail("target compile %s: %s" % (os.path.basename(c), r.stderr.strip()))
+            continue
+        objs.append(o)
+        su = o[:-2] + ".su"
+        if os.path.exists(su):
+            for line in open(su):
+                parts = line.rstrip("\n").split("\t")
+                stack.append((int(parts[1]), parts[0].split(":")[-1], parts[2]))
+    if objs:
+        r = run(["nm", "-u"] + objs)
+        undef = {l.split()[-1] for l in r.stdout.splitlines() if l.strip() and l.split()[0] == "U"}
+        defined = set()
+        for l in run(["nm", "--defined-only"] + objs).stdout.splitlines():
+            p = l.split()
+            if len(p) == 3: defined.add(p[2])
+        ext = undef - defined
+        bad = ext - ALLOWED
+        print("target compile: %d files, warning-free; external symbols: %s" % (len(objs), " ".join(sorted(ext))))
+        if bad: fail("disallowed external symbols: %s" % sorted(bad))
+        stack.sort(reverse=True)
+        print("largest stack frames (bytes):", ", ".join("%s=%d%s" % (f, n, "" if k == "static" else "(" + k + ")") for n, f, k in stack[:6]))
+        if stack and stack[0][0] > 16384: fail("stack frame over 16 KiB: %s" % (stack[0],))
+
+
+# ---------------------------------------------------------------- corpus
+CQMFILE = os.path.join(CORPUS, "custom.cqm")
+
+
+def write_cqm():
+    def mat(n, base, slope):
+        return ",".join(str(min(255, base + slope * ((i % n) + (i // n)))) for i in range(n * n))
+    y4i, y4p = mat(4, 8, 5), mat(4, 12, 3)
+    with open(CQMFILE, "w") as f:
+        f.write("INTRA4X4_LUMA = %s\n" % y4i)
+        f.write("INTRA4X4_CHROMAU = %s\n" % y4i)          # equal to the previous list: fall-back rule
+        f.write("INTRA4X4_CHROMAV = %s\n" % mat(4, 10, 4))
+        f.write("INTER4X4_LUMA = %s\n" % y4p)
+        f.write("INTER4X4_CHROMAU = %s\n" % mat(4, 14, 2))
+        f.write("INTER4X4_CHROMAV = %s\n" % mat(4, 14, 2))
+        f.write("INTRA8X8_LUMA = %s\n" % mat(8, 6, 2))
+        f.write("INTER8X8_LUMA = %s\n" % mat(8, 9, 2))
+
+
+SOURCES = {
+    "testsrc2": "testsrc2=size={s}:rate={r}",
+    "mandel": "mandelbrot=size={s}:rate={r}:end_scale=0.01:maxiter=200",
+    "bars": "smptehdbars=size={s}:rate={r},scroll=horizontal=0.003:vertical=0.001",
+    "noise": "testsrc2=size={s}:rate={r},noise=alls=25:allf=t+u",
+    "rot": "testsrc2=size={s}:rate={r},rotate=a=0.15*t:fillcolor=gray,noise=alls=6:allf=t+u",
+    "cells": "cellauto=size={s}:rate={r}:rule=110",
+    "life": "life=size={s}:rate={r}:mold=10:ratio=0.2:death_color=#406080:life_color=#e0c020",
+    "grad": "gradients=size={s}:rate={r}:speed=0.03:n=5,noise=alls=4:allf=t",
+}
+
+# name, source, size, frames, ffmpeg encoder args, x264-params, quick?
+CASES = [
+    ("cbp_cavlc", "testsrc2", "352x288", 40, ["-profile:v", "baseline"], "keyint=15", True),
+    ("cbp_ultrafast", "rot", "320x240", 30, ["-profile:v", "baseline", "-preset", "ultrafast"], "", True),
+    ("cbp_slices", "bars", "352x288", 24, ["-profile:v", "baseline"], "slices=4:ref=3", True),
+    ("cbp_zerolatency", "noise", "320x240", 30, ["-profile:v", "baseline", "-tune", "zerolatency"], "", False),
+    ("cbp_cavlc_noise_hq", "noise", "320x240", 20, ["-profile:v", "baseline", "-crf", "5"], "", False),
+    ("cbp_constrained_intra", "rot", "320x240", 24, ["-profile:v", "baseline"], "constrained-intra=1:keyint=10", True),
+    ("main_cabac_b", "testsrc2", "352x288", 40, ["-profile:v", "main"], "bframes=3:ref=4", True),
+    ("main_cavlc_b", "rot", "352x288", 30, ["-profile:v", "main"], "bframes=2:cabac=0:ref=3", True),
+    ("main_temporal", "mandel", "320x240", 30, ["-profile:v", "main"], "bframes=3:direct=temporal:b-pyramid=none", True),
+    ("main_spatial_pyr", "rot", "320x240", 30, ["-profile:v", "main"], "bframes=3:direct=spatial:b-pyramid=normal:ref=5", False),
+    ("main_weightb", "grad", "320x240", 30, ["-profile:v", "main"], "bframes=3:weightb=1:direct=temporal", True),
+    ("main_weightp", "grad", "320x240", 30, ["-profile:v", "main"], "bframes=0:weightp=2:ref=4", True),
+    ("high_8x8", "rot", "352x288", 30, ["-profile:v", "high"], "8x8dct=1:bframes=3", True),
+    ("high_cqm_jvt", "mandel", "352x288", 24, ["-profile:v", "high"], "cqm=jvt:bframes=2", True),
+    ("high_cqmfile", "rot", "352x288", 24, ["-profile:v", "high"], "cqmfile=" + CQMFILE + ":bframes=2", True),
+    ("high_cqmfile_cavlc", "noise", "320x240", 16, ["-profile:v", "high"], "cqmfile=" + CQMFILE + ":cabac=0:bframes=1", False),
+    ("high_weightp2", "grad", "352x288", 30, ["-profile:v", "high"], "weightp=2:bframes=3:ref=6", True),
+    ("high_weightp1", "rot", "320x240", 24, ["-profile:v", "high"], "weightp=1:bframes=2", False),
+    ("high_pyr_strict", "testsrc2", "320x240", 40, ["-profile:v", "high"], "b-pyramid=strict:bframes=3:ref=4", False),
+    ("high_temporal_ref8", "rot", "352x288", 40, ["-profile:v", "high"], "direct=temporal:ref=8:bframes=3:b-pyramid=normal", True),
+    ("high_spatial_ref8", "mandel", "320x240", 40, ["-profile:v", "high"], "direct=spatial:ref=8:bframes=3", False),
+    ("high_auto_b16", "bars", "320x240", 50, ["-profile:v", "high"], "direct=auto:bframes=16:b-adapt=2:ref=4", False),
+    ("high_slices4", "rot", "352x288", 24, ["-profile:v", "high"], "slices=4:bframes=2:ref=3", True),
+    ("high_slicesize", "noise", "352x288", 16, ["-profile:v", "high"], "slice-max-size=1500:bframes=2", False),
+    ("high_intra_only", "mandel", "352x288", 10, ["-profile:v", "high"], "keyint=1", True),
+    ("high_intra_refresh", "rot", "320x240", 40, ["-profile:v", "high"], "intra-refresh=1:keyint=20:bframes=0", False),
+    ("high_open_gop", "testsrc2", "320x240", 60, ["-profile:v", "high"], "open-gop=1:keyint=20:bframes=3", True),
+    ("high_short_gop", "rot", "320x240", 30, ["-profile:v", "high"], "keyint=4:bframes=2", False),
+    ("high_long_gop", "bars", "320x240", 80, ["-profile:v", "high"], "keyint=300:min-keyint=300:scenecut=0", False),
+    ("high_noise_crf0", "noise", "176x144", 8, ["-crf", "0"], "", True),
+    ("high_lossless_qp0", "rot", "176x144", 10, [], "qp=0:bframes=2", True),
+    ("high_crf5", "noise", "320x240", 10, ["-profile:v", "high", "-crf", "5"], "", False),
+    ("high_crf45", "rot", "352x288", 30, ["-profile:v", "high", "-crf", "45"], "", False),
+    ("high_qp51", "testsrc2", "320x240", 20, ["-profile:v", "high"], "qp=51:bframes=2", True),
+    ("high_qp10_noise", "noise", "352x288", 8, ["-profile:v", "high"], "qp=10:bframes=1", False),
+    ("high_deblock_off", "rot", "320x240", 20, ["-profile:v", "high"], "deblock=-6,6:bframes=2", False),
+    ("high_deblock_strong", "rot", "320x240", 20, ["-profile:v", "high"], "deblock=6,-6:bframes=2", False),
+    ("high_no_deblock", "noise", "320x240", 16, ["-profile:v", "high"], "no-deblock=1", False),
+    ("high_chroma_qp", "mandel", "320x240", 20, ["-profile:v", "high"], "chroma-qp-offset=7:bframes=2", False),
+    ("high_chroma_qp_neg", "rot", "320x240", 20, ["-profile:v", "high"], "chroma-qp-offset=-9:bframes=2", False),
+    ("size_854x480", "rot", "854x480", 12, ["-profile:v", "high"], "bframes=2", True),
+    ("size_1366x768", "bars", "1366x768", 6, ["-profile:v", "main"], "bframes=2", False),
+    ("size_642x362", "mandel", "642x362", 10, ["-profile:v", "high"], "bframes=2", False),
+    ("size_200x120", "noise", "200x120", 12, ["-profile:v", "baseline"], "", True),
+    ("size_16x16", "testsrc2", "16x16", 12, ["-profile:v", "high"], "bframes=2", False),
+    ("size_48x34", "rot", "48x34", 12, ["-profile:v", "main"], "bframes=1", True),
+    ("size_1920x1080", "rot", "1920x1080", 6, ["-profile:v", "high"], "bframes=2", False),
+    ("cells_cavlc", "cells", "320x240", 20, ["-profile:v", "baseline"], "", False),
+    ("life_cabac", "life", "320x240", 20, ["-profile:v", "high"], "bframes=2", False),
+    ("mbtree_off_aq", "rot", "320x240", 24, ["-profile:v", "high"], "mbtree=0:aq-mode=2:bframes=2", False),
+]
+for prof in ("baseline", "main", "high"):
+    for preset in ("ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"):
+        q = (prof, preset) in (("baseline", "veryfast"), ("main", "slow"), ("high", "veryslow"), ("high", "ultrafast"))
+        CASES.append(("preset_%s_%s" % (prof, preset), "rot" if preset[0] in "uvm" else "mandel", "320x240", 20,
+                      ["-profile:v", prof, "-preset", preset], "", q))
+for tune in ("film", "animation", "grain", "stillimage", "psnr", "ssim", "fastdecode"):
+    CASES.append(("tune_%s" % tune, "rot", "320x240", 20, ["-profile:v", "high", "-tune", tune], "", tune == "grain"))
+
+if QUICK:
+    CASES = [c for c in CASES if c[6]]
+if ONLY:
+    CASES = [c for c in CASES if ONLY in c[0]]
+
+
+def dims(size):
+    w, h = size.split("x")
+    return int(w), int(h)
+
+
+def frame_bytes(w, h):
+    return w * h + 2 * ((w + 1) // 2) * ((h + 1) // 2)
+
+
+def encode(case):
+    name, src, size, n, args, params, _ = case
+    base = os.path.join(CORPUS, name)
+    mp4 = base + ".mp4"
+    if not os.path.exists(mp4):
+        filt = SOURCES[src].format(s=size, r=25)
+        cmd = ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", filt, "-frames:v", str(n), "-pix_fmt", "yuv420p",
+               "-c:v", "libx264"] + args
+        if params: cmd += ["-x264-params", params]
+        r = run(cmd + [mp4 + ".tmp.mp4"])
+        if r.returncode:
+            return "encode failed: " + r.stderr.strip()[-300:]
+        os.rename(mp4 + ".tmp.mp4", mp4)
+    if not os.path.exists(base + ".h264"):
+        r = run(["ffmpeg", "-v", "error", "-y", "-i", mp4, "-c:v", "copy", "-bsf:v", "h264_mp4toannexb", "-f", "h264", base + ".h264"])
+        if r.returncode: return "annexb extract failed"
+    if not os.path.exists(base + ".smp"):
+        mp4samples.write_samples(mp4, base + ".smp")
+    if not os.path.exists(base + ".ref.yuv"):
+        r = run(["ffmpeg", "-v", "error", "-y", "-i", mp4, "-f", "rawvideo", "-pix_fmt", "yuv420p", "-fps_mode", "passthrough", base + ".ref.yuv"])
+        if r.returncode: return "reference decode failed"
+    return None
+
+
+def stream_dims(path):
+    r = run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", path])
+    w, h = r.stdout.strip().split(",")[:2]
+    return int(w), int(h)
+
+
+def compare(out, ref, w, h):
+    """returns (equal, n_out, n_ref, first differing frame)"""
+    fb = frame_bytes(w, h)
+    a = open(out, "rb").read() if os.path.exists(out) else b""
+    b = open(ref, "rb").read()
+    na, nb = len(a) // fb, len(b) // fb
+    first = None
+    for i in range(min(na, nb)):
+        if a[i * fb:(i + 1) * fb] != b[i * fb:(i + 1) * fb]:
+            first = i
+            break
+    return a == b, na, nb, first
+
+
+def decode(binary, mode, inp, out, *extra):
+    r = run([binary, mode, inp, out] + [str(x) for x in extra])
+    return r
+
+
+def check_case(case):
+    name = case[0]
+    msg = encode(case)
+    if msg: return [name + ": " + msg], name + ": skipped"
+    base = os.path.join(CORPUS, name)
+    w, h = stream_dims(base + ".mp4")
+    fails = []
+    big = w * h > 700 * 400
+    binary = FAST if big else ASAN
+    results = []
+    runs = [("annexb", base + ".h264", ()), ("samples", base + ".smp", ())]
+    if not QUICK or name in ("main_cabac_b", "cbp_slices"):
+        runs.append(("annexb", base + ".h264", (R.choice([7, 333, 4096]),)))
+    for mode, inp, extra in runs:
+        out = base + ".%s%s.yuv" % (mode, "".join("_%d" % e for e in extra))
+        r = decode(binary, mode, inp, out, *extra)
+        if r.returncode:
+            fails.append("%s %s%s: decoder exited %d: %s" % (name, mode, extra, r.returncode, r.stderr.strip()[-800:]))
+            continue
+        if "errors 0" not in r.stdout or "concealed_mbs 0" not in r.stdout:
+            fails.append("%s %s%s: decoder reported problems: %s %s" % (name, mode, extra, r.stdout.strip(), r.stderr.strip()[-200:]))
+        eq, na, nb, first = compare(out, base + ".ref.yuv", w, h)
+        if not eq:
+            fails.append("%s %s%s: output differs (frames %d vs ref %d, first differing frame %s)" % (name, mode, extra, na, nb, first))
+        results.append(eq)
+        if not KEEP: os.remove(out)
+    return fails, "%-26s %4dx%-4d %3d frames  %s" % (name, w, h, os.path.getsize(base + ".ref.yuv") // frame_bytes(w, h),
+                                                    "bit-exact" if results and all(results) and not fails else "MISMATCH")
+
+
+# ---------------------------------------------------------------- extra tests
+def keyframes_and_display(smp_path_mp4):
+    avcc, samples = mp4samples.read_track(open(smp_path_mp4, "rb").read())
+    order = sorted(range(len(samples)), key=lambda i: samples[i][1])
+    disp = {idx: k for k, idx in enumerate(order)}
+    keys = [i for i, s in enumerate(samples) if s[2]]
+    return keys, disp, len(samples)
+
+
+def test_seek(name):
+    base = os.path.join(CORPUS, name)
+    w, h = stream_dims(base + ".mp4")
+    keys, disp, n = keyframes_and_display(base + ".mp4")
+    fb = frame_bytes(w, h)
+    ref = open(base + ".ref.yuv", "rb").read()
+    ok = 0
+    for k in keys[1:3] + ([keys[0]] if keys else []):
+        out = base + ".seek.yuv"
+        r = decode(ASAN, "seek", base + ".smp", out, k)
+        if r.returncode: fail("seek %s to %d: exit %d %s" % (name, k, r.returncode, r.stderr[-500:])); continue
+        got = open(out, "rb").read()
+        start = disp[k]
+        if got != ref[start * fb:]:
+            fail("seek %s to sample %d (display %d): output differs (%d frames, expected %d)" % (name, k, start, len(got) // fb, len(ref) // fb - start))
+        else: ok += 1
+        os.remove(out)
+    # seeking to a non-keyframe: frames must resume exactly at the next keyframe
+    if len(keys) > 1:
+        k = keys[1] - 2
+        out = base + ".seek.yuv"
+        r = decode(ASAN, "seek", base + ".smp", out, k)
+        got = open(out, "rb").read() if r.returncode == 0 else b""
+        start = disp[keys[1]]
+        if r.returncode or got != ref[start * fb:]:
+            fail("seek %s to non-keyframe %d: expected resume at keyframe %d" % (name, k, keys[1]))
+        else: ok += 1
+        os.remove(out)
+    return ok
+
+
+def test_truncated(name):
+    base = os.path.join(CORPUS, name)
+    w, h = stream_dims(base + ".mp4")
+    data = open(base + ".h264", "rb").read()
+    fb = frame_bytes(w, h)
+    ref = open(base + ".ref.yuv", "rb").read()
+    nref = len(ref) // fb
+    n = 0
+    for frac in (0.13, 0.37, 0.61, 0.89, 0.995):
+        cut = int(len(data) * frac)
+        p = base + ".trunc.h264"
+        open(p, "wb").write(data[:cut])
+        out = base + ".trunc.yuv"
+        r = decode(ASAN, "annexb", p, out)
+        if r.returncode: fail("truncated %s at %d: exit %d %s" % (name, cut, r.returncode, r.stderr[-500:])); continue
+        got = open(out, "rb").read()
+        ng = len(got) // fb
+        same = 0
+        while same < ng and got[same * fb:(same + 1) * fb] == ref[same * fb:(same + 1) * fb]: same += 1
+        # every picture completely contained must be exact, except the few around the cut (reordering)
+        aus = data[:cut].count(b"\x00\x00\x01\x09") or data[:cut].count(b"\x00\x00\x01")
+        if ng > nref or same + 6 < min(ng, int(nref * frac) - 2):
+            fail("truncated %s at %.0f%%: %d frames out, %d exact (ref %d)" % (name, frac * 100, ng, same, nref))
+        n += 1
+        os.remove(p); os.remove(out)
+    return n
+
+
+def test_lost_nal(name):
+    """drop one NAL unit of a P picture: the decoder must conceal, keep going and be exact again after the next IDR"""
+    base = os.path.join(CORPUS, name)
+    w, h = stream_dims(base + ".mp4")
+    data = open(base + ".h264", "rb").read()
+    starts = []
+    i = data.find(b"\x00\x00\x01")
+    while i >= 0:
+        starts.append(i + 3)
+        i = data.find(b"\x00\x00\x01", i + 3)
+    nals = []
+    for k, s in enumerate(starts):
+        e = starts[k + 1] - 3 if k + 1 < len(starts) else len(data)
+        while e > s and data[e - 1] == 0: e -= 1
+        nals.append((s, e))
+    slices = [(s, e) for s, e in nals if data[s] & 31 == 1]
+    idrs = [k for k, (s, e) in enumerate(nals) if data[s] & 31 == 5]
+    if len(idrs) < 2 or not slices: return 0
+    # remove a non-IDR slice between the first two IDRs
+    cand = [k for k in range(idrs[0] + 1, idrs[1]) if data[nals[k][0]] & 31 == 1]
+    k = cand[len(cand) // 2]
+    s, e = nals[k]
+    damaged = data[:s - 3] + data[e:]
+    p = base + ".lost.h264"
+    open(p, "wb").write(damaged)
+    out = base + ".lost.yuv"
+    r = decode(ASAN, "annexb", p, out)
+    ok = 0
+    if r.returncode:
+        fail("lost NAL %s: exit %d %s" % (name, r.returncode, r.stderr[-500:]))
+    else:
+        fb = frame_bytes(w, h)
+        keys, disp, n = keyframes_and_display(base + ".mp4")
+        ref = open(base + ".ref.yuv", "rb").read()
+        got = open(out, "rb").read()
+        idr_disp = disp[keys[1]]
+        # count of output frames may differ by one at most (a lost non-reference picture)
+        tail = len(ref) - idr_disp * fb
+        if len(got) < tail or got[len(got) - tail:] != ref[idr_disp * fb:]:
+            fail("lost NAL %s: output after the next IDR is not exact" % name)
+        else: ok = 1
+    os.remove(p)
+    if os.path.exists(out): os.remove(out)
+    return ok
+
+
+def test_resolution_change():
+    a, b = os.path.join(CORPUS, "cbp_cavlc"), os.path.join(CORPUS, "main_cabac_b")
+    if not (os.path.exists(a + ".h264") and os.path.exists(b + ".h264")):
+        return
+    c = os.path.join(CORPUS, "reschange")
+    sa = os.path.join(CORPUS, "size_200x120")
+    parts = [a, sa, b] if os.path.exists(sa + ".h264") else [a, b]
+    open(c + ".h264", "wb").write(b"".join(open(p + ".h264", "rb").read() for p in parts))
+    out = c + ".yuv"
+    r = decode(ASAN, "annexb", c + ".h264", out)
+    want = b"".join(open(p + ".ref.yuv", "rb").read() for p in parts)
+    got = open(out, "rb").read() if os.path.exists(out) else b""
+    if r.returncode or got != want:
+        fail("resolution change: output differs (%d vs %d bytes) %s" % (len(got), len(want), r.stderr[-300:]))
+    else:
+        print("resolution change (%s): bit-exact" % " -> ".join(os.path.basename(p) for p in parts))
+
+
+# -- POC type 1: rewrite the SPS of a stream without B-frames (POC type 2) into the equivalent POC type 1
+class Bits:
+    def __init__(self, data): self.d, self.p = data, 0
+    def u(self, n):
+        v = 0
+        for _ in range(n):
+            v = v << 1 | (self.d[self.p >> 3] >> (7 - (self.p & 7))) & 1
+            self.p += 1
+        return v
+    def ue(self):
+        z = 0
+        while self.u(1) == 0: z += 1
+        return (1 << z) - 1 + self.u(z)
+    def se(self):
+        k = self.ue()
+        return (k + 1) // 2 if k & 1 else -(k // 2)
+
+
+class W:
+    def __init__(self): self.b = []
+    def u(self, n, v): self.b += [(v >> (n - 1 - i)) & 1 for i in range(n)]
+    def ue(self, v):
+        v += 1
+        n = v.bit_length()
+        self.u(n - 1, 0); self.u(n, v)
+    def se(self, v): self.ue(2 * v - 1 if v > 0 else -2 * v)
+
+
+def unescape(b):
+    out, z = bytearray(), 0
+    for c in b:
+        if z >= 2 and c == 3: z = 0; continue
+        z = z + 1 if c == 0 else 0
+        out.append(c)
+    return bytes(out)
+
+
+def escape(b):
+    out, z = bytearray(), 0
+    for c in b:
+        if z >= 2 and c <= 3: out.append(3); z = 0
+        out.append(c)
+        z = z + 1 if c == 0 else 0
+    return bytes(out)
+
+
+def rewrite_sps_poc1(nal):
+    rb = unescape(nal[1:])
+    r = Bits(rb)
+    w = W()
+    prof = r.u(8); w.u(8, prof); w.u(8, r.u(8)); w.u(8, r.u(8)); w.ue(r.ue())
+    if prof in (100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135):
+        cf = r.ue(); w.ue(cf)
+        if cf == 3: w.u(1, r.u(1))
+        w.ue(r.ue()); w.ue(r.ue()); w.u(1, r.u(1))
+        if r.u(1): raise ValueError("scaling lists not handled")
+        w.u(1, 0)
+    w.ue(r.ue())                    # log2_max_frame_num_minus4
+    pt = r.ue()
+    if pt != 2: raise ValueError("expected POC type 2")
+    w.ue(1); w.u(1, 1); w.se(0); w.se(0); w.ue(1); w.se(2)
+    # copy the rest bit by bit (including the stop bit)
+    total = len(rb) * 8
+    while r.p < total: w.u(1, r.u(1))
+    bits = w.b + [0] * (-len(w.b) % 8)
+    out = bytes(int("".join(map(str, bits[i:i + 8])), 2) for i in range(0, len(bits), 8))
+    return nal[:1] + escape(out)
+
+
+def test_poc1():
+    case = ("poc_type1_src", "rot", "320x240", 30, ["-profile:v", "high"], "bframes=0:ref=3", True)
+    if encode(case): fail("poc1: encode failed"); return
+    base = os.path.join(CORPUS, case[0])
+    data = open(base + ".h264", "rb").read()
+    out, i = bytearray(), 0
+    pos = [m for m in range(len(data) - 3) if data[m:m + 3] == b"\x00\x00\x01"]
+    for k, s in enumerate(pos):
+        e = pos[k + 1] if k + 1 < len(pos) else len(data)
+        nal = data[s + 3:e]
+        while nal and nal[-1] == 0: nal = nal[:-1]
+        if nal[0] & 31 == 7: nal = rewrite_sps_poc1(nal)
+        out += b"\x00\x00\x00\x01" + nal
+    p = base + ".poc1.h264"
+    open(p, "wb").write(out)
+    refp = base + ".poc1.ref.yuv"
+    run(["ffmpeg", "-v", "error", "-y", "-i", p, "-f", "rawvideo", "-pix_fmt", "yuv420p", "-fps_mode", "passthrough", refp])
+    o = base + ".poc1.yuv"
+    r = decode(ASAN, "annexb", p, o)
+    w, h = dims(case[2])
+    eq, na, nb, first = compare(o, refp, w, h)
+    r2 = run(["ffprobe", "-v", "error", "-show_entries", "stream=profile", p])
+    if r.returncode or not eq or open(refp, "rb").read() != open(base + ".ref.yuv", "rb").read():
+        fail("POC type 1 stream: mismatch (%d vs %d frames, first diff %s) %s" % (na, nb, first, r.stderr[-300:]))
+    else:
+        print("POC type 1 (rewritten SPS): bit-exact, %d frames" % na)
+
+
+def test_unsupported():
+    cases = [
+        ("unsup_interlaced", "rot", "320x240", 6, ["-profile:v", "high", "-flags", "+ildct+ilme"], "interlaced=1", False),
+        ("unsup_422", "rot", "320x240", 4, ["-profile:v", "high422", "-pix_fmt", "yuv422p"], "", False),
+        ("unsup_444", "rot", "320x240", 4, ["-profile:v", "high444", "-pix_fmt", "yuv444p"], "", False),
+        ("unsup_10bit", "rot", "320x240", 4, ["-profile:v", "high10", "-pix_fmt", "yuv420p10le"], "", False),
+    ]
+    for c in cases:
+        name, src, size, n, args, params, _ = c
+        base = os.path.join(CORPUS, name)
+        cmd = ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", SOURCES[src].format(s=size, r=25), "-frames:v", str(n),
+               "-c:v", "libx264"] + args
+        if params: cmd += ["-x264-params", params]
+        # pix_fmt must come from args (overrides)
+        r = run(cmd + ["-bsf:v", "h264_mp4toannexb", "-f", "h264", base + ".h264"])
+        if r.returncode:
+            print("unsupported %s: could not encode (%s), skipped" % (name, r.stderr.strip()[-120:]))
+            continue
+        r = decode(ASAN, "annexb", base + ".h264", base + ".yuv")
+        if r.returncode:
+            fail("unsupported %s: crashed: %s" % (name, r.stderr[-500:]))
+        elif "error:" not in r.stderr or "frames 0" not in r.stdout:
+            fail("unsupported %s: not rejected (%s %s)" % (name, r.stdout.strip(), r.stderr.strip()))
+        else:
+            print("unsupported %-18s rejected: %s" % (name, r.stderr.strip().splitlines()[0]))
+
+
+def test_fuzz():
+    names = ["cbp_cavlc", "main_cabac_b", "high_cqmfile", "high_weightp2", "high_slices4", "high_lossless_qp0",
+             "cbp_constrained_intra", "main_temporal", "high_8x8", "size_48x34"]
+    names = [n for n in names if os.path.exists(os.path.join(CORPUS, n + ".smp"))]
+    iters = 3 if QUICK else 12
+    jobs = []
+    for i, n in enumerate(names):
+        jobs.append(([ASAN, "fuzz", os.path.join(CORPUS, n + ".smp"), str(1000 + i), str(iters)], n))
+        jobs.append(([ASAN, "fuzzab", os.path.join(CORPUS, n + ".h264"), str(2000 + i), str(max(2, iters // 2))], n + "(annexb)"))
+    def one(j):
+        cmd, n = j
+        r = run(cmd)
+        return n, r
+    total = 0
+    with ThreadPoolExecutor(JOBS) as ex:
+        for n, r in ex.map(one, jobs):
+            if r.returncode or "fuzz ok" not in r.stdout:
+                fail("fuzz %s: exit %d: %s" % (n, r.returncode, r.stderr[-1500:]))
+            else:
+                total += int(r.stdout.split()[2])
+    print("fuzz: %d damaged decodes of %d streams under ASan+UBSan, no crashes" % (total, len(names)))
+
+
+def test_speed():
+    clips = [("speed_720p_rot", "rot", "1280x720", 150 if not QUICK else 60, ["-profile:v", "high", "-crf", "21"], "bframes=3:ref=4"),
+             ("speed_720p_mandel", "mandel", "1280x720", 150 if not QUICK else 60, ["-profile:v", "high", "-crf", "21"], ""),
+             ("speed_1080p_rot", "rot", "1920x1080", 120 if not QUICK else 40, ["-profile:v", "high", "-crf", "21"], "bframes=3:ref=4")]
+    if not QUICK:
+        clips.append(("speed_720p_baseline", "rot", "1280x720", 150, ["-profile:v", "baseline", "-crf", "21"], ""))
+        clips.append(("speed_1080p_bars", "bars", "1920x1080", 120, ["-profile:v", "high", "-crf", "18"], "bframes=3"))
+    for name, src, size, n, args, params in clips:
+        case = (name, src, size, n, args, params, True)
+        msg = encode(case)
+        if msg: fail(name + ": " + msg); continue
+        base = os.path.join(CORPUS, name)
+        if not QUICK or True:
+            r = decode(FAST, "samples", base + ".smp", base + ".yuv")
+            w, h = dims(size)
+            eq, na, nb, first = compare(base + ".yuv", base + ".ref.yuv", w, h)
+            if not eq: fail("%s: output differs (first frame %s)" % (name, first))
+            os.remove(base + ".yuv")
+        r = run([FAST, "bench", base + ".smp", "3"])
+        kbps = os.path.getsize(base + ".h264") * 8 / (n / 25.0) / 1000
+        fps = float(r.stdout.split("fps")[-1]) if "fps" in r.stdout else 0
+        print("speed %-22s %s %5.0f kbit/s: %6.1f fps (-O2, one core)" % (name, size, kbps, fps))
+
+
+def main():
+    t0 = time.time()
+    build()
+    if FAILS and any("target compile" in f for f in FAILS): pass
+    write_cqm()
+    print("== corpus (%d streams, %d jobs)" % (len(CASES), JOBS), flush=True)
+    with ThreadPoolExecutor(JOBS) as ex:
+        for fails, line in ex.map(check_case, CASES):
+            print(line, flush=True)
+            for f in fails: fail(f)
+    if ONLY:
+        print("done in %.0f s" % (time.time() - t0))
+        sys.exit(1 if FAILS else 0)
+    print("== seeking / damage", flush=True)
+    seeks = 0
+    for n in ("cbp_cavlc", "high_open_gop", "high_short_gop", "main_cabac_b"):
+        if os.path.exists(os.path.join(CORPUS, n + ".smp")): seeks += test_seek(n)
+    print("seek tests passed: %d" % seeks)
+    tr = 0
+    for n in ("cbp_cavlc", "main_cabac_b", "high_slices4", "high_open_gop"):
+        if os.path.exists(os.path.join(CORPUS, n + ".h264")): tr += test_truncated(n)
+    print("truncated-file tests passed: %d" % tr)
+    lost = 0
+    for n in ("cbp_cavlc", "high_short_gop", "cbp_constrained_intra", "high_open_gop"):
+        if os.path.exists(os.path.join(CORPUS, n + ".h264")): lost += test_lost_nal(n)
+    print("lost-NAL recovery tests passed: %d" % lost)
+    test_resolution_change()
+    test_poc1()
+    test_unsupported()
+    print("== fuzz", flush=True)
+    test_fuzz()
+    print("== speed", flush=True)
+    test_speed()
+    print("done in %.0f s" % (time.time() - t0))
+    if FAILS:
+        print("%d FAILURE(S)" % len(FAILS))
+        for f in FAILS: print("  " + f)
+        sys.exit(1)
+    print("ALL PASSED")
+
+
+if __name__ == "__main__":
+    main()

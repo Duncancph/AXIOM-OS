@@ -48,7 +48,7 @@ static const uint8_t run_bits[7][16] = {
     {1,0}, {1,1,0}, {3,2,1,0}, {3,2,1,1,0}, {3,2,3,2,1,0}, {3,0,1,3,2,5,4}, {7,6,5,4,3,2,1,1,1,1,1,1,1,1,1},
 };
 
-#define VLC_POOL 12000
+#define VLC_POOL 24576
 static struct vlc_e vlc_pool[VLC_POOL];
 static int vlc_used;
 static const struct vlc_e *vlc_coeff[5], *vlc_tz[15], *vlc_ctz[3], *vlc_run[7];
@@ -92,6 +92,7 @@ static void vlc_init(void) {
     for (int i = 0; i < 3; i++) vlc_ctz[i] = vlc_build(ctz_len[i], ctz_bits[i], 4 - i, 0);
     for (int i = 0; i < 7; i++) vlc_run[i] = vlc_build(run_len[i], run_bits[i], i == 6 ? 15 : i + 2, 0);
     vlc_ready = 1;
+    if (vlc_used > VLC_POOL) vlc_ready = 0;
 }
 
 H264_INLINE int vlc_read(struct h264_br *b, const struct vlc_e *t) {
@@ -183,7 +184,7 @@ static int cavlc_residual(h264dec *d) {
         for (int i = 0; i < 4; i++) for (int k = 0; k < 16; k++) scan8x8_cavlc[i][k] = h264_zigzag8[4 * k + i];
         scan8_ready = 1;
     }
-    const uint32_t *dq4 = d->dq4[intra ? 0 : 3][qp];
+    const uint32_t *dq4 = d->bypass ? h264_dq_flat : d->dq4[intra ? 0 : 3][qp];
     if (d->mb_type & MB_I16) {
         int16_t dc[16] = { 0 };
         int n = cavlc_block(b, pred_nc(nzc, CI(0, 0)), 16, dc, h264_zigzag4, 0);
@@ -205,7 +206,7 @@ static int cavlc_residual(h264dec *d) {
         for (int b8 = 0; b8 < 4; b8++) {
             if (!(cbp & (1 << b8))) continue;
             if (d->t8x8) {
-                const uint32_t *dq8 = d->dq8[intra ? 0 : 1][qp];
+                const uint32_t *dq8 = d->bypass ? h264_dq_flat : d->dq8[intra ? 0 : 1][qp];
                 int tot = 0;
                 for (int i = 0; i < 4; i++) {
                     int blk = b8 * 4 + i, r = h264_blk_xy[blk], x = r & 3, y = r >> 2;
@@ -241,7 +242,7 @@ static int cavlc_residual(h264dec *d) {
         }
         if (cbp & 0x20) {
             for (int c = 0; c < 2; c++) {
-                const uint32_t *dqc = d->dq4[(intra ? 1 : 4) + c][d->qpc[c]];
+                const uint32_t *dqc = d->bypass ? h264_dq_flat : d->dq4[(intra ? 1 : 4) + c][d->qpc[c]];
                 int8_t *nc = d->nnz_c[1 + c];
                 for (int i = 0; i < 4; i++) {
                     int x = i & 1, y = i >> 1;
@@ -496,6 +497,7 @@ int h264_mb_cavlc(h264dec *d) {
         d->qp = (d->qp + dq + 52) % 52;
         d->qpc[0] = h264_chroma_qp[h264_clip(d->qp + d->p->cqp_offset[0], 0, 51)];
         d->qpc[1] = h264_chroma_qp[h264_clip(d->qp + d->p->cqp_offset[1], 0, 51)];
+        d->bypass = d->act_sps->transform_bypass && d->qp == 0;
         if (cavlc_residual(d) < 0) return -1;
     }
     if (br_overrun(b)) return -1;

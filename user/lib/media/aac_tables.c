@@ -876,3 +876,121 @@ const float aac_sbr_noise[512][2] = {
     { 0.97534253457837f, 0.86150930812689f }, { 0.99642466504163f, 0.70190043427512f },
     { -0.94705089665984f, -0.29580042814306f }, { 0.91599807087376f, -0.98147830385781f },
 };
+
+/* ---- Parametric Stereo (ISO/IEC 14496-3 8.B): Huffman tables, parameter band maps */
+static const uint32_t ps_huff_iid_df1_code[61] = {
+    0x1feb4, 0x1feb5, 0x1fd76, 0x1fd77, 0x1fd74, 0x1fd75, 0x1fe8a, 0x1fe8b,
+    0x1fe88, 0xfe80, 0x1feb6, 0xfe82, 0xfeb8, 0x7f42, 0x7fae, 0x3faf,
+    0x1fd1, 0x1fe9, 0xfe9, 0x7ea, 0x7fb, 0x3fb, 0x1fb, 0x1ff,
+    0x7c, 0x3c, 0x1c, 0xc, 0x0, 0x1, 0x1, 0x2,
+    0x1, 0xd, 0x1d, 0x3d, 0x7d, 0xfc, 0x1fc, 0x3fc,
+    0x3f4, 0x7eb, 0xfea, 0x1fea, 0x1fd6, 0x3fd0, 0x7faf, 0x7f43,
+    0xfeb9, 0xfe83, 0x1feb7, 0xfe81, 0x1fe89, 0x1fe8e, 0x1fe8f, 0x1fe8c,
+    0x1fe8d, 0x1feb2, 0x1feb3, 0x1feb0, 0x1feb1,
+};
+static const uint8_t ps_huff_iid_df1_bits[61] = {
+    18, 18, 18, 18, 18, 18, 18, 18, 18, 17, 18, 17, 17, 16, 16, 15,
+    14, 14, 13, 12, 12, 11, 10, 10, 8, 7, 6, 5, 4, 3, 1, 3,
+    4, 5, 6, 7, 8, 9, 10, 11, 11, 12, 13, 14, 14, 15, 16, 16,
+    17, 17, 18, 17, 18, 18, 18, 18, 18, 18, 18, 18, 18,
+};
+static const uint32_t ps_huff_iid_dt1_code[61] = {
+    0x4ed4, 0x4ed5, 0x4ece, 0x4ecf, 0x4ecc, 0x4ed6, 0x4ed8, 0x4f46,
+    0x4f60, 0x2718, 0x2719, 0x2764, 0x2765, 0x276d, 0x27b1, 0x13b7,
+    0x13d6, 0x9c7, 0x9e9, 0x9ed, 0x4ee, 0x4f7, 0x278, 0x139,
+    0x9a, 0x9f, 0x20, 0x11, 0xa, 0x3, 0x1, 0x0,
+    0xb, 0x12, 0x21, 0x4c, 0x9b, 0x13a, 0x279, 0x270,
+    0x4ef, 0x4e2, 0x9ea, 0x9d8, 0x13d7, 0x13d0, 0x27b2, 0x27a2,
+    0x271a, 0x271b, 0x4f66, 0x4f67, 0x4f61, 0x4f47, 0x4ed9, 0x4ed7,
+    0x4ecd, 0x4ed2, 0x4ed3, 0x4ed0, 0x4ed1,
+};
+static const uint8_t ps_huff_iid_dt1_bits[61] = {
+    16, 16, 16, 16, 16, 16, 16, 16, 16, 15, 15, 15, 15, 15, 15, 14,
+    14, 13, 13, 13, 12, 12, 11, 10, 9, 9, 7, 6, 5, 3, 1, 2,
+    5, 6, 7, 8, 9, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15,
+    15, 15, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+};
+static const uint32_t ps_huff_iid_df0_code[29] = {
+    0x1fffb, 0x1fffc, 0x1fffd, 0x1fffa, 0xfffc, 0x7ffc, 0x1ffd, 0x3fe,
+    0x1fe, 0x7e, 0x3c, 0x1d, 0xd, 0x5, 0x0, 0x4,
+    0xc, 0x1c, 0x3d, 0x3e, 0xfe, 0x7fe, 0x1ffc, 0x3ffc,
+    0x3ffd, 0x7ffd, 0x1fffe, 0x3fffe, 0x3ffff,
+};
+static const uint8_t ps_huff_iid_df0_bits[29] = {
+    17, 17, 17, 17, 16, 15, 13, 10, 9, 7, 6, 5, 4, 3, 1, 3,
+    4, 5, 6, 6, 8, 11, 13, 14, 14, 15, 17, 18, 18,
+};
+static const uint32_t ps_huff_iid_dt0_code[29] = {
+    0x7fff9, 0x7fffa, 0x7fffb, 0xffff8, 0xffff9, 0xffffa, 0x1fffd, 0x7ffe,
+    0xffe, 0x3fe, 0xfe, 0x3e, 0xe, 0x2, 0x0, 0x6,
+    0x1e, 0x7e, 0x1fe, 0x7fe, 0x1ffe, 0x3ffe, 0x1fffc, 0x7fff8,
+    0xffffb, 0xffffc, 0xffffd, 0xffffe, 0xfffff,
+};
+static const uint8_t ps_huff_iid_dt0_bits[29] = {
+    19, 19, 19, 20, 20, 20, 17, 15, 12, 10, 8, 6, 4, 2, 1, 3,
+    5, 7, 9, 11, 13, 14, 17, 19, 20, 20, 20, 20, 20,
+};
+static const uint32_t ps_huff_icc_df_code[15] = {
+    0x3fff, 0x3ffe, 0xffe, 0x3fe, 0x7e, 0x1e, 0x6, 0x0,
+    0x2, 0xe, 0x3e, 0xfe, 0x1fe, 0x7fe, 0x1ffe,
+};
+static const uint8_t ps_huff_icc_df_bits[15] = {
+    14, 14, 12, 10, 7, 5, 3, 1, 2, 4, 6, 8, 9, 11, 13,
+};
+static const uint32_t ps_huff_icc_dt_code[15] = {
+    0x3ffe, 0x1ffe, 0x7fe, 0x1fe, 0x7e, 0x1e, 0x6, 0x0,
+    0x2, 0xe, 0x3e, 0xfe, 0x3fe, 0xffe, 0x3fff,
+};
+static const uint8_t ps_huff_icc_dt_bits[15] = {
+    14, 13, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, 14,
+};
+static const uint32_t ps_huff_ipd_df_code[8] = {
+    0x1, 0x0, 0x6, 0x4, 0x2, 0x3, 0x5, 0x7,
+};
+static const uint8_t ps_huff_ipd_df_bits[8] = {
+    1, 3, 4, 4, 4, 4, 4, 4,
+};
+static const uint32_t ps_huff_ipd_dt_code[8] = {
+    0x1, 0x2, 0x2, 0x3, 0x2, 0x0, 0x3, 0x3,
+};
+static const uint8_t ps_huff_ipd_dt_bits[8] = {
+    1, 3, 4, 5, 5, 4, 4, 3,
+};
+static const uint32_t ps_huff_opd_df_code[8] = {
+    0x1, 0x1, 0x6, 0x4, 0xf, 0xe, 0x5, 0x0,
+};
+static const uint8_t ps_huff_opd_df_bits[8] = {
+    1, 3, 4, 4, 5, 5, 4, 3,
+};
+static const uint32_t ps_huff_opd_dt_code[8] = {
+    0x1, 0x2, 0x1, 0x7, 0x6, 0x0, 0x2, 0x3,
+};
+static const uint8_t ps_huff_opd_dt_bits[8] = {
+    1, 3, 4, 5, 5, 4, 4, 3,
+};
+const struct aac_hsrc aac_ps_huff_src[10] = {
+    { 0, ps_huff_iid_df1_code, ps_huff_iid_df1_bits, 61 },
+    { 0, ps_huff_iid_dt1_code, ps_huff_iid_dt1_bits, 61 },
+    { 0, ps_huff_iid_df0_code, ps_huff_iid_df0_bits, 29 },
+    { 0, ps_huff_iid_dt0_code, ps_huff_iid_dt0_bits, 29 },
+    { 0, ps_huff_icc_df_code, ps_huff_icc_df_bits, 15 },
+    { 0, ps_huff_icc_dt_code, ps_huff_icc_dt_bits, 15 },
+    { 0, ps_huff_ipd_df_code, ps_huff_ipd_df_bits, 8 },
+    { 0, ps_huff_ipd_dt_code, ps_huff_ipd_dt_bits, 8 },
+    { 0, ps_huff_opd_df_code, ps_huff_opd_df_bits, 8 },
+    { 0, ps_huff_opd_dt_code, ps_huff_opd_dt_bits, 8 },
+};
+const int8_t aac_ps_huff_offset[10] = { 30, 30, 14, 14, 7, 7, 0, 0, 0, 0 };
+const int8_t aac_ps_k_to_i_20[71] = {
+    1, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 14, 15,
+    15, 15, 16, 16, 16, 16, 17, 17, 17, 17, 17, 18, 18, 18, 18, 18, 18, 18, 18,
+    18, 18, 18, 18, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19,
+    19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19,
+};
+const int8_t aac_ps_k_to_i_34[91] = {
+    0, 1, 2, 3, 4, 5, 6, 6, 7, 2, 1, 0, 10, 10, 4, 5, 6, 7, 8,
+    9, 10, 11, 12, 9, 14, 11, 12, 13, 14, 15, 16, 13, 16, 17, 18, 19, 20, 21,
+    22, 22, 23, 23, 24, 24, 25, 25, 26, 26, 27, 27, 27, 28, 28, 28, 29, 29, 29,
+    30, 30, 30, 31, 31, 31, 31, 32, 32, 32, 32, 33, 33, 33, 33, 33, 33, 33, 33,
+    33, 33, 33, 33, 33, 33, 33, 33, 33, 33, 33, 33, 33, 33, 33,
+};

@@ -230,8 +230,9 @@ class SbrChannelState:
 
 
 class SbrWriter:
-    def __init__(self, rng, rate, stereo, ps=False):
+    def __init__(self, rng, rate, stereo, ps=False, force=None):
         self.rng, self.rate, self.stereo, self.ps = rng, rate, stereo, ps
+        self.force = force or {}
         self.ch = [SbrChannelState(), SbrChannelState()]
         self.h = None
         self.d = None
@@ -253,6 +254,7 @@ class SbrWriter:
                 h.update(freq_scale=2, alter_scale=1, noise_bands=2)
             if not h["extra2"]:
                 h.update(limiter_bands=2, limiter_gains=2, interpol_freq=1, smoothing_mode=1)
+            h.update(self.force.get("header", {}))
             d = derive(self.rate, h)
             if d:
                 return h, d
@@ -282,6 +284,8 @@ class SbrWriter:
         lead_needed = st.trail - 16
         classes = [0, 1, 2, 3] if lead_needed == 0 else [2, 3]
         cls = int(r.choice(classes))
+        if "classes" in self.force:
+            cls = int(r.choice([c for c in classes if c in self.force["classes"]] or classes))
         bw.put(cls, 2)
         if cls == 0:   # FIXFIX
             e = int(r.integers(0, 3))
@@ -370,7 +374,9 @@ class SbrWriter:
             lo, hi = 0, (24 if amp else 48)
         else:
             t_i, f_i, bits = (T_ENV_30, F_ENV_30, 6) if amp else (T_ENV_15, F_ENV_15, 7)
-            lo, hi = (5, 30) if amp else (10, 60)
+            lo, hi = (8, 22) if amp else (16, 44)
+            if "env" in self.force:
+                lo = hi = self.force["env"] // (2 if amp else 1)
         tl, fl = SBR_LAV[t_i], SBR_LAV[f_i]
         prev, prev_fr = st.env, st.fr_last
         for e in range(ne):
@@ -420,6 +426,8 @@ class SbrWriter:
             t_i, f_i, lo, hi = T_NOISE_BAL_30, F_BAL_30, 0, 24
         else:
             t_i, f_i, lo, hi = T_NOISE_30, F_ENV_30, 0, 30
+            if "noise" in self.force:
+                lo = hi = self.force["noise"]
         tl, fl = SBR_LAV[t_i], SBR_LAV[f_i]
         prev = st.noise
         for i in range(nn):
@@ -452,7 +460,7 @@ class SbrWriter:
         """one SBR extension payload (after the 4-bit extension type)"""
         r = self.rng
         bw = BW()
-        send_header = self.frame == 0 or r.random() < 0.06
+        send_header = self.frame == 0 or r.random() < self.force.get("header_rate", 0.06)
         if send_header:
             if self.h is None or r.random() < 0.5:
                 self.h, self.d = self.new_header()
@@ -470,14 +478,14 @@ class SbrWriter:
             for v in df + dfn:
                 bw.put(v, 1)
             for _ in range(nq):
-                bw.put(int(r.integers(0, 4)), 2)
+                bw.put(int(r.integers(0, 4)) if "invf" not in self.force else self.force["invf"], 2)
             self.envelope(bw, st, ne, frs, df, amp, False, 1)
             self.noise(bw, st, nn, dfn, False, 1)
             st.trail = trail
             self.harmonics(bw)
         else:
             bw.put(0, 1)   # bs_data_extra
-            coupling = int(r.integers(0, 2))
+            coupling = int(r.integers(0, 2)) if "coupling" not in self.force else self.force["coupling"]
             bw.put(coupling, 1)
             if coupling:
                 st0, st1 = self.ch
@@ -490,7 +498,7 @@ class SbrWriter:
                 for v in df0 + dfn0 + df1 + dfn1:
                     bw.put(v, 1)
                 for _ in range(nq):
-                    bw.put(int(r.integers(0, 4)), 2)
+                    bw.put(int(r.integers(0, 4)) if "invf" not in self.force else self.force["invf"], 2)
                 self.envelope(bw, st0, ne, frs, df0, amp, False, 1)
                 self.noise(bw, st0, nn, dfn0, False, 1)
                 self.envelope(bw, st1, ne, frs, df1, amp, True, 2)
@@ -510,7 +518,7 @@ class SbrWriter:
                         bw.put(v, 1)
                     dfs.append((df, dfn, nn))
                 for _ in range(2 * nq):
-                    bw.put(int(r.integers(0, 4)), 2)
+                    bw.put(int(r.integers(0, 4)) if "invf" not in self.force else self.force["invf"], 2)
                 self.envelope(bw, st0, g0[0], g0[1], dfs[0][0], g0[2], False, 1)
                 self.envelope(bw, st1, g1[0], g1[1], dfs[1][0], g1[2], False, 1)
                 self.noise(bw, st0, dfs[0][2], dfs[0][1], False, 1)
@@ -540,7 +548,7 @@ class SbrWriter:
 
     def harmonics(self, bw):
         r = self.rng
-        f = 1 if r.random() < 0.4 else 0
+        f = 1 if r.random() < self.force.get("harmonics", 0.4) else 0
         bw.put(f, 1)
         if f:
             for _ in range(self.d["n"][1]):
@@ -573,7 +581,7 @@ def to_bytes(bits):
     return bytes(int("".join(map(str, bits[i:i + 8])), 2) for i in range(0, len(bits), 8))
 
 
-def add_sbr(adts_in, adts_out, elements_listing, core_rate, seed, ps=False):
+def add_sbr(adts_in, adts_out, elements_listing, core_rate, seed, ps=False, force=None):
     """elements_listing: lines from `aac_test elements` (offset len type:end ...)."""
     rng = np.random.default_rng(seed)
     data = open(adts_in, "rb").read()
@@ -600,7 +608,8 @@ def add_sbr(adts_in, adts_out, elements_listing, core_rate, seed, ps=False):
                 k = (typ, count.get(typ, 0))
                 count[typ] = k[1] + 1
                 if k not in writers:
-                    writers[k] = SbrWriter(np.random.default_rng(seed * 100 + len(writers)), 2 * core_rate, typ == 1, ps=ps and typ == 0)
+                    writers[k] = SbrWriter(np.random.default_rng(seed * 100 + len(writers)), 2 * core_rate, typ == 1,
+                                           ps=ps and typ == 0, force=force)
                 new += fil_element(writers[k].payload(typ == 1))
         new += [1, 1, 1]
         b = bytearray(to_bytes(new))

@@ -25,6 +25,8 @@ static int pic_layout(h264dec *d, struct h264_pic *p) {
     for (int li = 0; li < 2; li++) { p->refidx[li] = (int8_t *)m; m += n8; }
     p->alloc_w = d->mb_w;
     p->alloc_h = d->mb_h;
+    p->stride_y = sy;
+    p->stride_c = sc;
     return 0;
 }
 
@@ -87,13 +89,13 @@ struct h264_pic *h264_alloc_pic(h264dec *d) {
         pic_layout(d, p);
     }
     uint8_t *mem = p->mem;
-    int aw = p->alloc_w, ah = p->alloc_h;
+    int aw = p->alloc_w, ah = p->alloc_h, ssy = p->stride_y, ssc = p->stride_c;
     uint8_t *pl[3] = { p->plane[0], p->plane[1], p->plane[2] };
     int16_t (*mv0)[2] = p->mv[0], (*mv1)[2] = p->mv[1];
     int8_t *r0 = p->refidx[0], *r1 = p->refidx[1];
     int32_t *u0 = p->refuid[0], *u1 = p->refuid[1];
     memset(p, 0, sizeof(*p));
-    p->mem = mem; p->alloc_w = aw; p->alloc_h = ah;
+    p->mem = mem; p->alloc_w = aw; p->alloc_h = ah; p->stride_y = ssy; p->stride_c = ssc;
     p->plane[0] = pl[0]; p->plane[1] = pl[1]; p->plane[2] = pl[2];
     p->mv[0] = mv0; p->mv[1] = mv1; p->refidx[0] = r0; p->refidx[1] = r1; p->refuid[0] = u0; p->refuid[1] = u1;
     p->uid = ++d->uid_counter;
@@ -314,7 +316,7 @@ int h264_get_frame(h264dec *d, struct h264_frame *f) {
     if (!d->flushing && best->epoch == d->epoch && n_cur <= d->reorder) return 0;
     best->waiting = 0;
     best->held = 1;
-    int sy = d->stride[0], sc = d->stride[1];
+    int sy = best->stride_y, sc = best->stride_c;
     f->stride_y = sy;
     f->stride_uv = sc;
     f->y = best->plane[0] + (size_t)best->crop_t * sy + best->crop_l;

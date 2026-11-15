@@ -114,7 +114,7 @@ static int cabac_residual(h264dec *d) {
     int qp = d->qp;
     uint32_t lw = d->avail_l ? d->mbi[d->mb_xy - 1].cbf : (intra ? 0x7ffffff : 0);
     uint32_t tw = d->avail_t ? d->mbi[d->mb_xy - d->mb_w].cbf : (intra ? 0x7ffffff : 0);
-    const uint32_t *dq4 = d->dq4[intra ? 0 : 3][qp];
+    const uint32_t *dq4 = d->bypass ? h264_dq_flat : d->dq4[intra ? 0 : 3][qp];
 
     if (d->mb_type & MB_I16) {
         int inc = cbf_bit(lw, 24) + 2 * cbf_bit(tw, 24);
@@ -142,7 +142,7 @@ static int cabac_residual(h264dec *d) {
         for (int b8 = 0; b8 < 4; b8++) {
             if (!(cbp & (1 << b8))) continue;
             if (d->t8x8) {
-                const uint32_t *dq8 = d->dq8[intra ? 0 : 1][qp];
+                const uint32_t *dq8 = d->bypass ? h264_dq_flat : d->dq8[intra ? 0 : 1][qp];
                 int n = cabac_block(d, 5, 64, d->coef + b8 * 64, h264_zigzag8, dq8);
                 if (n < 0) return -1;
                 int r = h264_blk_xy[b8 * 4];
@@ -182,7 +182,7 @@ static int cabac_residual(h264dec *d) {
         }
         if (cbp & 0x20) {
             for (int ch = 0; ch < 2; ch++) {
-                const uint32_t *dqc = d->dq4[(intra ? 1 : 4) + ch][d->qpc[ch]];
+                const uint32_t *dqc = d->bypass ? h264_dq_flat : d->dq4[(intra ? 1 : 4) + ch][d->qpc[ch]];
                 int base = 16 + ch * 4;
                 for (int i = 0; i < 4; i++) {
                     int x = i & 1, y = i >> 1;
@@ -583,6 +583,7 @@ int h264_mb_cabac(h264dec *d) {
         d->qp = (d->qp + dq + 52) % 52;
         d->qpc[0] = h264_chroma_qp[h264_clip(d->qp + d->p->cqp_offset[0], 0, 51)];
         d->qpc[1] = h264_chroma_qp[h264_clip(d->qp + d->p->cqp_offset[1], 0, 51)];
+        d->bypass = d->act_sps->transform_bypass && d->qp == 0;
         if (cabac_residual(d) < 0) return -1;
     } else d->last_qp_delta = 0;
     if (c->p > c->end + 64) return -1;

@@ -190,6 +190,7 @@ struct h264_pic {
     int8_t *refidx[2];           /* per 8x8 block, stride mb_w*2 */
     int32_t *refuid[2];          /* per 8x8 block: uid of the referenced picture or -1 */
     int alloc_w, alloc_h;        /* coded size in MBs this buffer was made for */
+    int stride_y, stride_c;
     int poc, frame_num, frame_num_wrap, lt_idx;
     int ref;                     /* 0 unused, 1 short-term, 2 long-term */
     int uid;
@@ -365,6 +366,7 @@ struct h264dec {
 /* ---------------------------------------------------------------- tables (h264_tables.c) */
 extern const int8_t h264_cabac_init[4][460][2];
 extern const uint8_t h264_zigzag4[16], h264_zigzag8[64];
+extern const uint32_t h264_dq_flat[64];
 extern const uint8_t h264_default4[2][16], h264_default8[2][64];   /* zigzag order */
 extern const uint8_t h264_chroma_qp[52];
 extern const uint8_t h264_blk_xy[16];    /* luma4x4BlkIdx -> raster 4x4 index */

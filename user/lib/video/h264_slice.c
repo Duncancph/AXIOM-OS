@@ -622,7 +622,6 @@ int h264_decode_slice_data(h264dec *d) {
         if (d->mbi[mb].slice >= 0) return -1;
         int r = cabac ? h264_mb_cabac(d) : h264_mb_cavlc(d);
         if (r < 0) return -1;
-        d->bypass = d->act_sps->transform_bypass && d->qp == 0;
         h264_recon_mb(d);
         h264_save_mb(d);
         d->mbs_decoded++;
