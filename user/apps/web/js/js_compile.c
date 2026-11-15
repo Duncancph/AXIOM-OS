@@ -187,6 +187,9 @@ static void set_line(FS *fs, int line) {
 static uint32_t cst(FS *fs, jsval v) {
     if (!fs->chash || fs->nconsts * 2 >= fs->chcap) {
         uint32_t nc = fs->chcap ? fs->chcap * 2 : 64;
+        /* constants added by cst_new (functions, templates) aren't in the table yet but get hashed now:
+         * make it more than twice as big as all of them, or it can fill up and the probing never ends */
+        while (nc <= fs->nconsts * 2) nc *= 2;
         uint32_t *h = (uint32_t *)calloc(nc, sizeof(uint32_t));
         if (!h) cg_error(fs, 0, "out of memory");
         for (uint32_t i = 0; i < fs->nconsts; i++) {
