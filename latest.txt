@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 93
-notes Web plays video and sound in pages (MP4, MP3, WAV); the kernel is now called Axiom Core and the Terminal shell CMD
-file kernel b93/thane.elf.gz 17906760 2299c12ccb817d7fea69d982378e8cb5f6aa42cf403ae2e4fdbeaeb4b8f574d5
-file initrd b93/initrd.tar.gz 1280000 b976a77f430c5ca633ff34fd3ff9e50c29d32affe9487f75f53b7c267c9aa980
-file bootx64 b93/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b93/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 304402207e800f8083de2bc4277400d29725454c60161c5f7264f7003452990f8fb91a740220390e3baff37b2c735111eab84453a23d6067f26e5329dde30c59949ca199006d
+build 94
+notes System Monitor shows every process (apps first, the list scrolls)
+file kernel b94/thane.elf.gz 17910856 62a03427153b6450df01d03eba1214fd1851d4fe7f4d9fb7de6ff3c16c61c6aa
+file initrd b94/initrd.tar.gz 1280000 b976a77f430c5ca633ff34fd3ff9e50c29d32affe9487f75f53b7c267c9aa980
+file bootx64 b94/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b94/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022100db24598d09d4ed401f326d11bdb8b14b703055b8d74955663efc665ef12db6cc0220090b142c619aeee5dba9f87385b05944a4f0b04a2cefabda0e0148a308b6df4c
