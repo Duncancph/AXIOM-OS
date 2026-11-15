@@ -489,9 +489,8 @@
   getter(DP, 'scrollingElement', function () { return D.root(); });
   getter(DP, 'fonts', function () { return { ready: Promise.resolve(), load: function () { return Promise.resolve([]); }, check: function () { return true; } }; });
   getter(DP, 'currentScript', function () { return null; });
-  var cookies = {};
-  getter(DP, 'cookie', function () { return Object.keys(cookies).map(function (k) { return k + '=' + cookies[k]; }).join('; '); },
-    function (v) { var p = String(v).split(';')[0], i = p.indexOf('='); if (i > 0) { var k = p.slice(0, i).trim(), val = p.slice(i + 1).trim(); if (/expires=Thu, 01 Jan 1970/i.test(v) || /max-age=0/i.test(v)) delete cookies[k]; else cookies[k] = val; } });
+  // document.cookie is the browser's cookie jar (what the server sets and gets back), HttpOnly cookies left out
+  getter(DP, 'cookie', function () { return D.cookieGet(); }, function (v) { D.cookieSet(String(v)); });
   doc.readyState = 'loading';
   doc.getElementById = function (id) { return D.byId(String(id)); };
   doc.querySelector = function (s) { return D.query(null, String(s), false)[0] || null; };

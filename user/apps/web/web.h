@@ -203,6 +203,7 @@ void web_set_title(const char *t);
 void web_viewport(int *w, int *h, int *scroll, int *doc_h);
 void web_scroll_to(int y);
 void web_message(const char *title, const char *msg);   /* alert() */
+void web_busy_status(const char *msg);                  /* a note in the status bar while a script runs (drawn at once) */
 bool web_node_rect(struct node *n, int *x, int *y, int *w, int *h);   /* where it is drawn (page coordinates) */
 long web_http_script(const char *url, char **out, int *status, char *ctype, int ctlen, char *final, int fulen);   /* up to 24 MB */
 long web_http(const char *method, const char *url, const char *body, long blen, const char *headers,

@@ -54,8 +54,7 @@ static uint64_t h_mono(void *c) { return sys_time(); }
 static uint64_t run_start, page_deadline, last_look;
 /* How much processor time the page's scripts have used, counted with the cycle counter (timer jobs
  * are often far shorter than a millisecond). A page that keeps scripts busy without end (YouTube's
- * app, for one) has its scripts turned off after PAGE_CPU_MS, so it can't keep a core busy forever. */
-#define PAGE_CPU_MS ((uint64_t)20000 * (uint64_t)web_time_scale)
+ * app, for one) used to have its scripts turned off after 20 s; now, like other browsers, they run on. */
 static uint64_t cyc_begin, page_cycles, cal_tsc0, cal_ms0;
 static inline uint64_t cyc(void) { uint32_t lo, hi; __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi)); return (uint64_t)hi << 32 | lo; }
 static uint64_t cycles_per_ms(void) {
@@ -64,7 +63,8 @@ static uint64_t cycles_per_ms(void) {
     if (t - cal_ms0 < 200) return 3000000;               /* until measured: assume 3 GHz */
     return (cyc() - cal_tsc0) / (t - cal_ms0);
 }
-static void script_begin(void) { run_start = sys_time(); cyc_begin = cyc(); }
+static bool busy_said;
+static void script_begin(void) { run_start = sys_time(); cyc_begin = cyc(); busy_said = false; }
 static void script_end(void) { if (cyc_begin) page_cycles += cyc() - cyc_begin; cyc_begin = 0; }
 static uint64_t page_cpu_ms(void) { return (page_cycles + (cyc_begin ? cyc() - cyc_begin : 0)) / cycles_per_ms(); }
 static bool skip_said;
@@ -76,8 +76,9 @@ static void scripts_off(const char *why) { con_add("[stopped] ", why); page_on =
 static _Bool h_interrupt(void *c) {
     uint64_t now = sys_time();
     if (!page_on) return true;
-    if (now - run_start > 4000 * (uint64_t)web_time_scale) { scripts_off("a script ran for more than 4 seconds; this page's scripts were turned off"); return true; }
-    if (page_cpu_ms() > PAGE_CPU_MS) { scripts_off("this page's scripts kept the processor busy for 20 seconds, so they were turned off"); return true; }
+    /* Like Chrome, scripts run to the end however long they take; a page that keeps one busy for a while
+     * only gets a note (Esc stops it, the close button still closes Arc). */
+    if (now - run_start > 8000 * (uint64_t)web_time_scale && !busy_said) { busy_said = true; web_busy_status("This page is busy (a script is still running). Press Esc to stop its scripts."); }
     if (now - last_look > 100) {
         last_look = now;
         struct dunc_event e;
@@ -540,6 +541,16 @@ NATIVE(n_set_disabled) {
 }
 
 /* ---------------- natives: the window ---------------- */
+NATIVE(n_cookie_get) {
+    static char out[8192];
+    http_cookie_script_get(D->base, out, sizeof out);
+    return js_str(rt, out, -1);
+}
+NATIVE(n_cookie_set) {
+    char *v = js_to_cstring(rt, A(argc, argv, 0));
+    if (v) { http_cookie_script_set(D->base, v); free(v); }
+    return js_undefined();
+}
 NATIVE(n_rect) {
     struct node *n = N(A(argc, argv, 0));
     int x = 0, y = 0, w = 0, h = 0;
@@ -644,7 +655,6 @@ void js_run_timers(void) {
         if (timers[i].every) timers[i].due = now + timers[i].every; else { timers[i].used = false; }
         jsval keep = fn; js_root(rt, &keep);
         if (!timers[i].every) timers[i].fn = js_undefined();
-        if (page_cpu_ms() > PAGE_CPU_MS) { scripts_off("this page's scripts kept the processor busy for 20 seconds, so they were turned off"); break; }
         script_begin();
         jsval res;
         if (js_call(rt, keep, js_undefined(), 0, 0, &res) < 0) report("timer");
@@ -664,10 +674,10 @@ NATIVE(n_http) {
      * page gets 20 s of them in all: past that its scripts' requests fail at once instead of keeping
      * the window waiting. */
     long n;
-    if (page_net_ms > 20000) n = -1;
+    if (page_net_ms > 180000) n = -1;
     else {
         uint64_t t0 = sys_time(), c0 = cyc(); (void)c0;
-        web_fetch_timeout = 5000; web_fetch_deadline = sys_time() + 10000;
+        web_fetch_timeout = 15000; web_fetch_deadline = sys_time() + 30000;
         web_script_waiting++;
         n = web_http(method ? method : "GET", abs, body, body ? strlen(body) : 0, hdr, &out, &status, ctype, sizeof ctype, final, sizeof final);
         web_script_waiting--;
@@ -676,7 +686,7 @@ NATIVE(n_http) {
         page_net_ms += waited;
         /* waiting for the network isn't the script running: don't count it against the time limits */
         run_start += waited; page_deadline += waited; if (cyc_begin) cyc_begin += waited * cycles_per_ms();
-        if (page_net_ms > 20000) con_add("[skipped] ", "this page's scripts spent 20 s waiting for the network; their further requests are skipped");
+        if (page_net_ms > 180000) con_add("[skipped] ", "this page's scripts spent 3 minutes waiting for the network; their further requests are skipped");
     }
     free(method); free(u); free(body); free(hdr);
     jsval a = js_array(rt); HOLD(a);
@@ -773,17 +783,13 @@ static void run_script_node(struct node *s) {
     if ((!src || !src[0]) && !s->first && (!s->text || !s->tlen)) return;   /* empty for now: runs once it gets a src or text */
     set_attr(s, "data-axiom-ran", "1", 1);
     src = node_attr(s, "src");
-    if (sq_active && sys_time() > page_deadline) {           /* the page's own scripts get 15 s; ones added later run when added */
-        if (!skip_said) { skip_said = true; con_add("[skipped] ", "the page's scripts took too long (over 15 seconds); the rest were skipped"); }
-        return;
-    }
+
     if (src && src[0]) {
         char *u = malloc(8192), *fin = malloc(8192);          /* long addresses (lists of modules) */
         if (!u || !fin) { free(u); free(fin); return; }
         resolve_url(D->base, src, u, 8192);
         char *t = 0, ct[96]; int st = 0;           /* scripts are run as sent (UTF-8), not converted like page text */
-        uint64_t now = sys_time();                        /* a script file gets until the page's time is up (5 s at least) */
-        web_fetch_deadline = page_deadline > now + 5000 ? page_deadline : now + 5000;
+        web_fetch_deadline = sys_time() + 60000;          /* a script file may take up to a minute to arrive */
         web_script_waiting++;
         long n = web_http_script(u, &t, &st, ct, sizeof ct, fin, 8192);
         web_script_waiting--;
@@ -826,7 +832,7 @@ static const struct { const char *name; js_native fn; int n; } natives[] = {
     { "insert", n_insert, 3 }, { "remove", n_remove, 1 }, { "clone", n_clone, 2 }, { "query", n_query, 3 }, { "matches", n_matches, 2 },
     { "byId", n_by_id, 1 }, { "value", n_value, 1 }, { "setValue", n_set_value, 2 }, { "checked", n_checked, 1 },
     { "setChecked", n_set_checked, 2 }, { "selIndex", n_sel_index, 1 }, { "setSelIndex", n_set_sel_index, 2 },
-    { "disabled", n_disabled, 1 }, { "setDisabled", n_set_disabled, 2 }, { "rect", n_rect, 1 }, { "display", n_display, 1 },
+    { "disabled", n_disabled, 1 }, { "setDisabled", n_set_disabled, 2 }, { "rect", n_rect, 1 }, { "cookieGet", n_cookie_get, 0 }, { "cookieSet", n_cookie_set, 1 }, { "display", n_display, 1 },
     { "viewport", n_viewport, 0 }, { "scrollTo", n_scroll_to, 1 }, { "title", n_title, 0 }, { "setTitle", n_set_title, 1 },
     { "url", n_url, 0 }, { "base", n_base, 0 }, { "navigate", n_navigate, 1 }, { "alert", n_alert, 1 }, { "resolve", n_resolve, 1 },
     { "setTimer", n_set_timer, 3 }, { "clearTimer", n_clear_timer, 1 }, { "http", n_http, 4 },

@@ -79,6 +79,8 @@ int http_cookie_count(void);
 void http_cookies_clear(void);
 /* "name=value; ..." for a listing (about:cookies style): returns lines "domain path name" for each cookie */
 int http_cookie_list(char *out, int max);
+int http_cookie_script_get(const char *page_url, char *out, int max);   /* document.cookie (no HttpOnly ones) */
+void http_cookie_script_set(const char *page_url, const char *value);   /* document.cookie = "..." */
 const char *http_strerror(long e);
 /* security of the last http_fetch/http_get: secure = 1 for a verified https:// connection */
 struct http_security { int secure; char cipher[48], subject[96], issuer[96]; char addr[IP_STRLEN]; };   /* addr: the server address used */

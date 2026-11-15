@@ -1600,6 +1600,7 @@ void web_viewport(int *w, int *h, int *s, int *dh) {
     *w = page_w(); *h = view_h(); *s = scroll; *dh = lay.doc_h;
 }
 void web_scroll_to(int y) { scroll = y; scroll_by(0); need_draw = true; }
+void web_busy_status(const char *msg) { strncpy0(status_text, msg, sizeof status_text); draw(); }
 void web_message(const char *title, const char *msg) {
     char m[200]; strncpy0(m, msg, sizeof m);
     sys_notify(title, m);

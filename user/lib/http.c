@@ -180,7 +180,7 @@ int http_options;
 #define MAX_COOKIES 300
 #define COOKIES_PER_DOMAIN 50
 #define COOKIE_MAX 4096
-struct cookie { char *name, *value; char domain[128], path[128]; int64_t expires; bool secure, host_only; uint32_t seq; };
+struct cookie { char *name, *value; char domain[128], path[128]; int64_t expires; bool secure, host_only, httponly; uint32_t seq; };
 static struct cookie *jar[MAX_COOKIES];
 static int njar;
 static bool jar_loaded, jar_dirty;
@@ -255,7 +255,7 @@ static void jar_save(void) {
     for (int i = 0; i < njar; i++) {
         struct cookie *c = jar[i];
         if (!c->expires) continue;                     /* session cookies live only while the program runs */
-        n += ksnprintf(b + n, COOKIE_MAX + 300, "%s\t%d\t%s\t%d\t%ld\t%s\t%s\n", c->domain, c->host_only, c->path, c->secure, (long)c->expires, c->name, c->value);
+        n += ksnprintf(b + n, COOKIE_MAX + 300, "%s\t%d\t%s\t%d\t%ld\t%s\t%s\t%d\n", c->domain, c->host_only, c->path, c->secure, (long)c->expires, c->name, c->value, c->httponly);
     }
     fs_mkdir("/home/.web");
     fs_write(COOKIE_FILE, b, n);
@@ -263,7 +263,7 @@ static void jar_save(void) {
 }
 
 static void cookie_store(const char *name, int nl, const char *value, int vl, const char *domain, const char *path, int64_t expires,
-                         bool secure, bool host_only) {
+                         bool secure, bool host_only, bool httponly) {
     for (int i = 0; i < njar; i++) {                   /* replace a cookie with the same name, domain and path */
         struct cookie *c = jar[i];
         if (!strcmp(c->domain, domain) && !strcmp(c->path, path) && (int)strlen(c->name) == nl && !memcmp(c->name, name, nl)) {
@@ -283,7 +283,7 @@ static void cookie_store(const char *name, int nl, const char *value, int vl, co
     if (!c->name || !c->value) { free(c->name); free(c->value); free(c); return; }
     memcpy(c->name, name, nl); c->name[nl] = 0; memcpy(c->value, value, vl); c->value[vl] = 0;
     strncpy0(c->domain, domain, sizeof c->domain); strncpy0(c->path, path, sizeof c->path);
-    c->expires = expires; c->secure = secure; c->host_only = host_only; c->seq = ++cookie_seq;
+    c->expires = expires; c->secure = secure; c->host_only = host_only; c->httponly = httponly; c->seq = ++cookie_seq;
     jar[njar++] = c;
     if (expires) jar_dirty = true;
 }
@@ -303,12 +303,12 @@ static void jar_load(void) {
     for (char *l = b; *l;) {
         char *e = l; while (*e && *e != '\n') e++;
         char save = *e; *e = 0;
-        char *f[7]; int k = 0; f[k++] = l;
-        for (char *q = l; *q && k < 7; q++) if (*q == '\t') { *q = 0; f[k++] = q + 1; }
-        if (k == 7) {
+        char *f[8]; int k = 0; f[k++] = l;
+        for (char *q = l; *q && k < 8; q++) if (*q == '\t') { *q = 0; f[k++] = q + 1; }
+        if (k >= 7) {
             int64_t exp = 0; for (const char *q = f[4]; *q >= '0' && *q <= '9'; q++) exp = exp * 10 + (*q - '0');
             if (exp > now && f[0][0] && f[2][0] == '/' && f[5][0])
-                cookie_store(f[5], strlen(f[5]), f[6], strlen(f[6]), f[0], f[2], exp, f[3][0] == '1', f[1][0] == '1');
+                cookie_store(f[5], strlen(f[5]), f[6], strlen(f[6]), f[0], f[2], exp, f[3][0] == '1', f[1][0] == '1', k == 8 && f[7][0] == '1');
         }
         *e = save; l = *e ? e + 1 : e;
     }
@@ -317,7 +317,7 @@ static void jar_load(void) {
 }
 
 /* one Set-Cookie header value from host/path */
-static void set_cookie(const char *v, const char *host, const char *rpath, bool https) {
+static void set_cookie(const char *v, const char *host, const char *rpath, bool https, bool from_script) {
     const char *eq = v; while (*eq && *eq != '=' && *eq != ';') eq++;
     if (*eq != '=') return;
     const char *n0 = v, *n1 = eq; while (*n0 == ' ') n0++; while (n1 > n0 && n1[-1] == ' ') n1--;
@@ -329,7 +329,7 @@ static void set_cookie(const char *v, const char *host, const char *rpath, bool 
     int nl = n1 - n0, vl = v1 - v0;
     if (!nl || nl + vl > COOKIE_MAX) return;
     char domain[128] = "", path[128] = "";
-    int64_t expires = 0, maxage = 0; bool has_maxage = false, secure = false;
+    int64_t expires = 0, maxage = 0; bool has_maxage = false, secure = false, httponly = false;
     for (const char *a = vend; *a;) {
         if (*a == ';' || *a == ' ') { a++; continue; }
         const char *ae = a; while (*ae && *ae != ';') ae++;
@@ -343,9 +343,11 @@ static void set_cookie(const char *v, const char *host, const char *rpath, bool 
         else if (starts_ci(a, "expires=")) expires = parse_http_date(val);
         else if (starts_ci(a, "max-age=")) { has_maxage = true; bool neg = val[0] == '-'; maxage = katoi(val + neg); if (neg) maxage = -1; }
         else if (starts_ci(a, "secure") && (a + 6 == ae || a[6] == ' ' || a[6] == '=')) secure = true;
+        else if (starts_ci(a, "httponly") && (a + 8 == ae || a[8] == ' ')) httponly = true;
         a = ae;
     }
     if (secure && !https) return;
+    if (from_script && httponly) return;                   /* scripts can't make HttpOnly cookies */
     bool host_only = !domain[0];
     if (host_only) strncpy0(domain, host, sizeof domain);
     else {
@@ -360,32 +362,56 @@ static void set_cookie(const char *v, const char *host, const char *rpath, bool 
         if (!k) strncpy0(path, "/", sizeof path);
     }
     if (has_maxage) expires = maxage <= 0 ? 1 : unix_now() + maxage;
-    cookie_store(n0, nl, v0, vl, domain, path, expires, secure, host_only);
+    if (from_script)                                       /* nor replace one */
+        for (int i = 0; i < njar; i++) if (jar[i]->httponly && !strcmp(jar[i]->domain, domain) && !strcmp(jar[i]->path, path) &&
+                                          (int)strlen(jar[i]->name) == nl && !memcmp(jar[i]->name, n0, nl)) return;
+    cookie_store(n0, nl, v0, vl, domain, path, expires, secure, host_only, httponly);
 }
 
 /* the Cookie header for a request (most specific paths first); returns its length */
-static int cookie_header(char *out, int max, const char *host, const char *path, bool https) {
+static int cookie_header_(char *out, int max, const char *host, const char *path, bool https, bool for_script) {
     int64_t now = unix_now();
     for (int i = 0; i < njar;) if (jar[i]->expires && jar[i]->expires <= now) { cookie_free(i); jar_dirty = true; } else i++;
     struct cookie *m[MAX_COOKIES]; int nm = 0;
     for (int i = 0; i < njar; i++) {
         struct cookie *c = jar[i];
         if (c->secure && !https) continue;
+        if (for_script && c->httponly) continue;
         if (c->host_only ? strcmp(c->domain, host) : !domain_match(host, c->domain)) continue;
         if (!path_match(path, c->path)) continue;
         int j = nm++;
         while (j > 0 && (strlen(m[j - 1]->path) < strlen(c->path) || (strlen(m[j - 1]->path) == strlen(c->path) && m[j - 1]->seq > c->seq))) { m[j] = m[j - 1]; j--; }
         m[j] = c;
     }
-    if (!nm) return 0;
-    int n = ksnprintf(out, max, "Cookie: ");
+    if (!nm) { if (max > 0) out[0] = 0; return 0; }
+    int n = for_script ? 0 : ksnprintf(out, max, "Cookie: ");
     for (int i = 0; i < nm; i++) {
         int need = strlen(m[i]->name) + strlen(m[i]->value) + 4;
         if (n + need + 3 >= max) break;
         n += ksnprintf(out + n, max - n, "%s%s=%s", i ? "; " : "", m[i]->name, m[i]->value);
     }
-    n += ksnprintf(out + n, max - n, "\r\n");
+    if (!for_script) n += ksnprintf(out + n, max - n, "\r\n");
     return n;
+}
+static int cookie_header(char *out, int max, const char *host, const char *path, bool https) { return cookie_header_(out, max, host, path, https, false); }
+
+/* document.cookie: the cookies a page's scripts may see, and a cookie a script sets (the same jar the
+ * requests use, so a site's "accept cookies" choice and logins work like in other browsers) */
+int http_cookie_script_get(const char *page_url, char *out, int max) {
+    static struct url u;
+    if (max > 0) out[0] = 0;
+    if (parse_url(page_url, &u)) return 0;
+    for (char *h = u.host; *h; h++) *h = lower(*h);
+    jar_load();
+    return cookie_header_(out, max, u.host, u.path, u.https, true);
+}
+void http_cookie_script_set(const char *page_url, const char *value) {
+    static struct url u;
+    if (parse_url(page_url, &u)) return;
+    for (char *h = u.host; *h; h++) *h = lower(*h);
+    jar_load();
+    set_cookie(value, u.host, u.path, u.https, true);
+    jar_save();
 }
 
 int http_cookie_count(void) { jar_load(); return njar; }
@@ -509,7 +535,7 @@ long http_request(const char *url_in, const struct http_req *rq, http_sink sink,
             else if (starts_ci(line, "location:")) strncpy0(loc, v, sizeof loc);
             else if (starts_ci(line, "content-type:") && ctype) strncpy0(ctype, v, ctlen);
             else if (starts_ci(line, "content-encoding:") && (starts_ci(v, "gzip") || starts_ci(v, "x-gzip"))) gz = want_gz;
-            else if (starts_ci(line, "set-cookie:") && cookies) set_cookie(v, u.host, u.path, u.https);
+            else if (starts_ci(line, "set-cookie:") && cookies) set_cookie(v, u.host, u.path, u.https, false);
             *nl = save; line = nl + 1;
         }
         if (cookies) jar_save();
