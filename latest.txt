@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 69
-notes Web stays responsive while big sites load their scripts; wide 1920x800 screen (restart twice)
-file kernel b69/thane.elf.gz 14624544 b728615ce1cc69fc2f60495743c7e55523791a77847b974dbff323b8892a2c48
-file initrd b69/initrd.tar.gz 1269760 399ab03363a9110747d798a8c46b9b0aa0900def67dab8741386674c78a4be24
-file bootx64 b69/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b69/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3044022026c2841627b9d85dfedeff1066bb10a13745222a708cf237796eb2a4bda5423402200a1ead960a1f8b44afcd0b034d9fc6c3dbb6c3bb7a068332377209b73a657ed0
+build 70
+notes Fix: the chosen screen size now takes effect (restart twice after updating)
+file kernel b70/thane.elf.gz 14624568 1df86c4d2e036d8f5f6671e072a4ea8eb4a86877575a52813f6c9514354fd5be
+file initrd b70/initrd.tar.gz 1269760 cdcbcfecd5d76649b93aedcfe2835fbaf64675ea78ba72ded907228fc5a2aab6
+file bootx64 b70/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b70/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304402205bb9f66b1157466a0eaba0a95cff7145d1404eb6e0dcdae1478154f01ebb06a00220164eb0fa32235d8c4409612f43354e60b901533c375fe9aa98a36c00970bfd13
