@@ -187,7 +187,7 @@ static bool media_dep;
 static int cur_origin;
 static struct ruleset *cur_set;
 static int viewport_w, media_gen;
-#define MAX_RULES 30000
+#define MAX_RULES 60000
 
 static uint32_t hash_s(const char *s, char kind) { uint32_t h = 2166136261u ^ (uint8_t)kind; for (; *s; s++) h = (h ^ (uint8_t)*s) * 16777619u; return h; }
 static uint32_t hash_ci(const char *s, int n, char kind) { uint32_t h = 2166136261u ^ (uint8_t)kind; for (int i = 0; i < n; i++) h = (h ^ (uint8_t)lc(s[i])) * 16777619u; return h; }
@@ -498,7 +498,7 @@ static char *strip_comments(const char *s, long n, long *out_len) {
 }
 
 void css_add_sheet(const char *text, long len, const char *base_url, int import_depth) {
-    if (len > (2l << 20)) len = 2l << 20;
+    if (len > (8l << 20)) len = 8l << 20;
     long n;
     char *s = strip_comments(text, len, &n);
     if (s) parse_rules(s, (int)n, 0, base_url ? base_url : "", import_depth, 0);
@@ -1090,6 +1090,9 @@ static void apply(struct style *st, const struct style *ps, const char *prop, co
     if (P("overflow") || P("overflow-x") || P("overflow-y")) { if (eq_ci(v, vl, "hidden") || eq_ci(v, vl, "auto") || eq_ci(v, vl, "scroll") || pre_ci(v, vl, "hidden ")) st->bfc = 1; return; }
     if (P("float")) { st->floated = eq_ci(v, vl, "left") ? 1 : eq_ci(v, vl, "right") ? 2 : 0; return; }
     if (P("position")) { st->pos = eq_ci(v, vl, "absolute") ? 1 : eq_ci(v, vl, "fixed") ? 2 : eq_ci(v, vl, "sticky") ? 0 : 0; return; }
+    /* boxes moved far off the screen (top/left -1000px and the like) are a way of hiding them */
+    if (P("top")) { struct len l; st->off_top = parse_len(v, vl, st->fsize, &l, false) && l.t == L_PX && l.v < -999; return; }
+    if (P("left")) { struct len l; st->off_left = parse_len(v, vl, st->fsize, &l, false) && l.t == L_PX && l.v < -999; return; }
     if (P("box-sizing")) { st->bsizing = eq_ci(v, vl, "border-box"); return; }
     if (P("border-spacing")) { struct len l; int k = tokens(v, vl, t, tl, 2); if (k && parse_len(t[0], tl[0], st->fsize, &l, false) && l.t == L_PX) st->spacing = l.v < 0 ? 0 : l.v > 50 ? 50 : l.v; return; }
     if (P("border-collapse")) { st->bcollapse = eq_ci(v, vl, "collapse"); if (st->bcollapse) st->spacing = 0; return; }
@@ -1342,6 +1345,7 @@ static void style_elem(struct node *e, const struct style *ps) {
     /* elements hidden by moving them away or clipping them to nothing */
     if (st->pos && ((st->w.t == L_PX && st->w.v <= 1) || (st->h.t == L_PX && st->h.v <= 1))) st->display = D_NONE;
     if (st->pos && (st->m[3].t == L_PX && st->m[3].v < -1000)) st->display = D_NONE;
+    if (st->pos && (st->off_top || st->off_left)) st->display = D_NONE;
     if (st->floated && (st->display == D_INLINE || st->display == D_INLINE_BLOCK || st->display == D_LIST_ITEM || st->display == D_INLINE_FLEX))
         st->display = st->display == D_INLINE_FLEX ? D_FLEX : D_BLOCK;
     if (st->floated && (st->display == D_ROW || st->display == D_CELL || st->display == D_ROW_GROUP)) st->floated = 0;

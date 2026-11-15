@@ -11,7 +11,7 @@ static int WW = 900, WH = 640;
 #define SCROLLBAR 12
 #define MAXPAGE (4l << 20)
 #define MAXIMG (8l << 20)
-#define MAXCSS (1l << 20)
+#define MAXCSS (8l << 20)
 
 static struct app a;
 static char url[600] = "about:home", status_text[220];
@@ -448,7 +448,7 @@ void form_init_control(struct doc *d, struct node *n) {
         char b[200]; int k = 0; text_content(n, b, sizeof b, &k, 0);
         while (k && b[k - 1] == ' ') b[--k] = 0;
         fc->label = ar_strndup(&d->ar, b[0] == ' ' ? b + 1 : b, strlen(b[0] == ' ' ? b + 1 : b));
-        if (!b[0]) fc->label = "Button";
+        if (!b[0]) { const char *al = node_attr(n, "aria-label"); fc->label = al && al[0] ? al : ""; }   /* an icon button */
     } else if (fc->type == FC_SUBMIT) fc->label = v && v[0] ? v : "Submit";
     else if (fc->type == FC_RESET) fc->label = v && v[0] ? v : "Reset";
     else if (fc->type == FC_BUTTON) fc->label = v ? v : "";
@@ -708,7 +708,7 @@ static void walk_styles(struct doc *d, struct node *e, int depth) {
             if (rel && pre_ci(rel, "alternate")) sheet = false;
             c->css_done = 1;
             if (sheet && href) {
-                static char u[600]; resolve_url(d->base, href, u, sizeof u);
+                static char u[8192]; resolve_url(d->base, href, u, sizeof u);
                 ksnprintf(status_text, sizeof status_text, "Loading style sheet %s", u);
                 draw();
                 long n; char *t = web_fetch_text(u, &n, MAXCSS);
@@ -776,7 +776,7 @@ static void scan_new_styles(struct doc *d, struct node *e, int depth) {     /* <
             bool sheet = false;
             if (rel) for (const char *q = rel; *q; q++) if (pre_ci(q, "stylesheet")) sheet = true;
             if (sheet && href && nsheets < 40) {
-                static char u[600]; resolve_url(d->base, href, u, sizeof u);
+                static char u[8192]; resolve_url(d->base, href, u, sizeof u);
                 long n; char *t = web_fetch_text(u, &n, MAXCSS); nsheets++;
                 if (t) { char *copy = ar_strndup(&d->ar, t, n); free(t); if (copy) css_add_sheet(copy, n, u, 0); }
             }
@@ -1510,7 +1510,8 @@ void web_text_changed(struct node *n) {                    /* a <button>'s label
             char b[200]; int l = 0; text_content(n, b, sizeof b, &l, 0);
             while (l && b[l - 1] == ' ') b[--l] = 0;
             const char *t = b[0] == ' ' ? b + 1 : b;
-            n->fc->label = t[0] ? ar_strndup(&doc->ar, t, strlen(t)) : "Button";
+            const char *al = node_attr(n, "aria-label");
+            n->fc->label = t[0] ? ar_strndup(&doc->ar, t, strlen(t)) : al && al[0] ? al : "";
             return;
         }
 }
