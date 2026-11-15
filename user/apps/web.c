@@ -1416,8 +1416,19 @@ void web_navigate(const char *u) {                         /* later, from the ma
 }
 void web_page_url(char *out, int n) { strncpy0(out, url, n); }
 void web_set_title(const char *t) { set_title(); }
+/* Scripts asking for sizes and positions after changing the page need it laid out again. Some (animation
+ * libraries) change and measure in a loop; on a big page each layout is slow, so it's redone at most 4
+ * times a second (scripts get the last one's numbers in between) and the time limits are checked next. */
+static uint64_t last_script_layout;
+static void layout_for_script(void) {
+    if (!(need_layout || need_cascade)) return;
+    uint64_t now = sys_time();
+    if (now - last_script_layout < 250) return;
+    relayout(); last_script_layout = sys_time();
+    dom_check_soon();
+}
 void web_viewport(int *w, int *h, int *s, int *dh) {
-    if (need_layout || need_cascade) relayout();
+    layout_for_script();
     *w = page_w(); *h = view_h(); *s = scroll; *dh = lay.doc_h;
 }
 void web_scroll_to(int y) { scroll = y; scroll_by(0); need_draw = true; }
@@ -1427,7 +1438,7 @@ void web_message(const char *title, const char *msg) {
     ksnprintf(status_text, sizeof status_text, "The page says: %s", m); need_draw = true;
 }
 bool web_node_rect(struct node *n, int *x, int *y, int *w, int *h) {
-    if (need_layout || need_cascade) relayout();
+    layout_for_script();
     int x0 = 1 << 30, y0 = 1 << 30, x1 = -(1 << 30), y1 = -(1 << 30);
     for (int i = 0; i < lay.nit; i++) {
         struct node *s = lay.it[i].src; int k = 0;

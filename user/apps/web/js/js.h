@@ -20,6 +20,7 @@ struct js_host {
 
 js_rt *js_new(const struct js_host *host);
 void   js_free(js_rt *rt);
+void   js_check_soon(js_rt *rt);   /* ask the host's interrupt hook at the next step (after slow native work) */
 
 /* ---- running code ---- */
 /* Run a script in the global scope. Returns 0, or -1 if it threw (see js_error_text). */

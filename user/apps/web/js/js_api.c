@@ -546,3 +546,5 @@ void js_unroot(js_rt *rt, jsval *slot) {
 }
 void js_gc(js_rt *rt) { gc_collect(rt); }
 long js_heap_bytes(js_rt *rt) { return (long)rt->bytes; }
+
+void js_check_soon(js_rt *rt) { if (rt) rt->interrupt_count = 0; }

@@ -199,6 +199,7 @@ void js_run_timers(void);
 void js_eval_url(const char *code);             /* a javascript: link */
 void js_console_lines(char *out, long max);     /* for about:console */
 bool js_scripts_pending(void);
+void dom_check_soon(void);
 void js_stop_scripts(void);
 bool js_page_step(char *status, int n);
 void web_requeue_event(const struct dunc_event *e);   /* an event seen while a script ran, handled afterwards */

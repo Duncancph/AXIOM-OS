@@ -743,6 +743,7 @@ void js_page_start(struct doc *d) {
 }
 
 bool js_scripts_pending(void) { return sq_active; }
+void dom_check_soon(void) { if (rt && page_on) js_check_soon(rt); }
 void js_stop_scripts(void) { if (sq_active && page_on) scripts_off("stopped with Esc"); }
 /* run the next of the page's scripts; false when there are none left (then "loaded" fires) */
 bool js_page_step(char *status, int n) {
