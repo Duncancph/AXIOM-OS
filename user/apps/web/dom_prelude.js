@@ -584,7 +584,7 @@
     var names = ['none', 'block', 'inline', 'inline-block', 'list-item', 'table', 'table-row-group', 'table-row', 'table-cell', 'table-caption', 'inline-table', 'flex', 'inline-flex'];
     var c = D.computed(el) || [16, 0, 0, 0, 0, 0, 1, 0, 0], rgb = function (v) { return 'rgb(' + ((v >> 16) & 255) + ', ' + ((v >> 8) & 255) + ', ' + (v & 255) + ')'; };
     var o = { display: disp >= 0 ? names[disp] : 'none', visibility: c[6] ? 'visible' : 'hidden', opacity: '1',
-      position: ['static', 'absolute', 'fixed'][c[7]] || 'static', width: el.offsetWidth + 'px', height: el.offsetHeight + 'px',
+      position: ['static', 'absolute', 'fixed', 'relative'][c[7]] || 'static', width: el.offsetWidth + 'px', height: el.offsetHeight + 'px',
       fontSize: c[0] + 'px', color: rgb(c[1]), backgroundColor: c[2] ? rgb(c[2]) : 'rgba(0, 0, 0, 0)', fontWeight: c[3] ? '700' : '400',
       fontStyle: c[4] ? 'italic' : 'normal', lineHeight: c[5] ? c[5] + 'px' : 'normal', textAlign: ['left', 'right', 'center', 'justify'][c[8]] || 'left',
       fontFamily: 'Inter, sans-serif', direction: 'ltr', overflow: 'visible', transform: 'none', zIndex: 'auto', boxSizing: 'content-box',

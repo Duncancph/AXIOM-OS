@@ -254,7 +254,7 @@ static void inline_intrinsic(struct node *e, int cbw, int *line, int *mn, int *m
     for (struct node *c = e->ffirst; c; c = c->fnext) {
         if (c->type == N_TEXT) { text_intrinsic(e->st, c->text, c->tlen, line, mn, mx); continue; }
         const struct style *st = c->st;
-        if (!st || st->display == D_NONE) continue;
+        if (!st || st->display == D_NONE || st->pos == 1 || st->pos == 2) continue;
         int dsp = st->display;
         if (c->tag == T_BR) { if (*line > *mx) *mx = *line; *line = 0; continue; }
         if (dsp == D_INLINE && c->tag != T_IMG && !is_control(c) && d < MAX_DEPTH) {
@@ -294,7 +294,7 @@ static void intrinsic(struct node *e, int cbw, int *mn, int *mx) {
         if (st->display == D_FLEX && !st->flex_col) {
             /* a row: widths add up */
             for (struct node *c = e->ffirst; c; c = c->fnext) {
-                if (c->type != N_ELEM || !c->st || c->st->display == D_NONE) continue;
+                if (c->type != N_ELEM || !c->st || c->st->display == D_NONE || c->st->pos == 1 || c->st->pos == 2) continue;
                 int cmn, cmx; intrinsic(c, cbw, &cmn, &cmx);
                 b += cmx + st->gap; if (st->flex_wrap) { if (cmn > a) a = cmn; } else a += cmn + st->gap;
             }
@@ -359,6 +359,7 @@ static int fl_clear(struct flist *fl, int sides) {
 
 static void flow_children(struct fctx *c, struct node *e, struct ictx ic);
 static void layout_block(struct fctx *c, struct node *n, struct ictx ic, int forced_w);
+static void defer_abs(struct fctx *c, struct node *n, struct ictx ic);
 
 static void line_metrics(struct fctx *c, int asc, int desc) { if (asc > c->asc) c->asc = asc; if (desc > c->desc) c->desc = desc; }
 
@@ -639,6 +640,7 @@ static void flow_node_(struct fctx *c, struct node *n, struct ictx ic) {
     if (n->type == N_TEXT) { inline_text(c, n->text, n->tlen, &ic); return; }
     const struct style *st = n->st;
     if (!st || st->display == D_NONE) return;
+    if (st->pos == 1 || st->pos == 2) { defer_abs(c, n, ic); return; }   /* placed later, against its containing block */
     if (st->floated && c->fl) {
         if (c->has) {                                      /* after this line */
             if (c->pfloat) flush_line(c, false);
@@ -938,6 +940,7 @@ __attribute__((noinline)) static bool layout_flex(struct fctx *cc, struct node *
     for (struct node *c = e->ffirst; c; c = c->fnext) {
         if (c->type == N_TEXT) { for (int i = 0; i < c->tlen; i++) if (!is_ws(c->text[i])) return false; continue; }
         if (!c->st || c->st->display == D_NONE) continue;
+        if (c->st->pos == 1 || c->st->pos == 2) { defer_abs(cc, c, ic); continue; }
         if (n >= 64) return false;
         items[n++] = c;
     }
@@ -1060,6 +1063,79 @@ __attribute__((noinline)) static void replaced_block(struct fctx *cc, struct nod
     n->st = keep;
 }
 
+/* ---------------- absolute and fixed boxes ----------------
+ * They are left out of the flow where they appear (defer_abs, remembering where they would have been), and
+ * placed once their containing block - the nearest positioned ancestor, or the window - has its size. */
+int layout_viewport_h = 700;
+struct apend { struct node *n; struct ictx ic; int sx, sy; uint8_t fixed; };
+static struct apend *apend; static int napend, capend, abs_bottom;
+static void defer_abs(struct fctx *c, struct node *n, struct ictx ic) {
+    if (napend >= capend) {
+        int nc = capend ? capend * 2 : 64;
+        if (nc > 8192) return;
+        struct apend *na = ar_alloc(&L->ar, nc * sizeof *na);
+        if (!na) return;
+        if (napend) memcpy(na, apend, napend * sizeof *na);
+        apend = na; capend = nc;
+    }
+    int sy = c->has ? c->y : c->y + (c->pm > 0 ? c->pm : 0);
+    apend[napend++] = (struct apend){ n, ic, c->has ? c->x : c->left, sy, n->st->pos == 2 };
+}
+static void rev_items(int i, int j) { for (j--; i < j; i++, j--) { struct ditem t = L->it[i]; L->it[i] = L->it[j]; L->it[j] = t; } }
+static void move_items_before(int at, int i0, int i1) { if (at >= i0) return; rev_items(at, i0); rev_items(i0, i1); rev_items(at, i1); }
+static void shift_xy(int i0, int i1, int dx, int dy) { for (int i = i0; i < i1; i++) { L->it[i].x += dx; L->it[i].y += dy; } }
+static void place_abs(const struct apend *p, int cx, int cy, int cw, int ch, int first_item) {
+    struct node *n = p->n; const struct style *st = n->st;
+    if (depth >= MAX_DEPTH) return;
+    bool has[4]; int ins[4];
+    for (int i = 0; i < 4; i++) { has[i] = st->inset[i].t == L_PX || st->inset[i].t == L_PCT; ins[i] = has[i] ? rlen(st->inset[i], (i & 1) ? cw : ch) : 0; }
+    int frame = rlen(st->p[1], cw) + rlen(st->p[3], cw) + bwid(st, 1) + bwid(st, 3);
+    int ml = st->m[3].t == L_AUTO ? 0 : rlen(st->m[3], cw), mr = st->m[1].t == L_AUTO ? 0 : rlen(st->m[1], cw);
+    int ow;                                             /* border box width */
+    if (st->w.t == L_PX || st->w.t == L_PCT) ow = rlen(st->w, cw) + (st->bsizing ? 0 : frame);
+    else if (has[1] && has[3]) ow = cw - ins[1] - ins[3] - ml - mr;
+    else {                                              /* shrink to fit */
+        int mn, mx; intrinsic(n, cw, &mn, &mx);
+        int avail = cw - ins[1] - ins[3];
+        ow = mx; if (ow > avail) ow = avail > mn ? avail : mn;
+        ow -= ml + mr;
+    }
+    if (st->maxw.t == L_PX || st->maxw.t == L_PCT) { int m = rlen(st->maxw, cw) + (st->bsizing ? 0 : frame); if (ow > m) ow = m; }
+    if (st->minw.t == L_PX || st->minw.t == L_PCT) { int m = rlen(st->minw, cw) + (st->bsizing ? 0 : frame); if (ow < m) ow = m; }
+    if (ow < 0) ow = 0;
+    int x = has[3] ? cx + ins[3] : has[1] ? cx + cw - ins[1] - (ow + ml + mr) : p->sx;
+    int y0 = has[0] ? cy + ins[0] : p->sy;
+    struct fctx t; memset(&t, 0, sizeof t);
+    t.left = x; t.width = ow + ml + mr; t.x = x; t.y = y0; t.line_first = L->nit; t.bst = st; t.fl = new_flist();
+    int i0 = L->nit;
+    /* height from top + bottom, or a percentage of the containing block: given to the box for the time it's laid out */
+    struct style *ms = (struct style *)st; struct len oh = ms->h; uint8_t obs = ms->bsizing;
+    int mt = rlen(st->m[0], cw), mb = rlen(st->m[2], cw);
+    int vframe = rlen(st->p[0], cw) + rlen(st->p[2], cw) + bwid(st, 0) + bwid(st, 2);
+    if (st->h.t == L_AUTO && has[0] && has[2]) { ms->h.t = L_PX; ms->h.v = ch - ins[0] - ins[2] - mt - mb; ms->bsizing = 1; }
+    else if (st->h.t == L_PCT) { ms->h.t = L_PX; ms->h.v = rlen(oh, ch) + (st->bsizing ? 0 : vframe); ms->bsizing = 1; }
+    if (ms->h.t == L_PX && ms->h.v < 0) ms->h.v = 0;
+    struct node *saved = cur_src; cur_src = n;
+    layout_block(&t, n, p->ic, ow);
+    cur_src = saved;
+    ms->h = oh; ms->bsizing = obs;
+    int i1 = L->nit, h = t.y - y0;
+    if (!has[0] && has[2]) { int ny = cy + ch - ins[2] - h; shift_xy(i0, i1, 0, ny - y0); n->y += ny - y0; y0 = ny; }
+    if (st->z < 0) move_items_before(first_item, i0, i1);    /* behind its containing block's content */
+    if (!p->fixed && y0 + h > abs_bottom) abs_bottom = y0 + h;
+}
+/* place the boxes deferred since p0 that belong to this containing block (all: the window, at the end) */
+static void place_pending(int p0, int cx, int cy, int cw, int ch, int first_item, bool all) {
+    int k = p0;
+    for (int i = p0; i < napend; i++) {
+        struct apend e = apend[i];
+        if (e.fixed && !all) { apend[k++] = e; continue; }
+        if (e.fixed) place_abs(&e, 0, 0, L->doc_w, layout_viewport_h, 0);
+        else place_abs(&e, cx, cy, cw, ch, first_item);
+    }
+    napend = k;
+}
+
 static void layout_block_(struct fctx *c, struct node *n, struct ictx ic, int forced_w);
 static void layout_block(struct fctx *c, struct node *n, struct ictx ic, int forced_w) {
     struct node *saved = cur_src;
@@ -1106,6 +1182,7 @@ static void layout_block_(struct fctx *c, struct node *n, struct ictx ic, int fo
     if (st->clear && c->fl) { int b = fl_clear(c->fl, st->clear); if (b > top) top = b; }
     int x0 = c->left + ml;
     n->y = top;
+    int p0 = napend, first_item = L->nit;
     int bgi = st->bg && n != canvas_node && st->vis ? push(DI_RECT) : -1;
     int bgimg = -1;
     if (st->bgimage && st->vis) {
@@ -1139,6 +1216,13 @@ static void layout_block_(struct fctx *c, struct node *n, struct ictx ic, int fo
     if (bgi >= 0) { struct ditem *b = IT(bgi); b->x = x0; b->y = top; b->w = w + frame; b->h = bottom - top; b->col = st->bg & 0xFFFFFF; }
     if (bgimg >= 0) { struct ditem *b = IT(bgimg); b->x = x0; b->y = top; b->w = w + frame; b->h = bottom - top; }
     borders(st, x0, top, w + frame, bottom - top);
+    if (st->pos >= 1 && st->pos <= 3)                        /* a containing block for absolute boxes inside */
+        place_pending(p0, x0 + bl, top + bt, w + pl + pr, bottom - top - bt - bb, first_item, false);
+    if (st->pos == 3) {                                       /* relative: shifted, without moving anything else */
+        int dx = st->inset[3].t != L_AUTO ? rlen(st->inset[3], cbw) : st->inset[1].t != L_AUTO ? -rlen(st->inset[1], cbw) : 0;
+        int dy = st->inset[0].t == L_PX ? st->inset[0].v : st->inset[2].t == L_PX ? -st->inset[2].v : 0;
+        if (dx || dy) shift_xy(first_item, L->nit, dx, dy);
+    }
     c->y = bottom; c->pm = mb;
 }
 
@@ -1167,7 +1251,10 @@ void layout_doc(struct doc *d, struct layout *Lo, int width) {
     static struct style rootst; rootst.fsize = 16; rootst.vis = 1;
     c.left = 0; c.width = width; c.y = 0; c.x = 0; c.bst = &rootst; c.line_first = 0; c.fl = new_flist();
     struct ictx ic = { &rootst, 0, -1, 0, false };
-    if (d->root->st && d->root->st->display != D_NONE) layout_block(&c, d->root, ic, -1);
-    L->doc_h = c.y + (c.pm > 0 ? c.pm : 0);
+    apend = 0; napend = capend = 0; abs_bottom = 0;
     L->doc_w = width;
+    if (d->root->st && d->root->st->display != D_NONE) layout_block(&c, d->root, ic, -1);
+    place_pending(0, 0, 0, width, layout_viewport_h, 0, true);   /* the rest: against the window */
+    L->doc_h = c.y + (c.pm > 0 ? c.pm : 0);
+    if (abs_bottom > L->doc_h) L->doc_h = abs_bottom;
 }

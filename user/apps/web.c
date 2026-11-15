@@ -785,16 +785,17 @@ static void scan_new_styles(struct doc *d, struct node *e, int depth) {     /* <
         scan_new_styles(d, c, depth + 1);
     }
 }
+static int view_h(void) { return WH - BAR_H - STATUS_H > 20 ? WH - BAR_H - STATUS_H : 20; }
 static void relayout(void) {
     if (!doc) return;
     if (styles_reload && !styles_loading) { styles_reload = styles_scan = false; load_styles(doc); need_cascade = true; }
     if (styles_scan && !styles_loading) { styles_scan = false; scan_new_styles(doc, doc->root, 0); }
     if (need_cascade && !styles_loading) { css_cascade(doc, page_w()); need_cascade = false; }
+    layout_viewport_h = view_h();
     layout_doc(doc, &lay, page_w());
     need_layout = false;
     last_layout_t = sys_time();
 }
-static int view_h(void) { return WH - BAR_H - STATUS_H > 20 ? WH - BAR_H - STATUS_H : 20; }
 static void scroll_by(int d) {
     scroll += d;
     int mx = lay.doc_h - view_h();

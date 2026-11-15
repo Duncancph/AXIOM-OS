@@ -101,6 +101,8 @@ struct style {
     struct len m[4], p[4];            /* top right bottom left */
     int bw[4]; uint32_t bc[4]; uint8_t bs[4];   /* border width, colour, style (0 none, 1 solid, 2 other visible) */
     struct len w, minw, maxw, h;
+    struct len inset[4];              /* top right bottom left (positioned boxes) */
+    int z;                            /* z-index */
     int indent;                       /* text-indent px */
     int spacing;                      /* table border-spacing px */
     int gap;                          /* flex gap px */
@@ -153,6 +155,7 @@ struct layout {
     uint32_t canvas_bg;
 };
 void layout_doc(struct doc *d, struct layout *L, int width);
+extern int layout_viewport_h;                          /* the visible height: fixed boxes are placed against it */
 void layout_free(struct layout *L);
 
 /* ---------------- links, images, forms (owned by web.c) ---------------- */

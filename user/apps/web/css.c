@@ -1076,6 +1076,12 @@ static void apply(struct style *st, const struct style *ps, const char *prop, co
         return;
     }
     if (P("list-style-position")) { st->list_inside = inherit ? ps->list_inside : eq_ci(v, vl, "inside"); return; }
+    if (P("opacity")) {                                  /* only fully transparent matters here: it hides the box */
+        bool zero = vl > 0 && (v[0] == '0' || v[0] == '.');
+        for (int k = 0; k < vl && zero; k++) if (v[k] != '0' && v[k] != '.' && v[k] != '%' && v[k] != ' ') zero = false;
+        if (zero) st->vis = 0;
+        return;
+    }
     if (P("visibility")) { st->vis = inherit ? ps->vis : !(eq_ci(v, vl, "hidden") || eq_ci(v, vl, "collapse")); return; }
     if (P("line-height")) { if (inherit) { st->lh = ps->lh; st->lh_num = ps->lh_num; } else line_height_val(st, v, vl); return; }
     if (P("vertical-align")) {
@@ -1089,10 +1095,27 @@ static void apply(struct style *st, const struct style *ps, const char *prop, co
     if (P("clear")) { st->clear = eq_ci(v, vl, "left") ? 1 : eq_ci(v, vl, "right") ? 2 : eq_ci(v, vl, "both") ? 3 : 0; return; }
     if (P("overflow") || P("overflow-x") || P("overflow-y")) { if (eq_ci(v, vl, "hidden") || eq_ci(v, vl, "auto") || eq_ci(v, vl, "scroll") || pre_ci(v, vl, "hidden ")) st->bfc = 1; return; }
     if (P("float")) { st->floated = eq_ci(v, vl, "left") ? 1 : eq_ci(v, vl, "right") ? 2 : 0; return; }
-    if (P("position")) { st->pos = eq_ci(v, vl, "absolute") ? 1 : eq_ci(v, vl, "fixed") ? 2 : eq_ci(v, vl, "sticky") ? 0 : 0; return; }
+    /* pos: 1 absolute, 2 fixed, 3 relative (sticky is treated as relative) */
+    if (P("position")) { st->pos = eq_ci(v, vl, "absolute") ? 1 : eq_ci(v, vl, "fixed") ? 2 : eq_ci(v, vl, "relative") || eq_ci(v, vl, "sticky") || eq_ci(v, vl, "-webkit-sticky") ? 3 : 0; return; }
+    if (P("z-index")) { int z = 0, neg = 0, k = 0; if (k < vl && v[k] == '-') { neg = 1; k++; } for (; k < vl && v[k] >= '0' && v[k] <= '9'; k++) z = z * 10 + (v[k] - '0'); st->z = neg ? -z : z; return; }
+    if (P("inset")) {
+        int k = tokens(v, vl, t, tl, 4); struct len l[4];
+        for (int i = 0; i < k; i++) if (!parse_len(t[i], tl[i], st->fsize, &l[i], true)) l[i].t = L_AUTO;
+        if (k == 1) l[1] = l[2] = l[3] = l[0]; else if (k == 2) { l[2] = l[0]; l[3] = l[1]; } else if (k == 3) l[3] = l[1];
+        if (k) for (int i = 0; i < 4; i++) st->inset[i] = l[i];
+        return;
+    }
     /* boxes moved far off the screen (top/left -1000px and the like) are a way of hiding them */
-    if (P("top")) { struct len l; st->off_top = parse_len(v, vl, st->fsize, &l, false) && l.t == L_PX && l.v < -999; return; }
-    if (P("left")) { struct len l; st->off_left = parse_len(v, vl, st->fsize, &l, false) && l.t == L_PX && l.v < -999; return; }
+    {
+        static const char *const isides[4] = { "top", "right", "bottom", "left" };
+        for (int i = 0; i < 4; i++) if (pl == (int)strlen(isides[i]) && !memcmp(prop, isides[i], pl)) {
+            struct len l; if (!parse_len(v, vl, st->fsize, &l, true)) l.t = L_AUTO;
+            st->inset[i] = l;
+            if (i == 0) st->off_top = l.t == L_PX && l.v < -999;
+            if (i == 3) st->off_left = l.t == L_PX && l.v < -999;
+            return;
+        }
+    }
     if (P("box-sizing")) { st->bsizing = eq_ci(v, vl, "border-box"); return; }
     if (P("border-spacing")) { struct len l; int k = tokens(v, vl, t, tl, 2); if (k && parse_len(t[0], tl[0], st->fsize, &l, false) && l.t == L_PX) st->spacing = l.v < 0 ? 0 : l.v > 50 ? 50 : l.v; return; }
     if (P("border-collapse")) { st->bcollapse = eq_ci(v, vl, "collapse"); if (st->bcollapse) st->spacing = 0; return; }
@@ -1343,13 +1366,14 @@ static void style_elem(struct node *e, const struct style *ps) {
     if (st->lh_num) st->lh = st->fsize * st->lh_num / 100;
     if (e->tag == T_HTML) root_fs = st->fsize;
     /* elements hidden by moving them away or clipping them to nothing */
-    if (st->pos && ((st->w.t == L_PX && st->w.v <= 1) || (st->h.t == L_PX && st->h.v <= 1))) st->display = D_NONE;
-    if (st->pos && (st->m[3].t == L_PX && st->m[3].v < -1000)) st->display = D_NONE;
-    if (st->pos && (st->off_top || st->off_left)) st->display = D_NONE;
+    bool outflow = st->pos == 1 || st->pos == 2;
+    if (outflow && ((st->w.t == L_PX && st->w.v <= 1) || (st->h.t == L_PX && st->h.v <= 1))) st->display = D_NONE;
+    if (outflow && (st->m[3].t == L_PX && st->m[3].v < -1000)) st->display = D_NONE;
+    if (outflow && (st->off_top || st->off_left)) st->display = D_NONE;
     if (st->floated && (st->display == D_INLINE || st->display == D_INLINE_BLOCK || st->display == D_LIST_ITEM || st->display == D_INLINE_FLEX))
         st->display = st->display == D_INLINE_FLEX ? D_FLEX : D_BLOCK;
     if (st->floated && (st->display == D_ROW || st->display == D_CELL || st->display == D_ROW_GROUP)) st->floated = 0;
-    if (st->pos) st->floated = 0;                    /* positioned boxes are laid out in the flow */
+    if (outflow) st->floated = 0;                    /* absolute/fixed boxes are placed by layout.c, outside the flow */
     /* table internals outside tables, and the other way round, are fixed up by layout */
 }
 
