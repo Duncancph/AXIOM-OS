@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 115
-notes Faster memory handling for all apps (big speed-up for Arc on large sites)
-file kernel b115/thane.elf.gz 18368544 9b58b9bd887f0020fb40eed66f6ed10fb6b2d08b3016b8cabcc0755241cf8a13
-file initrd b115/initrd.tar.gz 1290240 3a889450317103c027677c3c4282cf896c739247472b8cb53fff21315127a56b
-file bootx64 b115/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b115/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 30450220153ee934096e3496cc0df2790283568642937e540bf44e3c6dcae55242c00abf022100eed6a464f59e692068b36ef88e28ec30dc43d0cb8c10edd9e3780a5ed8e001d8
+build 116
+notes Arc: reuses connections to a site, so pages with many files load faster
+file kernel b116/thane.elf.gz 18397216 56518ad230a422f103692a99600e071b8122ca657b9d06ae9580cf34b88bc373
+file initrd b116/initrd.tar.gz 1290240 dc76c288c130bb8db63dbc77ed3e73fbe1034113697d1277e61c31231d1f4875
+file bootx64 b116/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b116/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 30440220333b142e5defc5ff6bb92b5cb42207366461e91f05e53bd9b4dacae4dcb5254b02206757715c9afcc56bdf192588836f516fe5a5983ffbb05cc4c88c33102a2ac843
