@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 120
-notes Arc: iframes now show their pages (embedded pages, srcdoc frames), each with its own styles
-file kernel b120/thane.elf.gz 18429984 7d806d7570cbb7ff3c457901bac8eae461d3f997b851f0f9a7008d0b1d0eb3c5
-file initrd b120/initrd.tar.gz 1290240 dc76c288c130bb8db63dbc77ed3e73fbe1034113697d1277e61c31231d1f4875
-file bootx64 b120/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b120/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 304402203b2fdf93281375f9b6b748ea1892ea41791e76fbbf26d5f07a273f57c72c026d022003b0961538de2834e26340a8229b20d5a3a563127d5efacfdd16761664f47e63
+build 121
+notes Arc: scripts run inside frames, each in its own separate environment; pages and frames talk with postMessage; clicks inside frames work
+file kernel b121/thane.elf.gz 18466848 a1add6b6afc8c18af6fc1fd908b6b68b19696bdc1d220f1e70646ba51858a828
+file initrd b121/initrd.tar.gz 1290240 dc76c288c130bb8db63dbc77ed3e73fbe1034113697d1277e61c31231d1f4875
+file bootx64 b121/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b121/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022100fadbb3fada187e96ec348564a332c8668b9fc58fda8d81ff67cea72f33d55765022035744ce329388d9e3c072117e717ba81b045142caf80cb8d646c147a9aa11eaa
