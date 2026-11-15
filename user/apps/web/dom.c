@@ -51,6 +51,7 @@ static void script_begin(void) { run_start = sys_time(); cyc_begin = cyc(); }
 static void script_end(void) { if (cyc_begin) page_cycles += cyc() - cyc_begin; cyc_begin = 0; }
 static uint64_t page_cpu_ms(void) { return (page_cycles + (cyc_begin ? cyc() - cyc_begin : 0)) / cycles_per_ms(); }
 static bool skip_said;
+static uint64_t page_net_ms;
 static struct node *squeue[512]; static int nsq, sqpos; static bool sq_active;
 static void scripts_off(const char *why) { con_add("[stopped] ", why); page_on = false; }
 /* Called often while a script runs: stops scripts that run too long, and keeps the window answering
@@ -582,7 +583,22 @@ NATIVE(n_http) {
     char *hdr = js_is_string(A(argc, argv, 3)) ? js_to_cstring(rt, A(argc, argv, 3)) : 0;
     char abs[600]; resolve_url(D->base, u ? u : "", abs, sizeof abs);
     char *out = 0, ctype[128] = "", final[600] = ""; int status = 0;
-    long n = web_http(method ? method : "GET", abs, body, body ? strlen(body) : 0, hdr, &out, &status, ctype, sizeof ctype, final, sizeof final);
+    /* Requests made by scripts (often advertising and statistics servers) each wait at most 5 s, and a
+     * page gets 20 s of them in all: past that its scripts' requests fail at once instead of keeping
+     * the window waiting. */
+    long n;
+    if (page_net_ms > 20000) n = -1;
+    else {
+        uint64_t t0 = sys_time(), c0 = cyc(); (void)c0;
+        web_fetch_timeout = 5000;
+        n = web_http(method ? method : "GET", abs, body, body ? strlen(body) : 0, hdr, &out, &status, ctype, sizeof ctype, final, sizeof final);
+        web_fetch_timeout = 0;
+        uint64_t waited = sys_time() - t0;
+        page_net_ms += waited;
+        /* waiting for the network isn't the script running: don't count it against the time limits */
+        run_start += waited; page_deadline += waited; if (cyc_begin) cyc_begin += waited * cycles_per_ms();
+        if (page_net_ms > 20000) con_add("[skipped] ", "this page's scripts spent 20 s waiting for the network; their further requests are skipped");
+    }
     free(method); free(u); free(body); free(hdr);
     jsval a = js_array(rt); HOLD(a);
     js_set_index(rt, a, 0, js_int(n < 0 ? 0 : status));
@@ -733,7 +749,7 @@ void js_page_start(struct doc *d) {
     }
     js_define(rt, g, "__d", dd, false);
     js_unroot(rt, &dd);
-    page_deadline = sys_time() + 15000; skip_said = false; page_cycles = 0; cyc_begin = 0;
+    page_deadline = sys_time() + 15000; skip_said = false; page_cycles = 0; cyc_begin = 0; page_net_ms = 0;
     run_code(dom_prelude, sizeof dom_prelude - 1, "web prelude");
     call_api("start", 0, 0);
     /* the page's scripts run one at a time from Web's main loop (js_page_step), so the window keeps

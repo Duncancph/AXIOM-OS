@@ -199,6 +199,7 @@ void js_run_timers(void);
 void js_eval_url(const char *code);             /* a javascript: link */
 void js_console_lines(char *out, long max);     /* for about:console */
 bool js_scripts_pending(void);
+extern long web_fetch_timeout;   /* ms; 0 = the default (15 s) */
 void dom_check_soon(void);
 void js_stop_scripts(void);
 bool js_page_step(char *status, int n);

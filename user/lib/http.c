@@ -136,7 +136,7 @@ static void hostport(const struct url *u, char *out, int n, bool port) {
 
 /* connect to the first address that answers. With several addresses (IPv6 and IPv4), each gets a short
  * time before moving on, so a broken IPv6 path falls back to IPv4 quickly. */
-static int connect_any(const char *host, int port) {
+static int connect_any(const char *host, int port, long cap_ms) {
     struct ipaddr a[8];
     int n = sys_resolve(host, a, 8);
     if (n < 0) return n;
@@ -145,7 +145,9 @@ static int connect_any(const char *host, int port) {
     for (int i = 0; i < n; i++) {
         bool other_family_left = false;
         for (int j = i + 1; j < n; j++) if (a[j].v6 != a[i].v6) other_family_left = true;
-        int h = tcp_open(&a[i], port, other_family_left ? 3000 : i + 1 < n ? 6000 : 15000);
+        uint32_t t = other_family_left ? 3000 : i + 1 < n ? 6000 : 15000;
+        if (cap_ms > 0 && t > (uint32_t)cap_ms) t = (uint32_t)cap_ms;  /* the caller's limit (e.g. Web, for scripts' requests) */
+        int h = tcp_open(&a[i], port, t);
         if (h >= 0) { ip_format(&a[i], http_sec.addr); return h; }
         err = h;
         if (h != NET_ETIMEDOUT && h != NET_EUNREACH && h != NET_EREFUSED && h != NET_ENOTCONN) break;
@@ -437,7 +439,7 @@ long http_request(const char *url_in, const struct http_req *rq, http_sink sink,
         hostport(&u, hp, sizeof hp, !default_port); hostport(&u, hpp, sizeof hpp, true);
         if (final_url) ksnprintf(final_url, fulen, "%s://%s%s", scheme, hp, u.path);
         memset(&http_sec, 0, sizeof http_sec);
-        struct conn c = { connect_any(u.host, u.port), u.https };
+        struct conn c = { connect_any(u.host, u.port, rq ? rq->timeout_ms : 0), u.https };
         if (c.h < 0) return c.h;
         if (u.https) {
             load_roots();

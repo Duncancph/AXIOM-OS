@@ -143,6 +143,7 @@ static int hex2(const char *q) { int h = 0; for (int i = 0; i < 2; i++) { int x 
  * so going back or opening more pages of the same site doesn't download them again. Pages themselves
  * and data asked for by scripts aren't kept (they change); reload (R) downloads everything again. */
 struct wcache { struct wcache *next; char *url, *data, ctype[80]; long len; uint64_t used; };
+long web_fetch_timeout;
 static struct wcache *wc_list; static long wc_bytes, wc_max; static uint64_t wc_tick; static bool cache_bypass;
 static bool wc_kind(const char *ct) {
     char l[40]; int k = 0; for (; ct[k] && ct[k] != ';' && k < 39; k++) l[k] = lc(ct[k]); l[k] = 0;
@@ -214,7 +215,7 @@ static long fetch_any(const char *u, long cap, char **out, char *ctype, int ctle
     }
     struct fbuf f = { malloc(cap + 1), 0, cap, false };
     if (!f.b) return NET_ENOMEM;
-    struct http_req rq = { method, body, blen, "application/x-www-form-urlencoded", 0, 0, 0 };
+    struct http_req rq = { method, body, blen, "application/x-www-form-urlencoded", 0, 0, web_fetch_timeout };
     fetch_depth++;
     int st_local = 0; char ct_local[80] = "";
     if (!status) status = &st_local;                       /* the cache needs them even when the caller doesn't */
@@ -1607,6 +1608,14 @@ int main(void) {
         if (js_scripts_pending()) {                        /* the page's scripts, one per turn, answering events in between */
             while (sys_event(&e, 0) > 0 && !quit && !pend) handle_event(&e);
             if (quit || pend) continue;
+            static bool img_turn;                          /* pictures and scripts take turns, so pictures show up while scripts run */
+            struct imgent *pim = (img_turn = !img_turn) ? next_image() : 0;
+            if (pim && !loading) {
+                ksnprintf(status_text, sizeof status_text, "Loading picture %s", pim->url);
+                load_image(pim);
+                draw();
+                continue;
+            }
             static uint64_t last_lay;
             char st[220];
             bool more = js_page_step(st, sizeof st);
