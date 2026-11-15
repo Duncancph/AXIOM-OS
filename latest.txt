@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 111
-notes Arc: long-running page scripts (YouTube) are no longer switched off as 'stuck'
-file kernel b111/thane.elf.gz 18204704 5057d639f2313af1550d36d771f764f56afb2cfe03ffd72226c9ec92ecb39b8b
-file initrd b111/initrd.tar.gz 1280000 820bebee9b6c050d14707e582aa4cf17b85d028b6ec092f24193b87b056de858
-file bootx64 b111/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b111/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3046022100c853d3a539a48e5cbb75c5294c0bd94ff2f556c317c7d40ef81315796fc1e560022100f48f6cf8af4bcb1b780407caa9fa2c24993ec38f9cbe7a75caf77163f80d67b5
+build 112
+notes Arc: web search from the address bar and start page (DuckDuckGo); Google's robot check falls back to it
+file kernel b112/thane.elf.gz 18212896 0e82be2070424f42d516ce43988c3be6a9beba0e543f7d683dc338a8b2628367
+file initrd b112/initrd.tar.gz 1280000 820bebee9b6c050d14707e582aa4cf17b85d028b6ec092f24193b87b056de858
+file bootx64 b112/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b112/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304502210097ed9f9c6bc9b54f55d103e143c9d29bc6aba4a2048af36d873f6b25128bf6fd0220345d218d77a9a2aa221a06b85e25e86e8a2a9c616319d4d45ba4b88d1e11a682
