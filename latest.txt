@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 70
-notes Fix: the chosen screen size now takes effect (restart twice after updating)
-file kernel b70/thane.elf.gz 14624568 1df86c4d2e036d8f5f6671e072a4ea8eb4a86877575a52813f6c9514354fd5be
-file initrd b70/initrd.tar.gz 1269760 cdcbcfecd5d76649b93aedcfe2835fbaf64675ea78ba72ded907228fc5a2aab6
-file bootx64 b70/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b70/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 304402205bb9f66b1157466a0eaba0a95cff7145d1404eb6e0dcdae1478154f01ebb06a00220164eb0fa32235d8c4409612f43354e60b901533c375fe9aa98a36c00970bfd13
+build 72
+notes Spare memory caches files (faster opening); Web reuses pictures, styles and scripts
+file kernel b72/thane.elf.gz 14673600 b35fdf7630f4783a1367fdec076a07eab8ea35407f70a824dfe944a4b78d5b7b
+file initrd b72/initrd.tar.gz 1269760 862168cc744b526454d4eddb791f49fd02226bb19deb7ddd4afa8eebfed9af74
+file bootx64 b72/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b72/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304402200d9feab327bc7f80c1883f29213cf6dcd9d185698608ff375fac686cfa7e1116022058aa4d7b0f5e5466f892889deb76d31e8c5debe44b15eec3297ad6dbd9feb6e3
