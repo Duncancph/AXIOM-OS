@@ -184,6 +184,7 @@ static void set_line(FS *fs, int line) {
     fs->last_line = line;
 }
 
+static uint32_t cst_new(FS *fs, jsval v);
 static uint32_t cst(FS *fs, jsval v) {
     if (!fs->chash || fs->nconsts * 2 >= fs->chcap) {
         uint32_t nc = fs->chcap ? fs->chcap * 2 : 64;
@@ -202,11 +203,12 @@ static uint32_t cst(FS *fs, jsval v) {
         fs->chash = h;
         fs->chcap = nc;
     }
-    uint32_t j = (uint32_t)((v ^ (v >> 29)) * 2654435761u) & (fs->chcap - 1);
+    uint32_t j = (uint32_t)((v ^ (v >> 29)) * 2654435761u) & (fs->chcap - 1), probes = 0;
     while (fs->chash[j]) {
         uint32_t i = fs->chash[j] - 1;
         if (fs->consts[i] == v) return i;
         j = (j + 1) & (fs->chcap - 1);
+        if (++probes >= fs->chcap) return cst_new(fs, v);   /* can't happen (the table is kept under half full), but never loop */
     }
     if (fs->nconsts == fs->cconsts) {
         fs->cconsts = fs->cconsts ? fs->cconsts * 2 : 16;
