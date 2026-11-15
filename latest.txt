@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 122
-notes Arc: canvas drawing (shapes, text, images, toDataURL), sends a proper browser User-Agent and language, performance timing entries, fixes for challenge pages
-file kernel b122/thane.elf.gz 18593824 5104c8d1d4b9060dbce05831164e420d0171756942dab83079c137d30811d889
-file initrd b122/initrd.tar.gz 1290240 f1e136cc46619594c47070e53d846b577a409e573323c29b55e1b09a05e6580f
-file bootx64 b122/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b122/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022035ec8e0e45af67ecef11886617d5fceeb6ad711c0f78013886e0232ef228eb420221009415df47ed986d7de38d55baadab095453b6a1542a3ee5b6cf5ea8d51cce84a6
+build 123
+notes Axiom Core: groundwork for running big ported programs - memory maps, threads, futexes, thread-local storage and precise clocks
+file kernel b123/thane.elf.gz 18638128 a3a7a59ea6146d570368b2119937771016cbabd5483a82aea3464254144efcf6
+file initrd b123/initrd.tar.gz 1300480 e0ee99e20b71a2df68b832b58af6f60fb661076188d310bf7acfe30399eded75
+file bootx64 b123/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b123/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022055881ba4cb1ce0fc0b4e1dd18d857ff69a7098ae83f49a42a93b8fbf4e6e59c5022100a2376434e2cb5ecb6edb3d3484c6094c61973cd2518a456cdbd4ac2764458bf2
