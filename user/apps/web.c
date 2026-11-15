@@ -423,7 +423,39 @@ static bool svg_file(struct imgent *e, char *b, long n) {
     ar_reset(&t->ar); free(t);
     return ok;
 }
+struct frame { struct doc *doc; struct layout lay; void *css; char *srcdoc; int w, h; uint32_t *px; };
+static void load_styles(struct doc *d);
+static struct doc *parse_page(char *s, long n, const char *ctype, const char *base);
+static void frame_init(struct doc *d, struct node *e, int depth) {     /* form controls in a frame's page */
+    for (struct node *c = e->first; c && depth < 300; c = c->next) {
+        if (c->type != N_ELEM) continue;
+        if (c->tag == T_INPUT || c->tag == T_TEXTAREA || c->tag == T_SELECT || c->tag == T_BUTTON) form_init_control(d, c);
+        frame_init(d, c, depth + 1);
+    }
+}
+static void load_frame(struct imgent *e) {
+    struct frame *f = e->frame;
+    e->state = IS_LOADING;
+    char *b = 0, ct[96] = "text/html", final[600]; int status = 0; long n;
+    strncpy0(final, e->url ? e->url : "about:blank", sizeof final);
+    if (f->srcdoc) { n = strlen(f->srcdoc); b = malloc(n + 1); if (b) memcpy(b, f->srcdoc, n + 1); }
+    else { abort_fetch = false; n = fetch_any(e->url, MAXPAGE, &b, ct, sizeof ct, &status, final, sizeof final, 0, 0, 0); }
+    if (pend || quit) { free(b); e->state = IS_PENDING; return; }
+    if (n < 0 || !b || (status && status >= 400)) { free(b); e->state = IS_FAILED; need_draw = true; return; }
+    b[n] = 0;
+    struct doc *d = parse_page(b, n, ct, final);
+    free(b);
+    if (!d) { e->state = IS_FAILED; return; }
+    frame_init(d, d->root, 0);
+    void *outer = css_save();                            /* the frame's style sheets, read and put aside */
+    load_styles(d);
+    f->css = css_save();
+    css_restore(outer);
+    f->doc = d; f->w = f->h = -1;
+    e->state = IS_OK; need_draw = true;
+}
 static void load_image(struct imgent *e) {
+    if (e->frame) { load_frame(e); return; }
     e->state = IS_LOADING;
     char ct[80]; char *b; int status;
     abort_fetch = false;
@@ -688,7 +720,15 @@ int add_link(const char *href, struct node *n) {
 }
 
 static struct imgent *svgs; static uint32_t svg_gen_now = 1;   /* the page's <svg> elements; svg_gen_now changes when the page does */
-static void svgs_free(void) { while (svgs) { struct imgent *e = svgs; svgs = e->next; free(e->px); free(e); } }
+/* ---------------- iframes ----------------
+ * A frame's page is fetched like a picture (when its box comes into view), parsed and styled on its own (its
+ * style sheets are kept aside while the outer page's are in use) and laid out at the box's size, then drawn
+ * into a picture of that size. Its scripts don't run yet. */
+static void frame_free(struct frame *f) {
+    if (!f) return;
+    free_doc(f->doc); layout_free(&f->lay); free(f->css); free(f->px); free(f->srcdoc); free(f);
+}
+static void svgs_free(void) { while (svgs) { struct imgent *e = svgs; svgs = e->next; frame_free(e->frame); free(e->px); free(e->url); free(e); } }
 static void init_node(struct doc *d, struct node *c) {
         if ((c->tag == T_A || c->tag == T_AREA) && node_attr(c, "href")) {
             static char u[600]; resolve_url(d->base, node_attr(c, "href"), u, sizeof u);
@@ -697,6 +737,20 @@ static void init_node(struct doc *d, struct node *c) {
         }
         if (c->tag == T_INPUT || c->tag == T_TEXTAREA || c->tag == T_SELECT || c->tag == T_BUTTON) form_init_control(d, c);
         if (c->tag == T_VIDEO || c->tag == T_AUDIO) media_attach(d, c);
+        if (c->tag == T_IFRAME && !c->img) {             /* a frame: its page is loaded like a picture */
+            struct imgent *e = calloc(1, sizeof *e); struct frame *f = calloc(1, sizeof *f);
+            const char *src = node_attr(c, "src"), *sd = node_attr(c, "srcdoc");
+            if (e && f) {
+                static char u[1024];
+                if (sd) { f->srcdoc = malloc(strlen(sd) + 1); if (f->srcdoc) memcpy(f->srcdoc, sd, strlen(sd) + 1); strncpy0(u, d->base, sizeof u); }
+                else if (src && src[0] && !pre_ci(src, "about:") && !pre_ci(src, "javascript:")) resolve_url(d->base, src, u, sizeof u);
+                else u[0] = 0;
+                e->url = malloc(strlen(u) + 1); if (e->url) memcpy(e->url, u, strlen(u) + 1);
+                e->frame = f; e->w = 300; e->h = 150;
+                e->state = (sd || u[0]) && e->url ? IS_PENDING : IS_FAILED;    /* nothing to load: an empty frame */
+                e->next = svgs; svgs = e; c->img = e;
+            } else { free(e); free(f); }
+        }
         if (c->tag == T_SVG && !c->img) {                /* drawn by svg.c at the size it's shown */
             struct imgent *e = calloc(1, sizeof *e);
             if (e) { e->svg = c; e->state = IS_OK; svg_size(c, &e->w, &e->h); e->next = svgs; svgs = e; c->img = e; }
@@ -1263,8 +1317,34 @@ static void blit_img(struct canvas *c, const uint32_t *px, int w, int h, int x, 
     }
 }
 
+static void draw_items(struct canvas *c, struct layout *ly, int oy, int top, int bottom, bool page);
+/* a frame's page, laid out at the box's size (again when that changes) and drawn into a picture */
+static void draw_frame(struct canvas *c, struct imgent *e, struct ditem *it, int x, int y) {
+    struct frame *f = e->frame;
+    int w = it->w, h = it->h;
+    if (w <= 0 || h <= 0) return;
+    if (e->state != IS_OK || !f->doc) { gfx_fill(c, x, y, w, h, 0xFFFFFF); return; }
+    if (f->w != w || f->h != h || !f->px) {
+        if ((long)w * h > 8l * 1024 * 1024) return;
+        void *outer = css_save(); css_restore(f->css);
+        css_cascade(f->doc, w);
+        int vh = layout_viewport_h; layout_viewport_h = h;
+        layout_doc(f->doc, &f->lay, w);
+        layout_viewport_h = vh;
+        f->css = css_save(); css_restore(outer);
+        free(f->px); f->px = malloc((size_t)w * h * 4);
+        if (!f->px) return;
+        struct canvas fc; gfx_init(&fc, f->px, w, h, w);
+        gfx_fill(&fc, 0, 0, w, h, f->lay.canvas_bg);
+        draw_items(&fc, &f->lay, 0, -64, h, false);
+        f->w = w; f->h = h;
+        need_layout = true;                               /* (laying the frame out used the shared layout state) */
+    }
+    gfx_blit(c, x, y, f->px, w, h, w);
+}
 static void draw_image(struct canvas *c, struct ditem *it, int x, int y) {
     struct imgent *e = it->n->img;
+    if (e && e->frame) { draw_frame(c, e, it, x, y); return; }
     if (e && e->svg && it->w > 0 && it->h > 0 && (!e->px || e->pw != it->w || e->ph != it->h || e->svg_gen != svg_gen_now)) {
         free(e->px);
         e->px = svg_render(e->svg, it->w, it->h, it->n->st ? it->n->st->color : 0);
@@ -1497,15 +1577,11 @@ static void draw_toolbar(struct canvas *c) {
     ui_button(c, WW - 12 - 56, TAB_H + 10, 56, 32, "Go", BTN_PRIMARY, hover_btn == 2, false);
 }
 
-static void draw(void) {
-    struct canvas *c = &a.c;
-    uint32_t bg = doc ? lay.canvas_bg : 0xFFFFFF;
-    gfx_fill(c, 0, BAR_H, WW, WH - BAR_H - STATUS_H, bg);
-    gfx_clip(c, 0, BAR_H, WW - SCROLLBAR, WH - BAR_H - STATUS_H);
-    int oy = BAR_H - scroll;
-    int top = scroll - 64, bottom = scroll + WH;
-    for (int i = 0; doc && i < lay.nit; i++) {
-        struct ditem *it = &lay.it[i];
+/* draw a layout's display list onto c: oy shifts it down, only items between top and bottom are drawn
+ * (page: the page on screen, which shows the link under the mouse; else an embedded frame) */
+static void draw_items(struct canvas *c, struct layout *ly, int oy, int top, int bottom, bool page) {
+    for (int i = 0; i < ly->nit; i++) {
+        struct ditem *it = &ly->it[i];
         if (it->y > bottom || it->y + it->h < top) continue;
         if (it->deco & 0x80) continue;                 /* visibility: hidden */
         int x = it->x, y = it->y + oy;
@@ -1541,9 +1617,9 @@ static void draw(void) {
         }
         case DI_TEXT: case DI_MONO: {
             uint32_t col = it->col;
-            bool hov = it->link >= 0 && it->link == hover_link;
+            bool hov = it->link >= 0 && it->link == hover_link && page;
             if (hov) col = gfx_mix(col, 0x000000, 60);
-            const char *s = lay.tp + it->off;
+            const char *s = ly->tp + it->off;
             int base = y + it->asc;
             if (it->kind == DI_MONO) { for (uint32_t k = 0; k < it->len; k++) { int cx = x + k * MONO_W; if (cx >= c->cx1) break; if (cx + MONO_W > c->cx0) gfx_mono(c, cx, y, s[k], col); } base = y + 13; }
             else draw_text(c, it->f, x, base, col, s, it->len);
@@ -1565,7 +1641,7 @@ static void draw(void) {
             break;
         case DI_IMG:
             draw_image(c, it, x, y);
-            if (it->link >= 0 && it->link == hover_link) gfx_rrect_outline(c, x - 1, y - 1, it->w + 2, it->h + 2, 2, 0x1A6FC4, 200);
+            if (it->link >= 0 && it->link == hover_link && page) gfx_rrect_outline(c, x - 1, y - 1, it->w + 2, it->h + 2, 2, 0x1A6FC4, 200);
             break;
         case DI_CTRL: draw_control(c, it, x, y); break;
         case DI_BGIMG: {                                  /* a background picture, tiled or once */
@@ -1595,6 +1671,16 @@ static void draw(void) {
         }
         }
     }
+}
+
+static void draw(void) {
+    struct canvas *c = &a.c;
+    uint32_t bg = doc ? lay.canvas_bg : 0xFFFFFF;
+    gfx_fill(c, 0, BAR_H, WW, WH - BAR_H - STATUS_H, bg);
+    gfx_clip(c, 0, BAR_H, WW - SCROLLBAR, WH - BAR_H - STATUS_H);
+    int oy = BAR_H - scroll;
+    int top = scroll - 64, bottom = scroll + WH;
+    if (doc) draw_items(c, &lay, oy, top, bottom, true);
     gfx_noclip(c);
     /* scroll bar */
     int vh = view_h();

@@ -186,6 +186,7 @@ struct imgent {
     uint32_t *spx; int sw, sh;        /* a scaled copy for the size it's shown at */
     bool opaque; bool used;
     struct node *svg; uint32_t svg_gen; /* an <svg> element drawn into px at the size it's shown (svg.c) */
+    void *frame;                      /* an <iframe>: its own page (web.c) */
     struct imgent *next;
 };
 struct imgent *img_get(const char *url);

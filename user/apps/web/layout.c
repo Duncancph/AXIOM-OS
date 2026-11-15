@@ -100,7 +100,7 @@ static void metrics(const struct style *st, int *asc, int *desc, int *gasc, int 
     *asc = a; *desc = d;
 }
 
-static bool is_pic(const struct node *n) { return n->tag == T_IMG || n->tag == T_SVG; }   /* laid out as a picture */
+static bool is_pic(const struct node *n) { return n->tag == T_IMG || n->tag == T_SVG || n->tag == T_IFRAME; }   /* laid out as a picture */
 static bool is_ws(char c) { return c == ' ' || c == '\n' || c == '\t' || c == '\r' || c == '\f'; }
 
 /* ---------------- lengths ---------------- */
@@ -127,7 +127,8 @@ static int attr_px(const struct node *n, const char *a) {
 static void img_size(struct node *n, int cbw, int *w, int *h) {
     const struct style *st = n->st;
     int iw = 0, ih = 0;
-    if (n->tag == T_SVG) { svg_size(n, &iw, &ih); if (n->img) { n->img->w = iw; n->img->h = ih; } }
+    if (n->tag == T_IFRAME) { iw = 300; ih = 150; }       /* a frame's default size */
+    else if (n->tag == T_SVG) { svg_size(n, &iw, &ih); if (n->img) { n->img->w = iw; n->img->h = ih; } }
     else if (n->img && n->img->w > 0 && n->img->h > 0) { iw = n->img->w; ih = n->img->h; }
     int W = -1, H = -1;
     if (st->w.t == L_PX) W = st->w.v; else if (st->w.t == L_PCT) W = rlen(st->w, cbw); else W = attr_px(n, "width");
