@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 123
-notes Axiom Core: groundwork for running big ported programs - memory maps, threads, futexes, thread-local storage and precise clocks
-file kernel b123/thane.elf.gz 18638128 a3a7a59ea6146d570368b2119937771016cbabd5483a82aea3464254144efcf6
-file initrd b123/initrd.tar.gz 1300480 e0ee99e20b71a2df68b832b58af6f60fb661076188d310bf7acfe30399eded75
-file bootx64 b123/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b123/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022055881ba4cb1ce0fc0b4e1dd18d857ff69a7098ae83f49a42a93b8fbf4e6e59c5022100a2376434e2cb5ecb6edb3d3484c6094c61973cd2518a456cdbd4ac2764458bf2
+build 124
+notes Runs Linux programs: x86-64 Linux programs (static or position-independent, C and C++, with threads) run unchanged - type 'run <program>' in CMD
+file kernel b124/thane.elf.gz 18716152 c3815c671ea04882143f9d94d1ad73e267c5c6d005f5e04115e4603dfae23ed5
+file initrd b124/initrd.tar.gz 1310720 1beec58d3d049f2b1ba02f827336da21d12655d9e42976f6107098deb662e5d7
+file bootx64 b124/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b124/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022100f31dc1dfc659cd8d3c89446c9a6a921c9305b45f83bc1f7f4261a344ed37e1e802207572be4f8dd1f456d61aa14993cc5bc30c2187d53ea9c6d6a3680f85b2b3ab35
