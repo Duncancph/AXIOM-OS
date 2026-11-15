@@ -527,6 +527,28 @@ static void draw_switcher(void) {
     }
 }
 
+/* after switching to the monitor's full size (Settings > Display): keep it? No answer in 15 s = go back */
+static uint64_t keep_until;
+static struct rect keep_rect(void) { return (struct rect){ (W - 520) / 2, (H - 170) / 2, 520, 170 }; }
+static struct rect keep_btn(int k) { struct rect b = keep_rect(); return (struct rect){ b.x + b.w - 300 + k * 150, b.y + b.h - 54, 136, 38 }; }
+static void draw_keep(void) {
+    struct rect b = keep_rect();
+    gfx_rrect(&cv, b.x - 2, b.y + 10, b.w + 4, b.h + 4, 18, HL_SHADOW, 140);
+    gfx_rrect(&cv, b.x, b.y, b.w, b.h, 16, HL_WIN_BG, 250);
+    gfx_rrect_outline(&cv, b.x, b.y, b.w, b.h, 16, HL_ACCENT, 120);
+    char t[96]; ksnprintf(t, sizeof t, "Keep this screen size (%ux%u)?", bootinfo.fb_w, bootinfo.fb_h);
+    gfx_text(&cv, &font_ui_bold, b.x + 24, b.y + 40, HL_TEXT, t);
+    long left = (long)(keep_until - uptime_ms()) / 1000 + 1; if (left < 0) left = 0;
+    ksnprintf(t, sizeof t, "AXIOM goes back to the previous size in %ld s.", left);
+    gfx_text(&cv, &font_ui, b.x + 24, b.y + 68, HL_TEXT_DIM, t);
+    static const char *l[2] = { "Go back", "Keep" };
+    for (int k = 0; k < 2; k++) {
+        struct rect r = keep_btn(k);
+        gfx_rrect(&cv, r.x, r.y, r.w, r.h, 9, k ? HL_ACCENT : 0x2A2A28, 255);
+        gfx_text(&cv, &font_ui_bold, r.x + (r.w - gfx_text_width(&font_ui_bold, l[k])) / 2, r.y + 25, k ? HL_NAVY : HL_TEXT, l[k]);
+    }
+}
+
 static void compose(struct rect r) {
     gfx_clip(&cv, r.x, r.y, r.w, r.h);
     if (screen_off) { gfx_fill(&cv, r.x, r.y, r.w, r.h, 0x000000); flush_rect(r); return; }
@@ -579,6 +601,7 @@ static void compose(struct rect r) {
     if (menu_open) draw_menu();
     if (snap_zone) { struct rect s = snap_rect(snap_zone); gfx_rrect(&cv, s.x + 6, s.y + 6, s.w - 12, s.h - 12, 14, HL_CREAM, 34); gfx_rrect_outline(&cv, s.x + 6, s.y + 6, s.w - 12, s.h - 12, 14, HL_CREAM, 120); }
     if (sw_until) draw_switcher();
+    if (keep_until) draw_keep();
     draw_toasts();
     flush_rect(r);
 }
@@ -880,6 +903,11 @@ static void close_window_clicked(struct window *w) {
 }
 
 static void click(int button) {
+    if (keep_until) {                                      /* the keep-this-size box answers first */
+        if (in_rect(keep_btn(1), mx, my)) { keep_until = 0; damage(0, 0, W, H); intelgfx_native_answer(true); desktop_notify("Screen size", "Kept. You can change it in Settings > Display."); }
+        else if (in_rect(keep_btn(0), mx, my)) { keep_until = 0; intelgfx_native_answer(false); }
+        return;
+    }
     if (menu_open) {
         if (in_rect(menu_rect(), mx, my)) {
             for (int i = 0; i < mn; i++) if (in_rect(menu_pin(i), mx, my)) { toggle_pin(mapp[i]); return; }
@@ -1119,7 +1147,7 @@ void desktop_init(void) {
     const char *m = settings_get("display.mode");
     int rw = (int)katoi(m), rh = 0;
     for (const char *p = m; *p; p++) if (*p == 'x') { rh = (int)katoi(p + 1); break; }
-    if (rw >= 800 && rh >= 600 && rw <= W && rh <= H && (rw != W || rh != H)) {
+    if (!intelgfx_native_active() && rw >= 800 && rh >= 600 && rw <= W && rh <= H && (rw != W || rh != H)) {
         PW = W; PH = H;
         dw = PW; dh = PH;                                /* fill the whole screen (no black bars, even if the shapes differ a little) */
         ox = (PW - dw) / 2; oy = (PH - dh) / 2;
@@ -1181,8 +1209,15 @@ void desktop_size(int *w, int *h, bool *is_scaled) { *w = W; *h = H; if (is_scal
 
 void desktop_thread(void *arg) {
     dock_rebuild(); dock_area_cached = dock_area();
+    if (intelgfx_native_asking()) keep_until = uptime_ms() + 15000;
     damage(0, 0, W, H);
     for (;;) {
+        if (keep_until) {                                  /* the keep-this-size countdown */
+            static uint64_t last_s;
+            uint64_t now = uptime_ms();
+            if (now >= keep_until) { keep_until = 0; intelgfx_native_answer(false); }
+            else if (now / 1000 != last_s) { last_s = now / 1000; damage_r(keep_rect()); }
+        }
         ps2_poll();
         xhci_poll();
         int s;

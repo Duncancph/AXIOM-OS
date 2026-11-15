@@ -82,7 +82,7 @@ static void settle_thread(void *arg) {
     extern bool boot_sizes_changed;
     task_sleep(4000);
     if (boot_sizes_changed) desktop_notify("Screen size", "This update can use more screen sizes. Restart once more to use the best one for your screen.");
-    task_sleep(16000); smp_settled(); task_exit(0);
+    task_sleep(16000); smp_settled(); intelgfx_native_settled(); task_exit(0);
 }
 
 static void usb_thread(void *arg) {
@@ -132,6 +132,8 @@ void kmain(uint32_t magic, uint64_t mbi) {
     ahci_init_all();
     nvme_init_all();
     settings_load();
+    intelgfx_maybe_switch();                             /* the monitor's full size, if chosen in Settings > Display */
+    if (intelgfx_native_active()) { console_init(); if (gui) console_gui_mode(); }
     hda_init_all();
     boot_progress(35);
     xhci_init_all();

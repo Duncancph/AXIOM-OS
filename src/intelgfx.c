@@ -6,6 +6,13 @@
 #include "kernel.h"
 
 static volatile uint8_t *mmio;
+/* what the probe found, for the mode switch (step 2) */
+static int cur_trans = -1, cur_port = -1, cur_mode = -1, cur_pipe = -1;
+static uint8_t edid[256]; static int edid_len;
+struct dmode { int w, h, hz; uint32_t clk; int hss, hse, ht, vss, vse, vt; bool phs, pvs; };
+static struct dmode want_mode; static bool have_want;
+static bool native_on;
+bool intelgfx_native_active(void) { return native_on; }
 static char report[3000]; static int rlen;
 static char summary[160], monitor[160];
 
@@ -33,14 +40,14 @@ static bool gmbus_wait(uint32_t bit) {
     }
     return false;
 }
-static bool gmbus_edid(int pin, uint8_t *e) {
+static bool gmbus_read(int pin, int offset, int len, uint8_t *e) {
     wr(GMBUS0, pin);                                     /* 100 kHz, this pin pair */
-    wr(GMBUS1, (1u << 30) | (1u << 26) | (1u << 25) | (128u << 16) | (0x50 << 1) | 1);   /* index 0, read 128 bytes from 0x50 */
+    wr(GMBUS1, (1u << 30) | (1u << 26) | (1u << 25) | ((uint32_t)offset << 8) | ((uint32_t)len << 16) | (0x50 << 1) | 1);   /* read from 0x50 at offset */
     bool ok = true;
-    for (int i = 0; i < 128 && ok; i += 4) {
+    for (int i = 0; i < len && ok; i += 4) {
         if (!gmbus_wait(1 << 11)) { ok = false; break; }
         uint32_t v = rd(GMBUS3);
-        for (int k = 0; k < 4 && i + k < 128; k++) e[i + k] = v >> (8 * k);
+        for (int k = 0; k < 4 && i + k < len; k++) e[i + k] = v >> (8 * k);
     }
     wr(GMBUS1, (1u << 30) | (4u << 25));                 /* stop */
     for (int i = 0; i < 100 && (rd(GMBUS2) & (1 << 9)); i++) udelay(100);
@@ -48,6 +55,7 @@ static bool gmbus_edid(int pin, uint8_t *e) {
     wr(GMBUS0, 0);
     return ok;
 }
+static bool gmbus_edid(int pin, uint8_t *e) { return gmbus_read(pin, 0, 128, e); }
 
 /* ---- EDID over DisplayPort: the AUX channel, I2C-over-AUX ---- */
 static bool aux_xfer(int port, const uint8_t *msg, int mlen, uint8_t *rep, int rmax, int *rlen_out) {
@@ -94,6 +102,7 @@ static bool aux_edid(int port, uint8_t *e) {
     return true;
 }
 
+static void find_modes(void);
 static bool edid_ok(const uint8_t *e) {
     static const uint8_t hdr[8] = { 0, 255, 255, 255, 255, 255, 255, 0 };
     if (memcmp(e, hdr, 8)) return false;
@@ -171,6 +180,7 @@ void intelgfx_probe(void) {
         uint32_t pf = 0x68000 + 0x800 * pipe;
         add("  panel fitter: ctl %08x, window pos %08x size %08x", rd(pf + 0x80), rd(pf + 0x70), rd(pf + 0x74));
         used_port = port;
+        if (cur_trans < 0) { cur_trans = t; cur_port = port; cur_mode = mode; cur_pipe = pipe; }
     }
     for (int p = 0; p < 5; p++) {
         uint32_t buf = rd(0x64000 + 0x100 * p), cs = rd(0x46100 + 4 * p);
@@ -187,14 +197,173 @@ void intelgfx_probe(void) {
         for (int i = 0; i < 3 && !got; i++) {
             if (k == 0 && used_port != i + 1) continue;
             if (k == 1 && used_port == i + 1) continue;
-            if (gmbus_edid(pins[i], e) && edid_ok(e)) { got = true; edid_describe(e, pn[i]); }
+            if (gmbus_edid(pins[i], e) && edid_ok(e)) {
+                got = true; edid_describe(e, pn[i]);
+                memcpy(edid, e, 128); edid_len = 128;
+                if (e[126] >= 1 && gmbus_read(pins[i], 128, 128, edid + 128)) {   /* the extension (CEA-861: TV/HDMI modes) */
+                    uint8_t sum = 0; for (int k = 128; k < 256; k++) sum += edid[k];
+                    if (!sum) edid_len = 256; else add("  EDID extension block: bad checksum");
+                }
+            }
         }
     for (int p = 0; p < 4 && !got; p++) {
         if (aux_edid(p, e) && edid_ok(e)) { char how[40]; ksnprintf(how, sizeof how, "DisplayPort AUX of port %c", 'A' + p); got = true; edid_describe(e, how); }
     }
     if (!got) add("monitor: didn't answer (no EDID on any port)");
+    if (edid_len) find_modes();
     ksnprintf(summary, sizeof summary, "Intel graphics (%04x)%s%s", g->device,
               used_port >= 0 ? ", screen on port " : "", used_port >= 0 ? (const char[]){ (char)('A' + used_port), 0 } : "");
+}
+
+/* ---------------- step 2: switching the screen to the monitor's full size ----------------
+ * Only for the case the probe has seen: Haswell, one HDMI/DVI port driven by transcoder A / pipe A
+ * with WRPLL1 as its clock. The firmware's framebuffer stays where it is (graphics memory offset 0);
+ * only the timings, the pixel clock and the plane are changed. */
+static void dtd_mode(const uint8_t *t, struct dmode *m) {
+    m->clk = (t[0] | t[1] << 8) * 10;
+    int ha = t[2] | (t[4] & 0xF0) << 4, hb = t[3] | (t[4] & 15) << 8;
+    int va = t[5] | (t[7] & 0xF0) << 4, vb = t[6] | (t[7] & 15) << 8;
+    int hso = t[8] | (t[11] & 0xC0) << 2, hsw = t[9] | (t[11] & 0x30) << 4;
+    int vso = t[10] >> 4 | (t[11] & 0x0C) << 2, vsw = (t[10] & 15) | (t[11] & 3) << 4;
+    m->w = ha; m->h = va; m->ht = ha + hb; m->vt = va + vb;
+    m->hss = ha + hso; m->hse = ha + hso + hsw; m->vss = va + vso; m->vse = va + vso + vsw;
+    m->phs = (t[17] & 0x18) == 0x18 && (t[17] & 2); m->pvs = (t[17] & 0x18) == 0x18 && (t[17] & 4);
+    m->hz = m->ht && m->vt ? (int)((uint64_t)m->clk * 1000 / ((uint64_t)m->ht * m->vt)) : 0;
+}
+static bool mode_ok(const struct dmode *m) {           /* progressive, sizes we can draw, a clock the PLL can make */
+    return m->clk >= 25000 && m->clk <= 300000 && m->w >= 1024 && m->w <= 2560 && m->h >= 600 && m->h <= 1600 && m->hz >= 50 && m->hz <= 75;
+}
+static void consider(const struct dmode *m, const char *from) {
+    if (!mode_ok(m)) return;
+    add("  mode %dx%d at %d Hz (%u kHz) - %s", m->w, m->h, m->hz, m->clk, from);
+    /* the most pixels wins; at equal size the one nearest 60 Hz */
+    if (!have_want || (int64_t)m->w * m->h > (int64_t)want_mode.w * want_mode.h ||
+        ((int64_t)m->w * m->h == (int64_t)want_mode.w * want_mode.h && (m->hz - 60) * (m->hz - 60) < (want_mode.hz - 60) * (want_mode.hz - 60))) {
+        want_mode = *m; have_want = true;
+    }
+}
+static void find_modes(void) {
+    add("modes the monitor lists:");
+    for (int d = 0; d < 4; d++) { const uint8_t *t = edid + 54 + d * 18; if (t[0] || t[1]) { struct dmode m; dtd_mode(t, &m); consider(&m, "EDID detailed timing"); } }
+    if (edid_len < 256 || edid[128] != 2) return;        /* CEA-861 extension */
+    const uint8_t *x = edid + 128; int dtd = x[2];
+    for (int i = 4; i < dtd && i < 127;) {               /* data blocks: the video block lists standard TV modes by number */
+        int tag = x[i] >> 5, len = x[i] & 31;
+        if (tag == 2) for (int k = 1; k <= len && i + k < 127; k++) {
+            int vic = x[i + k] & 127;
+            static const struct dmode cea[] = {           /* VIC 16, 31, 4, 19: 1080p60, 1080p50, 720p60, 720p50 */
+                { 1920, 1080, 60, 148500, 2008, 2052, 2200, 1084, 1089, 1125, true, true },
+                { 1920, 1080, 50, 148500, 2448, 2492, 2640, 1084, 1089, 1125, true, true },
+                { 1280, 720, 60, 74250, 1390, 1430, 1650, 725, 730, 750, true, true },
+                { 1280, 720, 50, 74250, 1720, 1760, 1980, 725, 730, 750, true, true } };
+            int ix = vic == 16 ? 0 : vic == 31 ? 1 : vic == 4 ? 2 : vic == 19 ? 3 : -1;
+            if (ix >= 0) { char f[40]; ksnprintf(f, sizeof f, "HDMI standard mode %d", vic); consider(&cea[ix], f); }
+        }
+        i += 1 + len;
+    }
+    for (int i = dtd; i >= 4 && i + 18 <= 127; i += 18) { if (!x[i] && !x[i + 1]) break; struct dmode m; dtd_mode(x + i, &m); consider(&m, "EDID extension timing"); }
+}
+
+/* WRPLL dividers for a pixel clock (Linux's search, simplified): VCO = 2700 MHz * n2 / r2 in 2400..4800 MHz,
+ * reference 2700*2/r2 in 48..400 MHz, pixel clock = VCO / (p * 5) */
+static bool wrpll_for(uint32_t khz, uint32_t *val) {
+    uint64_t best_err = ~0ULL; int br = 0, bn = 0, bp = 0;
+    for (int r2 = 2700 * 2 / 400 + 1; r2 <= 2700 * 2 / 48; r2++)
+        for (int n2 = 2400 * r2 / 2700 + 1; n2 <= 4800 * r2 / 2700; n2++)
+            for (int p = 2; p <= 64; p += 2) {
+                uint64_t f = 2700000ULL * n2 / ((uint64_t)r2 * p * 5);          /* kHz */
+                uint64_t err = f > khz ? f - khz : khz - f;
+                if (err < best_err) { best_err = err; br = r2; bn = n2; bp = p; }
+            }
+    if (!br || best_err * 1000 > (uint64_t)khz * 1) return false;          /* within 0.1% */
+    *val = (1u << 31) | (3u << 28) | ((uint32_t)bn << 16) | ((uint32_t)bp << 8) | (uint32_t)br;   /* enable, LCPLL reference */
+    return true;
+}
+static bool wait_bit(uint32_t reg, uint32_t bit, bool set, int ms) {
+    for (int i = 0; i < ms * 10; i++) { if (!!(rd(reg) & bit) == set) return true; udelay(100); }
+    return false;
+}
+static bool do_switch(void) {
+    const struct dmode *m = &want_mode;
+    if (cur_trans != 0 || cur_pipe != 0 || cur_port < 1 || cur_port > 3 || (cur_mode != 0 && cur_mode != 1)) { add("switch: not an HDMI/DVI port on transcoder A - not switching"); return false; }
+    if ((rd(0x46100 + 4 * cur_port) >> 29) != 4) { add("switch: the port isn't clocked by WRPLL1 - not switching"); return false; }
+    uint32_t pll; if (!wrpll_for(m->clk, &pll)) { add("switch: no clock setting for %u kHz", m->clk); return false; }
+    uint32_t stride = (uint32_t)m->w * 4, need = stride * (uint32_t)m->h;
+    /* the graphics memory behind the framebuffer: the firmware's map (GTT) must cover the bigger picture */
+    volatile uint32_t *gtt = (volatile uint32_t *)(mmio + 0x200000);
+    uint32_t pte0 = gtt[0], pages = (need + 4095) / 4096, mapped = 0;
+    for (uint32_t i = 0; i < pages; i++) { uint32_t e = gtt[i]; if (!(e & 1) || (e & ~0xFFFu) != (pte0 & ~0xFFFu) + i * 4096) break; mapped++; }
+    add("switch: GTT maps %u of the %u pages needed (first entry %08x)", mapped, pages, pte0);
+    if (mapped < pages) { add("switch: graphics memory too small - not switching"); return false; }
+    uint32_t ddi = rd(0x60400), bufc = rd(0x64000 + 0x100 * cur_port), conf = rd(0x70008), plane = rd(0x70180);
+    add("switch: to %dx%d at %d Hz, WRPLL %08x", m->w, m->h, m->hz, pll);
+    /* off: plane, pipe, panel fitter, transcoder, port, clock */
+    wr(0x70180, plane & ~(1u << 31)); wr(0x7019C, rd(0x7019C));
+    wr(0x70008, conf & ~(1u << 31)); wait_bit(0x70008, 1u << 30, false, 100);
+    wr(0x68080, 0); wr(0x68074, 0);
+    wr(0x60400, ddi & ~((1u << 31) | (7u << 28)));
+    wr(0x64000 + 0x100 * cur_port, bufc & ~(1u << 31)); wait_bit(0x64000 + 0x100 * cur_port, 1u << 7, true, 20);
+    wr(0x46100 + 4 * cur_port, 7u << 29);
+    wr(0x46040, rd(0x46040) & ~(1u << 31)); udelay(200);
+    /* on: clock, timings, transcoder, port, pipe, plane */
+    wr(0x46040, pll); udelay(500);
+    wr(0x46100 + 4 * cur_port, 4u << 29);
+    wr(0x60000, (uint32_t)(m->w - 1) | (uint32_t)(m->ht - 1) << 16);
+    wr(0x60004, (uint32_t)(m->w - 1) | (uint32_t)(m->ht - 1) << 16);
+    wr(0x60008, (uint32_t)(m->hss - 1) | (uint32_t)(m->hse - 1) << 16);
+    wr(0x6000C, (uint32_t)(m->h - 1) | (uint32_t)(m->vt - 1) << 16);
+    wr(0x60010, (uint32_t)(m->h - 1) | (uint32_t)(m->vt - 1) << 16);
+    wr(0x60014, (uint32_t)(m->vss - 1) | (uint32_t)(m->vse - 1) << 16);
+    wr(0x6001C, (uint32_t)(m->w - 1) << 16 | (uint32_t)(m->h - 1));
+    uint32_t nddi = (ddi & ~(3u << 16)) | (1u << 31) | ((uint32_t)cur_port << 28) | (m->phs ? 1u << 16 : 0) | (m->pvs ? 1u << 17 : 0);
+    wr(0x60400, nddi);
+    wr(0x64000 + 0x100 * cur_port, bufc | (1u << 31)); udelay(600);
+    wr(0x70008, conf | (1u << 31));
+    bool on = wait_bit(0x70008, 1u << 30, true, 100);
+    wr(0x70188, stride); wr(0x70184, 0); wr(0x701A4, 0);
+    wr(0x70180, plane | (1u << 31)); wr(0x7019C, 0);
+    add("switch: done, pipe %s", on ? "running" : "NOT running");
+    bootinfo.fb_w = m->w; bootinfo.fb_h = m->h; bootinfo.fb_pitch = stride;
+    return true;
+}
+
+/* Settings: display.native = off | try | on. "try" switches once and asks (desktop) whether to keep it;
+ * display.native_check is set while an attempt hasn't been confirmed or settled: if it's still set at
+ * the next start, that start went wrong, and the switch is turned off. */
+void intelgfx_maybe_switch(void) {
+    const char *v = settings_get("display.native"), *chk = settings_get("display.native_check");
+    if (!v || !strcmp(v, "off") || !*v) return;
+    if (chk && !strcmp(chk, "1")) {
+        add("switch: the last start with it didn't finish - turned off");
+        settings_set("display.native", "off"); settings_set("display.native_check", "0");
+        return;
+    }
+    if (!mmio || !have_want) return;
+    if ((uint32_t)want_mode.w == bootinfo.fb_w && (uint32_t)want_mode.h == bootinfo.fb_h) return;   /* already there */
+    settings_set("display.native_check", "1");
+    if (!strcmp(v, "try")) settings_set("display.native", "asking");
+    native_on = do_switch();
+    if (!native_on) { settings_set("display.native", "off"); settings_set("display.native_check", "0"); }
+}
+bool intelgfx_native_asking(void) {
+#ifdef GFX_FAKE
+    return true;
+#endif
+    const char *v = settings_get("display.native"); return native_on && v && !strcmp(v, "asking"); }
+void intelgfx_native_answer(bool keep) {
+    if (keep) { settings_set("display.native", "on"); settings_set("display.native_check", "0"); return; }
+    settings_set("display.native", "off"); settings_set("display.native_check", "0");
+    acpi_reboot();
+}
+void intelgfx_native_settled(void) {                       /* 20 s after a start with "on" */
+    const char *v = settings_get("display.native");
+    if (native_on && v && !strcmp(v, "on")) settings_set("display.native_check", "0");
+}
+const char *intelgfx_offer(void) {                          /* for Settings: the size it would switch to */
+    static char o[48]; o[0] = 0;
+    if (mmio && have_want && ((uint32_t)want_mode.w != bootinfo.fb_w || (uint32_t)want_mode.h != bootinfo.fb_h || native_on))
+        ksnprintf(o, sizeof o, "%dx%d", want_mode.w, want_mode.h);
+    return o;
 }
 
 const char *intelgfx_summary(void) { return summary; }

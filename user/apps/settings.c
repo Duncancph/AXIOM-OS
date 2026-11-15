@@ -266,7 +266,18 @@ static void draw_display(void) {
         button(WW - 32 - 130, 412, 114, "Details", BTN_NORMAL, H_BTN + 60, false);
         char m[180]; ksnprintf(m, sizeof m, "Monitor: %s", mon[0] ? mon : "it didn't say what it is");
         label(SIDE + 48, 470, UI_MUTED, m);
-        label(SIDE + 48, 490, UI_MUTED, "Using the monitor's own resolution is coming in a later update.");
+        char offer[48], nat[16]; sys_setting_get("display.offer", offer, sizeof offer); sys_setting_get("display.native", nat, sizeof nat);
+        bool on = !strcmp(nat, "on") || !strcmp(nat, "asking");
+        if (on) {
+            ksnprintf(m, sizeof m, "AXIOM set the screen to the monitor's full size, %s.", offer);
+            label(SIDE + 48, 490, UI_MUTED, m);
+            button(WW - 32 - 280, 412, 140, "Turn off", BTN_NORMAL, H_BTN + 62, false);
+        } else if (offer[0]) {
+            ksnprintf(m, sizeof m, "The monitor can show %s. AXIOM can switch to it (new; it restarts).", offer);
+            label(SIDE + 48, 490, UI_MUTED, m);
+            char bl[40]; ksnprintf(bl, sizeof bl, "Use %s", offer);
+            button(WW - 32 - 280, 412, 140, bl, BTN_PRIMARY, H_BTN + 63, false);
+        } else label(SIDE + 48, 490, UI_MUTED, "This is the largest size AXIOM can show on this monitor.");
     }
 }
 
@@ -634,6 +645,8 @@ static void click(int id, int mx) {
     if (id >= H_DISK && id < H_DISK + 16) { confirm_disk = (id - H_DISK) / 2; confirm_mode = (id - H_DISK) % 2 ? INSTALL_UPDATE : INSTALL_ERASE; }
     if (id == H_BTN + 40) sys_spawn("sandbox");
     if (id == H_BTN + 60) { show_gfx = true; }
+    if (id == H_BTN + 62) { set("display.native", "off"); sys_power(1); }
+    if (id == H_BTN + 63) { set("display.native", "try"); set("display.native_check", "0"); sys_power(1); }
     if (id == H_BTN + 61) { show_gfx = false; }
     if (id == H_TOGGLE + 40) set("system.cores", !strcmp(get("system.cores"), "all") ? "one" : "all");
     if (id == H_BTN + 50) {

@@ -25,7 +25,7 @@ static const char *defaults[][2] = {
     { "keyboard.layout", "us" }, { "time.zone", "UTC" }, { "time.rtc_local", "0" }, { "time.24h", "0" },
     { "display.mode", "" }, { "mouse.speed", "5" }, { "mouse.natural", "0" }, { "mouse.left", "0" }, { "sound.volume", "70" }, { "lock.password", "" }, { "lock.idle_min", "0" }, { "screen.off_min", "10" },
     { "update.url", UPDATE_URL },
-    { "ui.accent", "" }, { "desktop.wallpaper", "axiom" }, { "user.name", "bryan" }, { "system.cores", "one" }, { "system.cores_trying", "0" }, { "dock.apps", "files,web,notes,calendar,music,terminal,settings" },
+    { "ui.accent", "" }, { "desktop.wallpaper", "axiom" }, { "user.name", "bryan" }, { "system.cores", "one" }, { "system.cores_trying", "0" }, { "dock.apps", "files,web,notes,calendar,music,terminal,settings" }, { "display.native", "off" }, { "display.native_check", "0" },
 };
 
 const char *settings_get(const char *key) {
@@ -144,6 +144,7 @@ int settings_syscall_get(const char *key, char *out, int n) {
     if (!strcmp(key, "display.gpu")) return ksnprintf(out, n, "%s", intelgfx_summary());
     if (!strcmp(key, "display.monitor")) return ksnprintf(out, n, "%s", intelgfx_monitor());
     if (!strcmp(key, "display.report")) return ksnprintf(out, n, "%s", intelgfx_report());
+    if (!strcmp(key, "display.offer")) return ksnprintf(out, n, "%s", intelgfx_offer());
     if (!strcmp(key, "lock.password")) return ksnprintf(out, n, "%s", settings_get(key)[0] ? "set" : "");
     return ksnprintf(out, n, "%s", settings_get(key));
 }
