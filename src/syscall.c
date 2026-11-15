@@ -43,7 +43,7 @@ static uint64_t sys_event(uint64_t uev, int64_t timeout) {
 }
 
 static uint64_t sys_kcmd(uint64_t ucmd, uint64_t ubuf, uint64_t len) {
-    char cmd[128];
+    char cmd[512];
     if (!copy_str(cmd, ucmd, sizeof cmd) || !len || !UOK(ubuf, len, true)) return (uint64_t)-1;
     if (len > 16384) len = 16384;
     char *buf = page_alloc(4);

@@ -23,6 +23,7 @@ struct lfd { int kind; int flags; uint64_t off; char path[200]; };
 struct lxproc {
     struct lfd fd[NFD];
     char cwd[200];
+    char exe[200];                 /* the program, as Linux paths see it (/proc/self/exe) */
     struct task *out;              /* the terminal task that started it (its output goes there), or 0 */
     int out_pid;
     char line[256]; int linelen;   /* output waiting for its end of line (for the log) */
@@ -59,6 +60,11 @@ static void path_join(const char *cwd, const char *p, char *out, size_t n) {
     }
     size_t k = 0;
     if (!np) { strncpy0(out, "/", n); return; }
+    /* Linux's own folders (/lib, /usr, /etc, /tmp...) live in AXIOM's /system/linux; AXIOM's own stay as they are */
+    static const char *axiom[] = { "home", "apps", "system", "usb0", "usb1", "usb2", "usb3" };
+    bool ours = false;
+    for (unsigned i = 0; i < sizeof axiom / sizeof axiom[0]; i++) if (!strcmp(parts[0], axiom[i])) ours = true;
+    if (!ours) for (const char *c = "/system/linux"; *c && k + 1 < n; c++) out[k++] = *c;
     for (int i = 0; i < np && k + 2 < n; i++) { out[k++] = '/'; for (const char *c = parts[i]; *c && k + 1 < n; c++) out[k++] = *c; }
     out[k] = 0;
 }
@@ -96,35 +102,46 @@ static bool copy_to(struct mm *m, uint64_t va, const void *src, uint64_t n) {
     }
     return true;
 }
-/* map a position-independent ELF at base: its segments become memory areas with their permissions */
-static bool load_elf(struct mm *m, const uint8_t *img, uint64_t size, uint64_t base, uint64_t *entry, uint64_t *phdr, int *phnum, char *interp, size_t ilen) {
-    const struct ehdr *e = (const void *)img;
-    if (size < sizeof *e || memcmp(e->id, "\x7F" "ELF", 4) || e->id[4] != 2 || e->machine != 62) return false;
-    if (e->type != 3) return false;                           /* ET_DYN (position independent) only */
+/* map a position-independent ELF file at base, reading it part by part: its segments become memory areas */
+static bool load_elf(struct mm *m, const char *path, uint64_t base, uint64_t *entry, uint64_t *phdr, int *phnum, char *interp, size_t ilen, bool *fixed) {
+    static uint8_t hdr[8192];
+    if (fixed) *fixed = false;
+    long hl = vfs_read(path, hdr, 0, sizeof hdr);
+    const struct ehdr *e = (const void *)hdr;
+    if (hl < (long)sizeof *e || memcmp(e->id, "\x7F" "ELF", 4) || e->id[4] != 2 || e->machine != 62) return false;
+    if (e->type != 3) { if (fixed) *fixed = e->type == 2; return false; }   /* ET_DYN (position independent) only */
+    if (e->phoff + (uint64_t)e->phnum * e->phentsize > (uint64_t)hl) return false;
+    struct phdr ph[64]; int n = e->phnum < 64 ? e->phnum : 64;
+    for (int i = 0; i < n; i++) memcpy(&ph[i], hdr + e->phoff + i * e->phentsize, sizeof ph[i]);
+    uint64_t ent = e->entry, phoff = e->phoff;
     if (interp) interp[0] = 0;
-    uint64_t lo = ~0ULL; *phdr = 0;
-    for (int i = 0; i < e->phnum; i++) {
-        const struct phdr *ph = (const void *)(img + e->phoff + i * e->phentsize);
-        if (ph->type == 1 && ph->vaddr < lo) lo = ph->vaddr;
-        if (ph->type == 6) *phdr = base + ph->vaddr;          /* PT_PHDR */
-        if (ph->type == 3 && interp && ph->offset + ph->filesz <= size) {   /* PT_INTERP */
-            uint64_t l = ph->filesz < ilen - 1 ? ph->filesz : ilen - 1;
-            memcpy(interp, img + ph->offset, l); interp[l] = 0;
+    *phdr = 0;
+    for (int i = 0; i < n; i++) {
+        if (ph[i].type == 6) *phdr = base + ph[i].vaddr;      /* PT_PHDR */
+        if (ph[i].type == 3 && interp) {                      /* PT_INTERP */
+            uint64_t l = ph[i].filesz < ilen - 1 ? ph[i].filesz : ilen - 1;
+            if (vfs_read(path, interp, ph[i].offset, l) != (long)l) return false;
+            interp[l] = 0;
         }
     }
-    for (int i = 0; i < e->phnum; i++) {
-        const struct phdr *ph = (const void *)(img + e->phoff + i * e->phentsize);
-        if (ph->type != 1) continue;
-        if (ph->offset + ph->filesz > size) return false;
-        uint64_t s = (base + ph->vaddr) & ~4095ULL, end = (base + ph->vaddr + ph->memsz + 4095) & ~4095ULL;
-        if (mm_mmap(m, s, end - s, DPROT_READ | DPROT_WRITE, DMAP_FIXED, 0) < 0) return false;
-        if (!copy_to(m, base + ph->vaddr, img + ph->offset, ph->filesz)) return false;
-        int prot = (ph->flags & 4 ? DPROT_READ : 0) | (ph->flags & 2 ? DPROT_WRITE : 0) | (ph->flags & 1 ? DPROT_EXEC : 0);
+    uint8_t *buf = kmalloc(65536);
+    if (!buf) return false;
+    for (int i = 0; i < n; i++) {
+        if (ph[i].type != 1) continue;
+        uint64_t s = (base + ph[i].vaddr) & ~4095ULL, end = (base + ph[i].vaddr + ph[i].memsz + 4095) & ~4095ULL;
+        if (mm_mmap(m, s, end - s, DPROT_READ | DPROT_WRITE, DMAP_FIXED, 0) < 0) { kfree(buf); return false; }
+        for (uint64_t done = 0; done < ph[i].filesz;) {
+            uint64_t want = ph[i].filesz - done < 65536 ? ph[i].filesz - done : 65536;
+            long k = vfs_read(path, buf, ph[i].offset + done, want);
+            if (k <= 0 || !copy_to(m, base + ph[i].vaddr + done, buf, k)) { kfree(buf); return false; }
+            done += k;
+        }
+        int prot = (ph[i].flags & 4 ? DPROT_READ : 0) | (ph[i].flags & 2 ? DPROT_WRITE : 0) | (ph[i].flags & 1 ? DPROT_EXEC : 0);
         mm_mprotect(m, s, end - s, prot);
-        if (!*phdr && ph->offset == 0) *phdr = base + ph->vaddr + e->phoff;
+        if (!*phdr && ph[i].offset == 0) *phdr = base + ph[i].vaddr + phoff;
     }
-    (void)lo;
-    *entry = base + e->entry; *phnum = e->phnum;
+    kfree(buf);
+    *entry = base + ent; *phnum = e->phnum;
     return true;
 }
 
@@ -133,25 +150,23 @@ static bool load_elf(struct mm *m, const uint8_t *img, uint64_t size, uint64_t b
 #define STACK_SIZE  (8ULL << 20)
 
 int linux_spawn(const char *path, int argc, char **argv, struct task *out) {
-    uint64_t len; uint8_t *img = vfs_read_all(path, &len);
-    if (!img) { kprintf("run: can't read %s\n", path); return -1; }
     struct mm *m = mm_new();
     struct lxproc *lx = kmalloc(sizeof *lx);
-    if (!m || !lx) { kfree(img); if (m) mm_put(m); kfree(lx); return -1; }
+    if (!m || !lx) { if (m) mm_put(m); kfree(lx); return -1; }
     memset(lx, 0, sizeof *lx);
-    uint64_t entry, phdr; int phnum; char interp[128];
-    if (!load_elf(m, img, len, MAIN_BASE, &entry, &phdr, &phnum, interp, sizeof interp)) {
-        const struct ehdr *e = (const void *)img;
-        kprintf("run: %s isn't a program AXIOM can run%s\n", path, len >= sizeof *e && e->type == 2 ? " (built at a fixed address: build it position-independent, e.g. -static-pie)" : "");
-        kfree(img); mm_put(m); kfree(lx); return -1;
+    uint64_t entry, phdr; int phnum; char interp[128]; bool fixed;
+    if (!load_elf(m, path, MAIN_BASE, &entry, &phdr, &phnum, interp, sizeof interp, &fixed)) {
+        struct dunc_stat st;
+        if (vfs_stat(path, &st) != 0) kprintf("run: can't find %s\n", path);
+        else kprintf("run: %s isn't a program AXIOM can run%s\n", path, fixed ? " (built at a fixed address: build it position-independent, e.g. -static-pie)" : "");
+        mm_put(m); kfree(lx); return -1;
     }
-    kfree(img);
     uint64_t start = entry, ibase = 0;
     if (interp[0]) {                                           /* a dynamically linked program: its loader first */
-        uint64_t il; uint8_t *ii = vfs_read_all(interp, &il);
+        char ip[200]; path_join("/", interp, ip, sizeof ip);
         uint64_t ie, iph; int ipn;
-        if (!ii || !load_elf(m, ii, il, INTERP_BASE, &ie, &iph, &ipn, 0, 0)) { kprintf("run: needs %s, which isn't there\n", interp); kfree(ii); mm_put(m); kfree(lx); return -1; }
-        kfree(ii); start = ie; ibase = INTERP_BASE;
+        if (!load_elf(m, ip, INTERP_BASE, &ie, &iph, &ipn, 0, 0, 0)) { kprintf("run: needs %s, which isn't there\n", interp); mm_put(m); kfree(lx); return -1; }
+        start = ie; ibase = INTERP_BASE;
     }
     /* the stack: 8 MiB at the top of the map area, then argc, argv, envp and the auxiliary vector */
     uint64_t stop = USER_MMAP_END, sbase = stop - STACK_SIZE;
@@ -178,6 +193,7 @@ int linux_spawn(const char *path, int argc, char **argv, struct task *out) {
     /* files: 0 = input (nothing yet), 1 and 2 = the terminal */
     lx->fd[0].kind = FD_TTY_IN; lx->fd[1].kind = FD_TTY_OUT; lx->fd[2].kind = FD_TTY_OUT;
     strncpy0(lx->cwd, "/home", sizeof lx->cwd);
+    strncpy0(lx->exe, !strncmp(path, "/system/linux/", 14) ? path + 13 : path, sizeof lx->exe);
     lx->out = out; lx->out_pid = out ? out->pid : 0;
     const char *nm = path; for (const char *q = path; *q; q++) if (*q == '/') nm = q + 1;
     struct task *t = task_new_user(nm, m, 0, start, sp);
@@ -198,9 +214,10 @@ void linux_task_exit(struct task *t) {
 
 /* ---------------- the system calls ---------------- */
 struct lstat { uint64_t dev, ino, nlink; uint32_t mode, uid, gid, pad; uint64_t rdev; int64_t size, blksize, blocks; uint64_t at[2], mt[2], ct[2]; int64_t r[3]; };
-static void fill_stat(struct lstat *st, bool dir, uint64_t size, bool tty) {
+static uint64_t path_ino(const char *p) { uint64_t h = 1469598103934665603ull; for (; p && *p; p++) h = (h ^ (uint8_t)*p) * 1099511628211ull; return h >> 1 | 1; }
+static void fill_stat(struct lstat *st, bool dir, uint64_t size, bool tty, const char *path) {
     memset(st, 0, sizeof *st);
-    st->dev = 1; st->ino = 1; st->nlink = 1; st->uid = st->gid = 1000;
+    st->dev = 1; st->ino = path_ino(path);   /* (loaders tell files apart by these) */ st->nlink = 1; st->uid = st->gid = 1000;
     st->mode = tty ? 0020620 : dir ? 0040755 : 0100644;
     st->size = size; st->blksize = 4096; st->blocks = (size + 511) / 512;
     uint64_t now = (uint64_t)(linux_now_ns() / 1000000000ull);
@@ -311,7 +328,7 @@ uint64_t linux_syscall(struct frame *f) {
         if (!uok(b, sizeof(struct lstat), true)) return E(EFAULT_);
         struct lfd *fd = &lx->fd[a]; struct dunc_stat st = { 0 };
         if (fd->kind == FD_FILE || fd->kind == FD_DIR) vfs_stat(fd->path, &st);
-        fill_stat((struct lstat *)b, fd->kind == FD_DIR, st.size, fd->kind == FD_TTY_IN || fd->kind == FD_TTY_OUT);
+        fill_stat((struct lstat *)b, fd->kind == FD_DIR, st.size, fd->kind == FD_TTY_IN || fd->kind == FD_TTY_OUT, fd->kind == FD_FILE || fd->kind == FD_DIR ? fd->path : (a == 0 ? "<stdin>" : "<tty>"));
         return 0;
     }
     case 4: case 6: case 262: {                                /* stat, lstat, newfstatat */
@@ -324,7 +341,7 @@ uint64_t linux_syscall(struct frame *f) {
         path_join(lx->cwd, p, full, sizeof full);
         struct dunc_stat st;
         if (vfs_stat(full, &st) != 0) return E(ENOENT_);
-        fill_stat((struct lstat *)us, st.is_dir, st.size, false);
+        fill_stat((struct lstat *)us, st.is_dir, st.size, false, full);
         return 0;
     }
     case 21: case 269: {                                       /* access, faccessat */
@@ -377,7 +394,15 @@ uint64_t linux_syscall(struct frame *f) {
         if (a >= NFD || !lx->fd[a].kind || b >= NFD) return E(EBADF_);
         if (a != b) lx->fd[b] = lx->fd[a];
         return b;
-    case 89: case 267: return E(EINVAL_);                       /* readlink(at): no links */
+    case 89: case 267: {                                       /* readlink(at): only /proc/self/exe is a link */
+        char p[200];
+        if (!ustr(p, n == 89 ? a : b, sizeof p)) return E(EFAULT_);
+        uint64_t ub = n == 89 ? b : c, ul = n == 89 ? c : d;
+        if (strcmp(p, "/proc/self/exe")) return E(EINVAL_);
+        uint64_t l = strlen(lx->exe); if (l > ul) l = ul;
+        if (!uok(ub, l, true)) return E(EFAULT_);
+        memcpy((void *)ub, lx->exe, l); return l;
+    }
     case 83: case 258: {                                       /* mkdir, mkdirat */
         char p[200], full[200];
         if (!ustr(p, n == 83 ? a : b, sizeof p)) return E(EFAULT_);

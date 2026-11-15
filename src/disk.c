@@ -103,13 +103,14 @@ static bool mount_system(struct disk *d, struct part *pt) {
     char label[16], why[96];
     void *vol = fat_open(d->bd, pt->first, label, why, sizeof why);
     if (!vol) { LOG_WARN("AXIOM volume on %s: %s\n", d->bd->name, why); return false; }
-    static const char *dirs[] = { "/home", "/apps", "/config", "/duncos" };
-    for (int i = 0; i < 4; i++) fat_ops.mkdir(vol, dirs[i]);
+    static const char *dirs[] = { "/home", "/apps", "/config", "/duncos", "/linux" };
+    for (int i = 0; i < 5; i++) fat_ops.mkdir(vol, dirs[i]);
     char kind[16]; ksnprintf(kind, sizeof kind, "%s disk", kind_name(d->kind));
     vfs_mount_at("/home", "/home", "AXIOM", kind, &fat_ops, vol);
     vfs_mount_at("/apps", "/apps", "AXIOM", kind, &fat_ops, vol);
     vfs_mount_at("/system/config", "/config", "AXIOM", kind, &fat_ops, vol);
     vfs_mount_at("/system/boot", "/duncos", "AXIOM", kind, &fat_ops, vol);
+    vfs_mount_at("/system/linux", "/linux", "AXIOM", kind, &fat_ops, vol);   /* Linux programs' /lib, /usr, /etc... */
     static const char *homedirs[] = { "/home/Documents", "/home/Downloads", "/home/Pictures", "/home/Trash" };
     for (int i = 0; i < 4; i++) vfs_mkdir(homedirs[i]);
     d->sysvol = vol; sysdisk = d;

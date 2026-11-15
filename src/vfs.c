@@ -13,7 +13,7 @@ struct vnode {
 };
 /* A mounted volume. USB drives appear as /usbN; the AXIOM disk also provides /home, /apps and
  * /system/config ("system" mounts: at = several components, sub = the folder on the volume). */
-#define NMOUNT 8
+#define NMOUNT 12
 struct mount { bool used, system; char name[16], label[32], kind[16]; const struct fs_ops *ops; void *vol;
                int depth; char at[3][64]; char sub[64]; };
 

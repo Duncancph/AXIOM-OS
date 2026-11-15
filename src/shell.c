@@ -101,8 +101,8 @@ static void cmd_uptime(void) {
 }
 
 void shell_execute(char *line) {
-    char *argv[8]; int argc = 0;
-    for (char *p = line; *p && argc < 8;) {
+    char *argv[24]; int argc = 0;
+    for (char *p = line; *p && argc < 24;) {
         while (*p == ' ') *p++ = 0;
         if (!*p) break;
         argv[argc++] = p;
