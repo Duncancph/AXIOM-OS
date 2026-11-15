@@ -56,7 +56,9 @@ static void unit_checks(void) {
     uint32_t c;
     CHECK(css_parse_color("#f00", 4, &c) && c == 0xFFFF0000, "#f00");
     CHECK(css_parse_color("rgb(0, 128, 255)", 16, &c) && c == 0xFF0080FF, "rgb()");
-    CHECK(css_parse_color("rgba(0,0,0,0.2)", 15, &c) && c == 0, "rgba transparent");
+    CHECK(css_parse_color("rgba(0,0,0,0.2)", 15, &c) && c == 0x33000000, "rgba keeps alpha %08x", c);
+    CHECK(css_parse_color("rgba(0,0,0,0.01)", 16, &c) && c == 0, "rgba nearly invisible");
+    CHECK(css_parse_color("#00000080", 9, &c) && c == 0x80000000, "#rrggbbaa alpha %08x", c);
     CHECK(css_parse_color("rebeccapurple", 13, &c) && c == 0xFF663399, "named");
     CHECK(css_parse_color("hsl(120, 100%, 25%)", 19, &c) && c == 0xFF008000, "hsl %08x", c);
     CHECK(!css_parse_color("nonsense", 8, &c), "bad colour");

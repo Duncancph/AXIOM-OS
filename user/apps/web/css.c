@@ -103,7 +103,8 @@ static int hue2rgb(long p, long q, long t) {      /* all * 1000, t in 0..1000 (o
     return clamp255((r * 255 + 500) / 1000);
 }
 
-/* returns false if not a colour. Colours with alpha under 50% are transparent: *out = 0. Opaque: 0xFF000000 | rgb */
+/* returns false if not a colour. *out = alpha << 24 | rgb (alpha 255: opaque); nearly invisible colours (alpha
+ * under 5%) are 0, transparent */
 bool css_parse_color(const char *s, int n, uint32_t *out) {
     while (n && sp(*s)) { s++; n--; }
     while (n && sp(s[n - 1])) n--;
@@ -115,7 +116,7 @@ bool css_parse_color(const char *s, int n, uint32_t *out) {
         uint32_t r, g, b, a = 255;
         if (k <= 4) { r = d[0] * 17; g = d[1] * 17; b = d[2] * 17; if (k == 4) a = d[3] * 17; }
         else { r = d[0] * 16 + d[1]; g = d[2] * 16 + d[3]; b = d[4] * 16 + d[5]; if (k == 8) a = d[6] * 16 + d[7]; }
-        *out = a < 128 ? 0 : 0xFF000000 | r << 16 | g << 8 | b;
+        *out = a < 13 ? 0 : a << 24 | r << 16 | g << 8 | b;
         return true;
     }
     if (pre_ci(s, n, "rgb") || pre_ci(s, n, "hsl")) {
@@ -126,7 +127,8 @@ bool css_parse_color(const char *s, int n, uint32_t *out) {
         int k = func_args(o + 1, c - o - 1, v, pct, 4);
         if (k < 3) return false;
         long a = k > 3 ? (pct[3] ? v[3] / 100 : v[3]) : 1000;   /* alpha * 1000 */
-        if (a < 500) { *out = 0; return true; }
+        if (a < 50) { *out = 0; return true; }
+        uint32_t a8 = a >= 1000 ? 255 : (uint32_t)(a * 255 / 1000);
         int r, g, b;
         if (lc(s[0]) == 'r') {
             r = clamp255(pct[0] ? v[0] * 255 / 100000 : v[0] / 1000); g = clamp255(pct[1] ? v[1] * 255 / 100000 : v[1] / 1000);
@@ -141,7 +143,7 @@ bool css_parse_color(const char *s, int n, uint32_t *out) {
             long q = l < 500 ? l * (1000 + sa) / 1000 : l + sa - l * sa / 1000, p = 2 * l - q;
             r = hue2rgb(p, q, h + 333); g = hue2rgb(p, q, h); b = hue2rgb(p, q, h - 333);
         }
-        *out = 0xFF000000 | r << 16 | g << 8 | b;
+        *out = a8 << 24 | r << 16 | g << 8 | b;
         return true;
     }
     if (eq_ci(s, n, "transparent")) { *out = 0; return true; }
@@ -973,16 +975,25 @@ static void apply(struct style *st, const struct style *ps, const char *prop, co
                     st->bgimage = ar_strndup(sar, full, strlen(full));
                 }
             } else if (pre_ci(t[i], tl[i], "linear-gradient(") || pre_ci(t[i], tl[i], "radial-gradient(")) {
-                /* use the first colour stop as a flat colour */
+                /* a flat colour: the average of the colour stops (see-through ones count as such) */
                 const char *a = t[i]; int al = tl[i];
                 const char *o = a; while (o < a + al && *o != '(') o++;
                 const char *q = o + 1;
+                long sr = 0, sg = 0, sb = 0, sa = 0; int ns = 0;
                 while (q < a + al) {
                     const char *b = q; int depth = 0;
                     while (q < a + al && (depth || (*q != ',' && *q != ')'))) { if (*q == '(') depth++; else if (*q == ')') depth--; q++; }
                     const char *tt[3]; int ttl[3]; int kk = tokens(b, q - b, tt, ttl, 3);
-                    if (kk && color_val(tt[0], ttl[0], &c) && !img_only) { st->bg = c == CURRENT ? 0xFF000000 | st->color : c; break; }
+                    if (kk && (color_val(tt[0], ttl[0], &c) || eq_ci(tt[0], ttl[0], "transparent"))) {
+                        if (eq_ci(tt[0], ttl[0], "transparent")) c = 0;
+                        if (c == CURRENT) c = 0xFF000000 | st->color;
+                        long ca = c >> 24; sa += ca; sr += ca * (c >> 16 & 255); sg += ca * (c >> 8 & 255); sb += ca * (c & 255); ns++;
+                    }
                     q++;
+                }
+                if (ns && !img_only) {
+                    long ma = sa / ns;
+                    st->bg = ma < 13 ? 0 : (uint32_t)(ma > 255 ? 255 : ma) << 24 | (uint32_t)(sr / sa) << 16 | (uint32_t)(sg / sa) << 8 | (uint32_t)(sb / sa);
                 }
             } else if (!img_only && color_val(t[i], tl[i], &c)) st->bg = c == CURRENT ? 0xFF000000 | st->color : c;
             else if (eq_ci(t[i], tl[i], "no-repeat")) st->bgrep = 1;

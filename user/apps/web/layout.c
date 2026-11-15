@@ -28,6 +28,7 @@ static int table_depth, flex_depth;
 #define MAX_DEPTH 90
 static struct ditem dummy_item;
 static struct node *cur_src;           /* the element being laid out: recorded in each display item */
+static int cur_layer;                  /* painting layer of what is being laid out (see layer_for) */
 
 static int push(int kind) {
     if (L->nit >= L->cap) {
@@ -39,7 +40,7 @@ static int push(int kind) {
     }
     struct ditem *d = &L->it[L->nit];
     memset(d, 0, sizeof *d);
-    d->kind = kind; d->link = -1; d->src = cur_src;
+    d->kind = kind; d->link = -1; d->src = cur_src; d->layer = (int16_t)cur_layer;
     return L->nit++;
 }
 static struct ditem *IT(int i) { return i >= 0 && i < L->nit ? &L->it[i] : &dummy_item; }
@@ -458,7 +459,7 @@ static void add_word(struct fctx *c, const struct ictx *ic, const char *w, int n
         if (c->last_bg == ic->bgst && sw) { rx -= sw; rw += sw; }
         if (c->bg_pad_left) { rx -= c->bg_pad_left; rw += c->bg_pad_left; c->bg_pad_left = 0; }
         int ri = push(DI_RECT);
-        if (ri >= 0) { struct ditem *r = IT(ri); r->x = rx; r->w = rw; r->y = -ga - pt + dy; r->h = ga + gd + pt + pb; r->col = ic->bgst->bg & 0xFFFFFF; }
+        if (ri >= 0) { struct ditem *r = IT(ri); r->x = rx; r->w = rw; r->y = -ga - pt + dy; r->h = ga + gd + pt + pb; r->col = ic->bgst->bg; }
         c->last_bg = ic->bgst; c->last_bg_rect = ri;
     } else c->last_bg = 0;
     /* merge with the previous word when it looks the same */
@@ -912,18 +913,18 @@ __attribute__((noinline)) static void layout_table(struct fctx *c, struct node *
             int va = cs->valign_set ? cs->valign : rs->valign_set ? rs->valign : VA_MIDDLE;
             int dy = va == VA_MIDDLE ? (rowh - cell[k].h) / 2 : va == VA_BOTTOM ? rowh - cell[k].h : 0;
             if (dy > 0) shift_items(cell[k].i0, cell[k].i1, dy);
-            if (cell[k].bg >= 0) { struct ditem *b = IT(cell[k].bg); b->x = cell[k].x; b->y = cy; b->w = cell[k].w; b->h = rowh; b->col = cs->bg & 0xFFFFFF; }
+            if (cell[k].bg >= 0) { struct ditem *b = IT(cell[k].bg); b->x = cell[k].x; b->y = cy; b->w = cell[k].w; b->h = rowh; b->col = cs->bg; }
             /* collapsed borders: a cell leaves out the edges its neighbour above or to the left already drew */
             borders_m(cs, cell[k].x, cy, cell[k].w, rowh, st->bcollapse && r > 0, st->bcollapse && cell[k].x > cx0);
         }
-        if (rbg >= 0) { struct ditem *b = IT(rbg); b->x = cx0 - s; b->y = cy; b->w = tw; b->h = rowh; b->col = rs->bg & 0xFFFFFF; }
+        if (rbg >= 0) { struct ditem *b = IT(rbg); b->x = cx0 - s; b->y = cy; b->w = tw; b->h = rowh; b->col = rs->bg; }
         if (row->tr) row->tr->y = cy;
         cy += rowh + s;
         if (cy > 4000000) break;
     }
     int bottom = cy + pb + bb;
     if (!t.nr) bottom = y + bt + pt + pb + bb;
-    if (bgi >= 0) { struct ditem *b = IT(bgi); b->x = x; b->y = top; b->w = boxw; b->h = bottom - top; b->col = st->bg & 0xFFFFFF; }
+    if (bgi >= 0) { struct ditem *b = IT(bgi); b->x = x; b->y = top; b->w = boxw; b->h = bottom - top; b->col = st->bg; }
     borders(st, x, top, boxw, bottom - top);
     c->y = bottom; c->pm = mb;
     depth--; table_depth--;
@@ -1137,6 +1138,26 @@ static void place_pending(int p0, int cx, int cy, int cw, int ch, int first_item
     napend = k;
 }
 
+/* paint order: a stable sort of the display list by layer (document order within a layer) */
+static void sort_layers(void) {
+    bool any = false;
+    for (int i = 0; i < L->nit && !any; i++) if (L->it[i].layer) any = true;
+    if (!any) return;
+    struct ditem *tmp = malloc((size_t)L->nit * sizeof *tmp);
+    if (!tmp) return;
+    for (int w = 1; w < L->nit; w *= 2) {                   /* bottom-up merge sort */
+        for (int lo = 0; lo < L->nit; lo += 2 * w) {
+            int mid = lo + w < L->nit ? lo + w : L->nit, hi = lo + 2 * w < L->nit ? lo + 2 * w : L->nit;
+            int a = lo, b = mid, k = lo;
+            while (a < mid && b < hi) tmp[k++] = L->it[b].layer < L->it[a].layer ? L->it[b++] : L->it[a++];
+            while (a < mid) tmp[k++] = L->it[a++];
+            while (b < hi) tmp[k++] = L->it[b++];
+        }
+        memcpy(L->it, tmp, (size_t)L->nit * sizeof *tmp);
+    }
+    free(tmp);
+}
+
 static void layout_block_(struct fctx *c, struct node *n, struct ictx ic, int forced_w);
 static void layout_block(struct fctx *c, struct node *n, struct ictx ic, int forced_w) {
     struct node *saved = cur_src;
@@ -1184,6 +1205,13 @@ static void layout_block_(struct fctx *c, struct node *n, struct ictx ic, int fo
     int x0 = c->left + ml;
     n->y = top;
     int p0 = napend, first_item = L->nit;
+    /* positioned boxes paint above the flow around them, higher z-index above lower */
+    int saved_layer = cur_layer;
+    bool flex_child = n->parent && n->parent->st && (n->parent->st->display == D_FLEX || n->parent->st->display == D_INLINE_FLEX);
+    if ((st->pos >= 1 && st->pos <= 3 && st->z >= 0) || (flex_child && st->z > 0)) {   /* z-index works on flex items too */
+        int nl = cur_layer + (st->z > 0 ? 100 + (st->z > 5000 ? 5000 : st->z) : 1);
+        cur_layer = nl > 30000 ? 30000 : nl;
+    }
     int bgi = st->bg && n != canvas_node && st->vis ? push(DI_RECT) : -1;
     int bgimg = -1;
     if (st->bgimage && st->vis) {
@@ -1214,7 +1242,7 @@ static void layout_block_(struct fctx *c, struct node *n, struct ictx ic, int fo
     if (cc.fl != c->fl) { int fb = fl_clear(cc.fl, 3) - (top + bt + pt); if (fb > content) content = fb; }   /* its own floats are inside it */
     if (st->h.t == L_PX) { int h = st->h.v - (st->bsizing ? pt + pb + bt + bb : 0); if (h > content) content = h; }
     int bottom = top + bt + pt + content + pb + bb;
-    if (bgi >= 0) { struct ditem *b = IT(bgi); b->x = x0; b->y = top; b->w = w + frame; b->h = bottom - top; b->col = st->bg & 0xFFFFFF; }
+    if (bgi >= 0) { struct ditem *b = IT(bgi); b->x = x0; b->y = top; b->w = w + frame; b->h = bottom - top; b->col = st->bg; }
     if (bgimg >= 0) { struct ditem *b = IT(bgimg); b->x = x0; b->y = top; b->w = w + frame; b->h = bottom - top; }
     borders(st, x0, top, w + frame, bottom - top);
     n->bx = x0; n->by = top; n->bw = w + frame; n->bh = bottom - top; n->bgen = layout_pass;
@@ -1225,6 +1253,7 @@ static void layout_block_(struct fctx *c, struct node *n, struct ictx ic, int fo
         int dy = st->inset[0].t == L_PX ? st->inset[0].v : st->inset[2].t == L_PX ? -st->inset[2].v : 0;
         if (dx || dy) { shift_xy(first_item, L->nit, dx, dy); n->bx += dx; n->by += dy; }
     }
+    cur_layer = saved_layer;
     c->y = bottom; c->pm = mb;
 }
 
@@ -1253,10 +1282,11 @@ void layout_doc(struct doc *d, struct layout *Lo, int width) {
     static struct style rootst; rootst.fsize = 16; rootst.vis = 1;
     c.left = 0; c.width = width; c.y = 0; c.x = 0; c.bst = &rootst; c.line_first = 0; c.fl = new_flist();
     struct ictx ic = { &rootst, 0, -1, 0, false };
-    apend = 0; napend = capend = 0; abs_bottom = 0; layout_pass++;
+    apend = 0; napend = capend = 0; abs_bottom = 0; layout_pass++; cur_layer = 0;
     L->doc_w = width;
     if (d->root->st && d->root->st->display != D_NONE) layout_block(&c, d->root, ic, -1);
     place_pending(0, 0, 0, width, layout_viewport_h, 0, true);   /* the rest: against the window */
     L->doc_h = c.y + (c.pm > 0 ? c.pm : 0);
     if (abs_bottom > L->doc_h) L->doc_h = abs_bottom;
+    sort_layers();
 }

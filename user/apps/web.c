@@ -1321,7 +1321,12 @@ static void draw(void) {
         if (it->deco & 0x80) continue;                 /* visibility: hidden */
         int x = it->x, y = it->y + oy;
         switch (it->kind) {
-        case DI_RECT: gfx_fill(c, x, y, it->w, it->h, it->col); break;
+        case DI_RECT: {                                 /* backgrounds may be see-through (alpha in the top byte) */
+            uint32_t al = it->col >> 24;
+            if (al && al < 250) gfx_blend(c, x, y, it->w, it->h, it->col & 0xFFFFFF, (int)al);
+            else gfx_fill(c, x, y, it->w, it->h, it->col & 0xFFFFFF);
+            break;
+        }
         case DI_FRAME: {
             int t = it->asc > 0 ? it->asc : 1;
             gfx_fill(c, x, y, it->w, t, it->col); gfx_fill(c, x, y + it->h - t, it->w, t, it->col);

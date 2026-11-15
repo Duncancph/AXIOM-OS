@@ -138,6 +138,7 @@ const struct font *web_font(int px, bool bold, bool italic);
 enum { DI_RECT, DI_TEXT, DI_MONO, DI_IMG, DI_CTRL, DI_MARK, DI_FRAME, DI_BGIMG };
 struct ditem {
     uint8_t kind, deco, mark; int16_t link_hi;
+    int16_t layer;                    /* painting order: positioned boxes and z-index (items are sorted by it) */
     int x, y, w, h;                   /* DI_TEXT/DI_MONO: y = top of the text box, h its height; base = y + asc */
     int asc;
     uint32_t col;
