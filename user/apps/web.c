@@ -142,6 +142,9 @@ static void on_stuck_alarm(void *frame) {
     stuck_rip = ((uint64_t *)frame)[17];                    /* where it was (struct frame: 15 registers, vec, err, rip) */
     dunc_longjmp(stuck_jb, 1);
 }
+/* a script is running and making progress (called from the script engine's regular check): start the 8 s again,
+ * so only Arc's own code going round in circles sets the alarm off, not a long script */
+void web_still_alive(void) { sys_alarm(8000 * web_time_scale, on_stuck_alarm); }
 static void recover_from_stuck(void) {
     stuck_count++;
     js_abandon(stuck_rip);

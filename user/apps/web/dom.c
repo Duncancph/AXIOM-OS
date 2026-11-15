@@ -81,6 +81,7 @@ static _Bool h_interrupt(void *c) {
     if (now - run_start > 8000 * (uint64_t)web_time_scale && !busy_said) { busy_said = true; web_busy_status("This page is busy (a script is still running). Press Esc to stop its scripts."); }
     if (now - last_look > 100) {
         last_look = now;
+        web_still_alive();
         struct dunc_event e;
         while (sys_event(&e, 0) > 0) {
             if (e.type == EV_CLOSE) sys_exit(0);
