@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 108
-notes Arc: see-through backgrounds and z-index stacking (netflix.com was all black)
-file kernel b108/thane.elf.gz 18139192 1e8aaf76a38915bc3609077faaea7f398f91e10854d93bd912f285df292fd9ee
-file initrd b108/initrd.tar.gz 1280000 a47fb9ddcd6647eccfeec474e3971d434556854e6c73030f0c8b5d24a80799d3
-file bootx64 b108/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b108/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 304602210081953cc9446a08b3cba4fe721c3b60719e3dfa495e953f84ebbe86b1f8bd2b7602210088894880a469a14e0d45212b201ec769d992a691008839536904e201d3fb4ac9
+build 110
+notes Arc: streaming video for sites (Media Source Extensions), binary downloads for scripts, cookies shared with scripts, scripts no longer cut off
+file kernel b110/thane.elf.gz 18204704 941118cd55853b572ca922281966e029addef338c5e6daf0ee04daa8864d78ec
+file initrd b110/initrd.tar.gz 1280000 820bebee9b6c050d14707e582aa4cf17b85d028b6ec092f24193b87b056de858
+file bootx64 b110/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b110/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022100eae44779f41a59278fd78a4d348be9912391a7cca5c60e522816163277dc0ad2022046d89cdb2f58da5de636030619d1850767ea7d7bf0e6a2eed378a25352de31aa
