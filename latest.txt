@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 91
-notes Crash notices show the address where the app stopped
-file kernel b91/thane.elf.gz 16395336 c104aad19a8c107ae159f3a06d00e826a11ca4ba99858ea198abd775e279d43d
-file initrd b91/initrd.tar.gz 1280000 3876d5f48d8c25faf24968435726bc8a6441f32efdb1525a5ea4b5205f3d2024
-file bootx64 b91/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b91/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022100adef481d91d094950fcac09661a1c199b52aeb899ad773330f95c47a47c04dcf0220725174520c6f8b2862a9425a0e16efc49308c61064a2fc9542e05eab18817cf8
+build 93
+notes Web plays video and sound in pages (MP4, MP3, WAV); the kernel is now called Axiom Core and the Terminal shell CMD
+file kernel b93/thane.elf.gz 17906760 2299c12ccb817d7fea69d982378e8cb5f6aa42cf403ae2e4fdbeaeb4b8f574d5
+file initrd b93/initrd.tar.gz 1280000 b976a77f430c5ca633ff34fd3ff9e50c29d32affe9487f75f53b7c267c9aa980
+file bootx64 b93/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b93/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304402207e800f8083de2bc4277400d29725454c60161c5f7264f7003452990f8fb91a740220390e3baff37b2c735111eab84453a23d6067f26e5329dde30c59949ca199006d
