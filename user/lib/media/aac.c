@@ -81,7 +81,7 @@ static void set_output(aacdec *d) {
     int n = d->have_pce ? pce_channels(&d->pce) : cfg_channels(d->chan_cfg);
     d->out_ch = n == 1 ? 1 : 2;
     if (d->ps == 1) d->out_ch = 2;
-    d->out_rate = d->sbr == 1 ? (d->ext_rate ? d->ext_rate : 2 * d->core_rate) : d->core_rate;
+    d->out_rate = d->sbr == 1 ? 2 * d->core_rate : d->core_rate;   /* (downsampled SBR is not supported) */
 }
 
 static int parse_asc(aacdec *d, const uint8_t *cfg, int len) {
@@ -146,6 +146,17 @@ done:
     return ok;
 }
 
+static void drop_elements(aacdec *d) {
+    for (int c = 0; c < d->nch; c++) {
+        free(d->ch[c]->ltp_buf);
+        free(d->ch[c]->pred);
+        free(d->ch[c]);
+        d->ch[c] = 0;
+    }
+    for (int i = 0; i < d->nelem; i++) aac_sbr_free(d->elem[i].sbr);
+    d->nch = d->nelem = 0;
+}
+
 /* ADTS header; returns header length or 0 */
 static int parse_adts(aacdec *d, const uint8_t *p, int len, int *frame_len, int *nblocks) {
     if (len < 7 || p[0] != 0xff || (p[1] & 0xf6) != 0xf0) return 0;
@@ -162,12 +173,14 @@ static int parse_adts(aacdec *d, const uint8_t *p, int len, int *frame_len, int 
     if (aot == AOT_SSR) return 0;
     if (!d->configured || d->sfi != sfi || d->chan_cfg != cc || d->aot != aot || !d->adts) {
         int keep_sbr = d->configured && d->adts && d->sfi == sfi;
+        drop_elements(d);   /* new layout / rate / profile: start from scratch */
         d->aot = aot;
         d->sfi = sfi;
         d->core_rate = aac_rates[sfi];
         d->chan_cfg = cc;
         d->have_pce = 0;
         if (!keep_sbr) {
+            d->frames = 0;   /* implicit SBR / PS are detected in the first frame of the new configuration */
             d->sbr = -1;
             d->ps = cc == 1 && aot == AOT_LC ? -1 : 0;
             d->ext_rate = 0;
@@ -761,10 +774,8 @@ static void filterbank(struct aac_chan *c, float *out) {
     c->prev_shape = ics->shape;
 }
 
+/* LTP, TNS and the filterbank for one decoded channel (prediction was applied in the element decoder) */
 static void finish_channel(aacdec *d, struct aac_chan *c) {
-    if (c->pred && c->ics.ws != EIGHT_SHORT) {
-        /* prediction is applied in the element decoder */
-    }
     apply_ltp(d, c);
     if (c->tns.present) apply_tns(d, c, c->coef, 1);
     filterbank(c, c->out);
@@ -1130,12 +1141,7 @@ void aac_reset(aacdec *d) {
 
 void aac_close(aacdec *d) {
     if (!d) return;
-    for (int c = 0; c < d->nch; c++) {
-        free(d->ch[c]->ltp_buf);
-        free(d->ch[c]->pred);
-        free(d->ch[c]);
-    }
-    for (int i = 0; i < d->nelem; i++) aac_sbr_free(d->elem[i].sbr);
+    drop_elements(d);
     free(d->scratch);
     free(d->fbuf);
     free(d->buf);

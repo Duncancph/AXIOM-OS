@@ -484,6 +484,10 @@ void h264_finish_picture(h264dec *d) {
     cur->busy = 0;
     int out = 1;
     if (d->drop_leading && cur->epoch == d->key_epoch && cur->poc < d->key_poc) out = 0;
+    if (d->recover_until >= 0) {
+        if (cur->frame_num == d->recover_until || d->recover_left <= 0) d->recover_until = -1;
+        else { out = 0; if (fs->nal_ref_idc) d->recover_left--; }
+    }
     cur->waiting = out;
     /* a picture that should have been output before one already returned: the stream reorders more than
        it announced (or announced nothing); grow the reorder window like other decoders do */
@@ -514,14 +518,23 @@ static int start_picture(h264dec *d, const struct h264_slice *s, const struct h2
 
     /* keyframe gating */
     int just_keyed = 0;
+    int recovery = d->recovery_cnt;
+    d->recovery_cnt = -1;
     if (d->need_key) {
-        if (!s->idr && s->type != 2) return 1;   /* skip until a keyframe */
+        /* a keyframe is an IDR picture, an I picture, or a picture with a recovery point SEI (intra refresh) */
+        if (!s->idr && s->type != 2 && recovery < 0) return 1;
         d->need_key = 0;
         just_keyed = !s->idr;
         d->drop_leading = !s->idr;
         if (!s->idr) d->have_prev_ref = 0;
+        /* gradual decoding refresh: pictures are only complete after recovery_frame_cnt frames */
+        d->recover_until = -1;
+        if (!s->idr && s->type != 2 && recovery >= 0) {
+            d->recover_until = (s->frame_num + recovery) % (1 << d->act_sps->log2_max_frame_num);
+            d->recover_left = recovery;
+        }
     }
-    if (s->idr) { d->drop_leading = 0; d->epoch++; }
+    if (s->idr) { d->drop_leading = 0; d->recover_until = -1; d->epoch++; }
     for (int i = 0; i < s->n_mmco; i++) if (s->mmco[i].op == 5) { d->epoch++; break; }
 
     int maxfn = 1 << a->log2_max_frame_num;

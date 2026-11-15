@@ -222,9 +222,10 @@ def derive(rate, h):
 # ---------------------------------------------------------------- SBR payload writer
 class SbrChannelState:
     def __init__(self):
-        self.env = [0] * 48       # last envelope (env_q[0])
+        # the decoder's env_q[6][48] / noise_q[3][5] rows: values beyond the bands sent in a frame persist
+        self.env_rows = [[0] * 48 for _ in range(6)]
         self.fr_last = 0          # freq_res of the last envelope
-        self.noise = [0] * 5
+        self.noise_rows = [[0] * 5 for _ in range(3)]
         self.trail = 16           # last time border of the previous frame
         self.num_env = 0
 
@@ -378,11 +379,12 @@ class SbrWriter:
             if "env" in self.force:
                 lo = hi = self.force["env"] // (2 if amp else 1)
         tl, fl = SBR_LAV[t_i], SBR_LAV[f_i]
-        prev, prev_fr = st.env, st.fr_last
+        rows = st.env_rows
+        prev, prev_fr = rows[0], st.fr_last
         for e in range(ne):
             fr = frs[e]
             nb = n[fr]
-            cur = [0] * 48
+            cur = rows[e + 1]
             if df[e]:   # time delta
                 for j in range(nb):
                     if fr == prev_fr:
@@ -417,7 +419,8 @@ class SbrWriter:
                     bw.huff(HUFF[f_i], dd + fl)
                     cur[j] = v
             prev, prev_fr = cur, fr
-        st.env, st.fr_last = prev, prev_fr
+        rows[0] = list(rows[ne])
+        st.fr_last = prev_fr
 
     def noise(self, bw, st, nn, dfn, bal, delta):
         r = self.rng
@@ -429,9 +432,10 @@ class SbrWriter:
             if "noise" in self.force:
                 lo = hi = self.force["noise"]
         tl, fl = SBR_LAV[t_i], SBR_LAV[f_i]
-        prev = st.noise
+        rows = st.noise_rows
+        prev = rows[0]
         for i in range(nn):
-            cur = [0] * 5
+            cur = rows[i + 1]
             if dfn[i]:
                 for j in range(nq):
                     target = int(r.integers(lo, hi + 1)) // delta * delta
@@ -454,7 +458,7 @@ class SbrWriter:
                     bw.huff(HUFF[f_i], dd + fl)
                     cur[j] = v
             prev = cur
-        st.noise = prev
+        rows[0] = list(rows[nn])
 
     def payload(self, is_cpe):
         """one SBR extension payload (after the 4-bit extension type)"""

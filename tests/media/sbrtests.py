@@ -43,6 +43,10 @@ def make_case(name, kind, core_rate, ch, br, seed, ps=False, force=None, secs=3.
     out = T.p("he_%s.aac" % name)
     sbrgen.add_sbr(core, out, r.stdout.decode().splitlines(), core_rate, seed, ps=ps, force=force)
     os.remove(core)
+    # the generated payloads must be valid: ffmpeg must not complain about them
+    err = T.run(["ffmpeg", "-v", "error", "-nostdin", "-i", out, "-f", "null", "-"]).stderr.decode().strip()
+    if err:
+        T.fail("sbrgen wrote an invalid stream %s: %s" % (name, err[:300]))
     return out
 
 
@@ -86,7 +90,7 @@ def test_sbr():
     def one(a):
         i, (name, kind, rate, ch, br, ps, force) = a
         try:
-            path = make_case(name, kind, rate, ch, br, 1000 + i, ps, force)
+            path = make_case(name, kind, rate, ch, br, 1000 + sum(map(ord, name)), ps, force)
         except Exception as e:
             return name, None, str(e)
         out_ch = 2 if ch == 1 else ch   # mono HE-AAC is decoded as stereo (PS may appear at any time), like ffmpeg
@@ -109,7 +113,7 @@ def test_sbr():
                 try:
                     refs = AT.ff_decode_all(path)
                     out = path + ".x"
-                    r = T.run([T.BIN["aac_test_asan"], "decode", path, out, "f32", "all", "asc=" + asc])
+                    r = T.run([T.BIN["aac_test_fast" if T.QUICK else "aac_test_asan"], "decode", path, out, "f32", "all", "asc=" + asc])
                     if r.returncode:
                         raise RuntimeError(r.stderr.decode()[-2000:])
                     x = np.fromfile(out, np.float32)
@@ -163,4 +167,4 @@ def main(t, at):
     elif not T.SBR_FILES:
         # fuzz / speed want some HE files
         for i, (name, kind, rate, ch, br, ps, force) in enumerate(cases()[:4] + [c for c in cases() if c[5]][:1]):
-            T.SBR_FILES.append(make_case(name, kind, rate, ch, br, 1000 + i, ps, force))
+            T.SBR_FILES.append(make_case(name, kind, rate, ch, br, 1000 + sum(map(ord, name)), ps, force))

@@ -83,7 +83,9 @@ def probe_ch(path):
     return int(a), int(b)   # sample_rate, channels
 
 
-def my_decode(path, mode="f32", all_ch=False, binary="aac_test_asan"):
+def my_decode(path, mode="f32", all_ch=False, binary=None):
+    # full runs compare with the ASan/UBSan build, --quick with the -O2 one (damaged / fuzz always use ASan)
+    binary = binary or ("aac_test_fast" if T.QUICK else "aac_test_asan")
     out = path + ".mine"
     args = [T.BIN[binary], "decode", path, out, mode] + (["all"] if all_ch else [])
     r = T.run(args, timeout=600)
@@ -357,12 +359,24 @@ def test_damaged():
         f = T.p("aac_dmg_%s.aac" % nm)
         open(f, "wb").write(blob)
         try:
-            info, x, msgs = my_decode(f, "s16")
+            info, x, msgs = my_decode(f, "s16", binary="aac_test_asan")
             print("  ok %-20s decoded %d frames (intact file: %d)" % (nm, info["frames"], ref_frames), flush=True)
             if nm == "bitflips" and info["frames"] < ref_frames * 0.9:
                 T.fail("damaged %s: only %d frames" % (nm, info["frames"]))
         except Exception as e:
             T.fail("damaged %s: %s" % (nm, e))
+    # ADTS whose configuration changes mid-stream (stereo 44.1 kHz, mono 22.05 kHz, 5.1 48 kHz, HE-AAC)
+    parts = [data]
+    for nm, kind, rate, ch in (("cfg_mono", "music", 22050, 1), ("cfg_51", "noise", 48000, 6)):
+        parts.append(open(encode(nm, signal(kind, rate, ch, 1, rng), rate, ch, [], 1, None), "rb").read())
+    parts += [open(f, "rb").read() for f in T.SBR_FILES[:1]]
+    f = T.p("aac_dmg_concat.aac")
+    open(f, "wb").write(b"".join(parts))
+    try:
+        info, x, msgs = my_decode(f, "s16", binary="aac_test_asan")
+        print("  ok %-20s decoded %d frames, ends at %d Hz %d ch" % ("config changes", info["frames"], info["rate"], info["channels"]), flush=True)
+    except Exception as e:
+        T.fail("config changes: %s" % e)
     # damaged MP4
     m4a = path[:-4] + ".m4a"
     T.ff("-i", path, "-c", "copy", m4a)
@@ -372,7 +386,7 @@ def test_damaged():
     f = T.p("aac_dmg_mp4.m4a")
     open(f, "wb").write(bytes(d))
     try:
-        info, x, msgs = my_decode(f, "s16")
+        info, x, msgs = my_decode(f, "s16", binary="aac_test_asan")
         print("  ok %-20s decoded %d frames" % ("mp4 bitflips", info["frames"]), flush=True)
     except Exception as e:
         T.fail("damaged mp4: %s" % e)

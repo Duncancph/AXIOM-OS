@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
+sys.dont_write_bytecode = True   # keep tests/media free of __pycache__
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 SRC = os.path.join(ROOT, "user", "lib", "media")

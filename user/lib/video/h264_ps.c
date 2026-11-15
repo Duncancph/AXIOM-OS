@@ -133,7 +133,6 @@ int h264_parse_sps(h264dec *d, struct h264_br *b) {
     s.reorder = -1;
     s.max_dec_buf = -1;
     if (br_bit(b)) {   /* VUI: tolerate truncation */
-        struct h264_br save = *b;
         int ok = 1;
         if (br_bit(b)) { if (br_bits(b, 8) == 255) br_bits(b, 32); }
         if (br_bit(b)) br_bit(b);
@@ -162,7 +161,6 @@ int h264_parse_sps(h264dec *d, struct h264_br *b) {
                 s.max_dec_buf = (int)mdb;
             }
         }
-        (void)save;
     }
     s.valid = 1;
     if (!d->sps[id]) {

@@ -3,6 +3,95 @@
 #include <emmintrin.h>
 
 /* ---------------------------------------------------------------- transforms */
+#ifndef H264_NO_SIMD
+H264_INLINE void transpose4x4_16(__m128i *a, __m128i *b) {
+    /* a = rows 0,1 (4 x int16 each), b = rows 2,3 -> a = cols 0,1, b = cols 2,3 */
+    __m128i t0 = _mm_unpacklo_epi16(*a, _mm_srli_si128(*a, 8));   /* r0c0 r1c0 r0c1 r1c1 r0c2 r1c2 r0c3 r1c3 */
+    __m128i t1 = _mm_unpacklo_epi16(*b, _mm_srli_si128(*b, 8));   /* r2c0 r3c0 ... */
+    __m128i lo = _mm_unpacklo_epi32(t0, t1);                      /* r0c0 r1c0 r2c0 r3c0 r0c1 r1c1 r2c1 r3c1 */
+    __m128i hi = _mm_unpackhi_epi32(t0, t1);                      /* cols 2, 3 */
+    *a = lo; *b = hi;
+}
+/* one 1-D pass over 4 vectors of 4 lanes held as (x0|x1) and (x2|x3) pairs */
+H264_INLINE void idct4_pass(__m128i *a, __m128i *b) {
+    __m128i d0 = *a, d1 = _mm_srli_si128(*a, 8), d2 = *b, d3 = _mm_srli_si128(*b, 8);
+    __m128i e0 = _mm_add_epi16(d0, d2), e1 = _mm_sub_epi16(d0, d2);
+    __m128i e2 = _mm_sub_epi16(_mm_srai_epi16(d1, 1), d3), e3 = _mm_add_epi16(d1, _mm_srai_epi16(d3, 1));
+    __m128i f0 = _mm_add_epi16(e0, e3), f1 = _mm_add_epi16(e1, e2), f2 = _mm_sub_epi16(e1, e2), f3 = _mm_sub_epi16(e0, e3);
+    *a = _mm_unpacklo_epi64(f0, f1);
+    *b = _mm_unpacklo_epi64(f2, f3);
+}
+void h264_idct4_add(uint8_t *dst, int stride, int16_t *b) {
+    __m128i a = _mm_loadu_si128((const __m128i *)(const void *)b), c = _mm_loadu_si128((const __m128i *)(const void *)(b + 8));
+    /* rows in lanes: transform the rows (horizontal) first: transpose so that each vector holds one column */
+    transpose4x4_16(&a, &c);
+    idct4_pass(&a, &c);           /* horizontal transform; result: a = (col0 | col1), c = (col2 | col3) */
+    transpose4x4_16(&a, &c);      /* back to rows */
+    idct4_pass(&a, &c);           /* vertical transform; a = (row0 | row1), c = (row2 | row3) */
+    const __m128i r32 = _mm_set1_epi16(32), z = _mm_setzero_si128();
+    a = _mm_srai_epi16(_mm_add_epi16(a, r32), 6);
+    c = _mm_srai_epi16(_mm_add_epi16(c, r32), 6);
+    __m128i p01 = _mm_unpacklo_epi8(_mm_unpacklo_epi32(_mm_cvtsi32_si128((int)RD32(dst)), _mm_cvtsi32_si128((int)RD32(dst + stride))), z);
+    __m128i p23 = _mm_unpacklo_epi8(_mm_unpacklo_epi32(_mm_cvtsi32_si128((int)RD32(dst + 2 * stride)), _mm_cvtsi32_si128((int)RD32(dst + 3 * stride))), z);
+    __m128i o = _mm_packus_epi16(_mm_add_epi16(p01, a), _mm_add_epi16(p23, c));
+    WR32(dst, (uint32_t)_mm_cvtsi128_si32(o));
+    WR32(dst + stride, (uint32_t)_mm_cvtsi128_si32(_mm_srli_si128(o, 4)));
+    WR32(dst + 2 * stride, (uint32_t)_mm_cvtsi128_si32(_mm_srli_si128(o, 8)));
+    WR32(dst + 3 * stride, (uint32_t)_mm_cvtsi128_si32(_mm_srli_si128(o, 12)));
+    _mm_storeu_si128((__m128i *)(void *)b, z);
+    _mm_storeu_si128((__m128i *)(void *)(b + 8), z);
+}
+
+H264_INLINE void transpose8x8_16(__m128i *r) {
+    __m128i a0 = _mm_unpacklo_epi16(r[0], r[1]), a1 = _mm_unpackhi_epi16(r[0], r[1]);
+    __m128i a2 = _mm_unpacklo_epi16(r[2], r[3]), a3 = _mm_unpackhi_epi16(r[2], r[3]);
+    __m128i a4 = _mm_unpacklo_epi16(r[4], r[5]), a5 = _mm_unpackhi_epi16(r[4], r[5]);
+    __m128i a6 = _mm_unpacklo_epi16(r[6], r[7]), a7 = _mm_unpackhi_epi16(r[6], r[7]);
+    __m128i b0 = _mm_unpacklo_epi32(a0, a2), b1 = _mm_unpackhi_epi32(a0, a2);
+    __m128i b2 = _mm_unpacklo_epi32(a1, a3), b3 = _mm_unpackhi_epi32(a1, a3);
+    __m128i b4 = _mm_unpacklo_epi32(a4, a6), b5 = _mm_unpackhi_epi32(a4, a6);
+    __m128i b6 = _mm_unpacklo_epi32(a5, a7), b7 = _mm_unpackhi_epi32(a5, a7);
+    r[0] = _mm_unpacklo_epi64(b0, b4); r[1] = _mm_unpackhi_epi64(b0, b4);
+    r[2] = _mm_unpacklo_epi64(b1, b5); r[3] = _mm_unpackhi_epi64(b1, b5);
+    r[4] = _mm_unpacklo_epi64(b2, b6); r[5] = _mm_unpackhi_epi64(b2, b6);
+    r[6] = _mm_unpacklo_epi64(b3, b7); r[7] = _mm_unpackhi_epi64(b3, b7);
+}
+#define SRA1(x) _mm_srai_epi16(x, 1)
+#define SRA2(x) _mm_srai_epi16(x, 2)
+H264_INLINE void idct8_pass(__m128i *d) {
+    __m128i e0 = _mm_add_epi16(d[0], d[4]);
+    __m128i e1 = _mm_sub_epi16(_mm_sub_epi16(_mm_sub_epi16(d[5], d[3]), d[7]), SRA1(d[7]));
+    __m128i e2 = _mm_sub_epi16(d[0], d[4]);
+    __m128i e3 = _mm_sub_epi16(_mm_sub_epi16(_mm_add_epi16(d[1], d[7]), d[3]), SRA1(d[3]));
+    __m128i e4 = _mm_sub_epi16(SRA1(d[2]), d[6]);
+    __m128i e5 = _mm_add_epi16(_mm_add_epi16(_mm_sub_epi16(d[7], d[1]), d[5]), SRA1(d[5]));
+    __m128i e6 = _mm_add_epi16(d[2], SRA1(d[6]));
+    __m128i e7 = _mm_add_epi16(_mm_add_epi16(_mm_add_epi16(d[3], d[5]), d[1]), SRA1(d[1]));
+    __m128i f0 = _mm_add_epi16(e0, e6), f1 = _mm_add_epi16(e1, SRA2(e7));
+    __m128i f2 = _mm_add_epi16(e2, e4), f3 = _mm_add_epi16(e3, SRA2(e5));
+    __m128i f4 = _mm_sub_epi16(e2, e4), f5 = _mm_sub_epi16(SRA2(e3), e5);
+    __m128i f6 = _mm_sub_epi16(e0, e6), f7 = _mm_sub_epi16(e7, SRA2(e1));
+    d[0] = _mm_add_epi16(f0, f7); d[1] = _mm_add_epi16(f2, f5); d[2] = _mm_add_epi16(f4, f3); d[3] = _mm_add_epi16(f6, f1);
+    d[4] = _mm_sub_epi16(f6, f1); d[5] = _mm_sub_epi16(f4, f3); d[6] = _mm_sub_epi16(f2, f5); d[7] = _mm_sub_epi16(f0, f7);
+}
+#undef SRA1
+#undef SRA2
+void h264_idct8_add(uint8_t *dst, int stride, int16_t *b) {
+    __m128i r[8];
+    for (int i = 0; i < 8; i++) r[i] = _mm_loadu_si128((const __m128i *)(const void *)(b + 8 * i));
+    transpose8x8_16(r);       /* r[j] = column j: the row transform runs across registers */
+    idct8_pass(r);            /* r[k] = column k of the row-transformed block */
+    transpose8x8_16(r);       /* r[i] = row i */
+    idct8_pass(r);            /* column transform: r[k] = output row k */
+    const __m128i r32 = _mm_set1_epi16(32), z = _mm_setzero_si128();
+    for (int i = 0; i < 8; i++) {
+        __m128i v = _mm_srai_epi16(_mm_add_epi16(r[i], r32), 6);
+        __m128i p = _mm_unpacklo_epi8(_mm_loadl_epi64((const __m128i *)(const void *)(dst + i * stride)), z);
+        _mm_storel_epi64((__m128i *)(void *)(dst + i * stride), _mm_packus_epi16(_mm_add_epi16(p, v), v));
+        _mm_storeu_si128((__m128i *)(void *)(b + 8 * i), z);
+    }
+}
+#else
 void h264_idct4_add(uint8_t *dst, int stride, int16_t *b) {
     int t[16];
     for (int i = 0; i < 4; i++) {
@@ -19,13 +108,6 @@ void h264_idct4_add(uint8_t *dst, int stride, int16_t *b) {
         dst[3 * stride + i] = h264_clip8(dst[3 * stride + i] + ((e0 - e3 + 32) >> 6));
     }
     memset(b, 0, 32);
-}
-
-void h264_idct4_dc_add(uint8_t *dst, int stride, int16_t *b) {
-    int dc = (b[0] + 32) >> 6;
-    b[0] = 0;
-    for (int y = 0; y < 4; y++)
-        for (int x = 0; x < 4; x++) dst[y * stride + x] = h264_clip8(dst[y * stride + x] + dc);
 }
 
 void h264_idct8_add(uint8_t *dst, int stride, int16_t *b) {
@@ -49,6 +131,15 @@ void h264_idct8_add(uint8_t *dst, int stride, int16_t *b) {
         }
     }
     memset(b, 0, 128);
+}
+
+#endif
+
+void h264_idct4_dc_add(uint8_t *dst, int stride, int16_t *b) {
+    int dc = (b[0] + 32) >> 6;
+    b[0] = 0;
+    for (int y = 0; y < 4; y++)
+        for (int x = 0; x < 4; x++) dst[y * stride + x] = h264_clip8(dst[y * stride + x] + dc);
 }
 
 void h264_idct8_dc_add(uint8_t *dst, int stride, int16_t *b) {

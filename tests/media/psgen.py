@@ -28,7 +28,7 @@ class PsWriter:
         if not mod and any(not (lo <= v <= hi) for v in prev_row[:n]):
             dt = 0   # previous values outside this quantiser's range: the delta could not be coded
         bw.put(dt, 1)
-        cur = [0] * 34
+        cur = list(rows[e])   # the decoder only writes the first n values; the rest of the row persists
         acc = 0
         for b in range(n):
             target = int(r.integers(lo, hi + 1)) if r.random() < 0.5 or b == 0 else None
@@ -44,7 +44,7 @@ class PsWriter:
             bw.huff(HUFF[table_dt if dt else table_df], d + OFFSET[table_dt if dt else table_df])
             cur[b] = val
             acc = val
-        rows[e] = cur + rows[e][34:]
+        rows[e] = cur
 
     def write(self, bw, frame):
         r = self.r

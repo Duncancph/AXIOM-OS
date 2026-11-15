@@ -229,15 +229,12 @@ void aac_imdct(const float *in, float *out, int n) {
 void aac_mdct(const float *in, float *out, int n) {
     int M = n / 2, h = M / 2;
     float t[1024];
-    /* X[k] = sum_{m<M} t[m] cos(pi/M (m+1/2)(k+1/2)) with t from the time-domain aliasing */
+    /* time-domain aliasing folds the 2M inputs into M values t[] with X[k] = sum t[m] cos(pi/M (m+1/2)(k+1/2)) */
     for (int m = 0; m < h; m++) {
         t[m] = -in[3 * h - 1 - m] - in[3 * h + m];
         t[h + m] = in[m] - in[M - 1 - m];
     }
-    /* reorder: the DCT-IV index is m' = m + ... (see derivation in README) */
-    float v[1024];
-    for (int m = 0; m < M; m++) v[m] = t[m];
-    dct4(v, out, M);
+    dct4(t, out, M);
 }
 
 /* ---------------------------------------------------------------- Huffman tables */

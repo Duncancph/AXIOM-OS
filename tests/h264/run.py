@@ -22,8 +22,10 @@ Exits non-zero on any failure."""
 import hashlib, os, random, shutil, struct, subprocess, sys, tempfile, time
 from concurrent.futures import ThreadPoolExecutor
 
+sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mp4samples
+import synth
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SRC = os.path.join(ROOT, "user", "lib", "video")
@@ -53,6 +55,8 @@ CSRC = sorted(os.path.join(SRC, f) for f in os.listdir(SRC) if f.endswith(".c"))
 DRIVER = os.path.join(ROOT, "tests", "h264", "h264_test.c")
 ASAN = os.path.join(OUT, "h264_test_asan")
 FAST = os.path.join(OUT, "h264_test")
+NOSIMD = os.path.join(OUT, "h264_test_nosimd")
+TARGETBIN = os.path.join(OUT, "h264_test_target")
 TARGET_FLAGS = ("-std=gnu11 -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -m64 "
                 "-mcmodel=large -msse2 -mfpmath=sse -fno-tree-loop-distribute-patterns -Wall -Wextra "
                 "-Wno-unused-parameter").split()
@@ -66,6 +70,9 @@ def build():
     if r.returncode: print(r.stderr); sys.exit("asan build failed")
     r = run(["gcc", "-std=gnu11", "-O2", "-DH264_HOST_TEST", "-o", FAST, DRIVER] + CSRC)
     if r.returncode: print(r.stderr); sys.exit("host build failed")
+    r = run(["gcc", "-std=gnu11", "-O1", "-g", "-DH264_HOST_TEST", "-DH264_NO_SIMD", "-fsanitize=address,undefined",
+             "-fno-sanitize-recover=all", "-Wall", "-Wextra", "-Wno-unused-parameter", "-o", NOSIMD, DRIVER] + CSRC)
+    if r.returncode: print(r.stderr); sys.exit("plain C (H264_NO_SIMD) build failed")
     objs, stack = [], []
     tdir = os.path.join(OUT, "target")
     os.makedirs(tdir, exist_ok=True)
@@ -95,6 +102,11 @@ def build():
         stack.sort(reverse=True)
         print("largest stack frames (bytes):", ", ".join("%s=%d%s" % (f, n, "" if k == "static" else "(" + k + ")") for n, f, k in stack[:6]))
         if stack and stack[0][0] > 16384: fail("stack frame over 16 KiB: %s" % (stack[0],))
+        # the decoder objects exactly as compiled for AXIOM, linked with the host driver (for speed numbers)
+        drv = os.path.join(tdir, "driver.o")
+        r = run(["gcc", "-O2", "-fno-pie", "-c", DRIVER, "-o", drv])
+        r2 = run(["gcc", "-no-pie", "-o", TARGETBIN, drv] + objs) if not r.returncode else r
+        if r2.returncode: print("note: could not link the target objects for benchmarking:", r2.stderr.strip()[-200:])
 
 
 # ---------------------------------------------------------------- corpus
@@ -154,7 +166,7 @@ CASES = [
     ("high_slices4", "rot", "352x288", 24, ["-profile:v", "high"], "slices=4:bframes=2:ref=3", True),
     ("high_slicesize", "noise", "352x288", 16, ["-profile:v", "high"], "slice-max-size=1500:bframes=2", False),
     ("high_intra_only", "mandel", "352x288", 10, ["-profile:v", "high"], "keyint=1", True),
-    ("high_intra_refresh", "rot", "320x240", 40, ["-profile:v", "high"], "intra-refresh=1:keyint=20:bframes=0", False),
+    ("high_intra_refresh", "rot", "320x240", 50, ["-profile:v", "high"], "intra-refresh=1:keyint=12:bframes=0", True),
     ("high_open_gop", "testsrc2", "320x240", 60, ["-profile:v", "high"], "open-gop=1:keyint=20:bframes=3", True),
     ("high_short_gop", "rot", "320x240", 30, ["-profile:v", "high"], "keyint=4:bframes=2", False),
     ("high_long_gop", "bars", "320x240", 80, ["-profile:v", "high"], "keyint=300:min-keyint=300:scenecut=0", False),
@@ -326,6 +338,27 @@ def test_seek(name):
             fail("seek %s to non-keyframe %d: expected resume at keyframe %d" % (name, k, keys[1]))
         else: ok += 1
         os.remove(out)
+    return ok
+
+
+def test_seek_gdr(name):
+    """intra refresh: the MP4 sync samples are P pictures with a recovery point SEI. After h264_reset + feeding
+    from one, the decoder must output nothing incomplete and be exact from the recovery point on."""
+    base = BASES[name]
+    w, h = stream_dims(base + ".mp4")
+    keys, disp, n = keyframes_and_display(base + ".mp4")
+    fb = frame_bytes(w, h)
+    ref = open(base + ".ref.yuv", "rb").read()
+    ok = 0
+    for i, k in enumerate(keys[1:4]):
+        nxt = keys[i + 2] if i + 2 < len(keys) else n
+        out = base + ".seek.yuv"
+        r = decode(ASAN, "seek", base + ".smp", out, k)
+        got = open(out, "rb").read() if r.returncode == 0 else b""
+        if r.returncode or not got or got != ref[len(ref) - len(got):] or len(got) // fb < (n - nxt):
+            fail("seek (intra refresh) %s to sample %d: %d frames, exact suffix: %s" % (name, k, len(got) // fb, got == ref[len(ref) - len(got):]))
+        else: ok += 1
+        if os.path.exists(out): os.remove(out)
     return ok
 
 
@@ -679,6 +712,193 @@ def test_rewritten():
     rewritten_test("frame_num_gaps", case, tr)
 
 
+# -- generic copying parsers for x264 output (no scaling lists, frame coding): rewrite single fields
+class Copier:
+    def __init__(self, rb):
+        self.r, self.w = Bits(rb), W()
+        self.rb = rb
+    def u(self, n, new=None):
+        v = self.r.u(n); self.w.u(n, v if new is None else new); return v
+    def ue(self, new=None):
+        v = self.r.ue(); self.w.ue(v if new is None else new); return v
+    def se(self, new=None):
+        v = self.r.se(); self.w.se(v if new is None else new); return v
+    def rest_bits(self):
+        total = len(self.rb) * 8
+        return self.w.b + [(self.rb[i >> 3] >> (7 - (i & 7))) & 1 for i in range(self.r.p, total)]
+
+
+def copy_sps(rb, direct8x8=None):
+    c = Copier(rb)
+    prof = c.u(8); c.u(8); c.u(8); c.ue()
+    if prof in (100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135):
+        cf = c.ue()
+        if cf == 3: c.u(1)
+        c.ue(); c.ue(); c.u(1)
+        if c.u(1): raise ValueError("scaling lists")
+    info = {"lmfn": c.ue() + 4}
+    info["poc"] = c.ue()
+    if info["poc"] == 0: info["lpoc"] = c.ue() + 4
+    elif info["poc"] == 1: raise ValueError("POC type 1")
+    c.ue(); c.u(1); c.ue(); c.ue()
+    fmo = c.u(1)
+    if not fmo: c.u(1)
+    c.u(1, direct8x8)
+    return info, bits_to_bytes(c.rest_bits())
+
+
+def copy_pps(rb, bipred=None):
+    c = Copier(rb)
+    c.ue(); c.ue()
+    info = {"cabac": c.u(1), "bfpo": c.u(1)}
+    if c.ue(): raise ValueError("slice groups")
+    info["nref"] = [c.ue() + 1, c.ue() + 1]
+    info["wp"] = c.u(1)
+    info["bipred"] = c.u(2, bipred) if bipred is None else (c.u(2, bipred), bipred)[1]
+    c.se(); c.se(); c.se()
+    info["dfc"] = c.u(1); c.u(1)
+    if c.u(1): raise ValueError("redundant_pic_cnt")
+    return info, bits_to_bytes(c.rest_bits())
+
+
+def copy_slice(nal, sps, pps, inject_bweights=None):
+    ref_idc, typ = (nal[0] >> 5) & 3, nal[0] & 31
+    rb = unescape(nal[1:])
+    c = Copier(rb)
+    c.ue(); st = c.ue() % 5; c.ue()
+    c.u(sps["lmfn"])
+    if typ == 5: c.ue()
+    if sps["poc"] == 0:
+        c.u(sps["lpoc"])
+        if pps["bfpo"]: c.se()
+    if st == 1: c.u(1)
+    nref = list(pps["nref"])
+    if st in (0, 1):
+        if c.u(1):
+            nref[0] = c.ue() + 1
+            if st == 1: nref[1] = c.ue() + 1
+        for li in range(2 if st == 1 else 1):
+            if c.u(1):
+                while True:
+                    idc = c.ue()
+                    if idc == 3: break
+                    c.ue()
+    if (pps["wp"] and st == 0):
+        lw = c.ue(); cw = c.ue()
+        for i in range(nref[0]):
+            if c.u(1): c.se(); c.se()
+            if c.u(1):
+                for j in range(4): c.se()
+    if st == 1 and inject_bweights:
+        R2 = inject_bweights
+        c.w.ue(5); c.w.ue(4)
+        for li in range(2):
+            for i in range(nref[li]):
+                f = R2.random() < 0.7
+                c.w.u(1, f)
+                if f: c.w.se(32 + R2.randint(-12, 12)); c.w.se(R2.randint(-10, 10))
+                f = R2.random() < 0.5
+                c.w.u(1, f)
+                if f:
+                    for j in range(2): c.w.se(16 + R2.randint(-6, 6)); c.w.se(R2.randint(-8, 8))
+    if ref_idc:
+        if typ == 5: c.u(1); c.u(1)
+        elif c.u(1):
+            while True:
+                op = c.ue()
+                if op == 0: break
+                if op in (1, 2, 3, 4, 6): c.ue()
+                if op == 3: c.ue()
+    if pps["cabac"] and st != 2: c.ue()
+    c.se()
+    if pps["dfc"]:
+        idc = c.ue()
+        if idc != 1: c.se(); c.se()
+    if pps["cabac"]:
+        while c.r.p % 8: c.r.u(1)
+        while len(c.w.b) % 8: c.w.u(1, 1)
+        out = bits_to_bytes(c.w.b) + rb[c.r.p // 8:]
+    else:
+        out = bits_to_bytes(c.rest_bits())
+    return nal[:1] + escape(out)
+
+
+def test_rewritten_b():
+    # direct_8x8_inference_flag = 0 (direct motion per 4x4), spatial and temporal; no 8x8 transform so that
+    # the syntax does not change
+    for direct in ("spatial", "temporal"):
+        case = ("noinfer_src_" + direct, "rot", "320x240", 30, ["-profile:v", "main"],
+                "bframes=3:b-pyramid=normal:ref=3:direct=%s:weightp=0" % direct, True)
+        st = {}
+        def tr(i, nal, lmfn, cabac, dfc):
+            t = nal[0] & 31
+            if t == 7:
+                info, rb = copy_sps(unescape(nal[1:]), direct8x8=0)
+                st["sps"] = info
+                return nal[:1] + escape(rb)
+            if t == 8:
+                st["pps"] = copy_pps(unescape(nal[1:]))[0]
+            return nal
+        rewritten_test_generic("direct_8x8_inference_0_" + direct, case, tr)
+    # explicit weighted bi-prediction (weighted_bipred_idc = 1) with random weights / offsets
+    case = ("bweight_src", "rot", "320x240", 30, ["-profile:v", "high"], "bframes=3:b-pyramid=normal:ref=3:weightp=2", True)
+    st = {"R": random.Random(77)}
+    def tr2(i, nal, lmfn, cabac, dfc):
+        t = nal[0] & 31
+        if t == 7:
+            st["sps"] = copy_sps(unescape(nal[1:]))[0]
+        if t == 8:
+            info, rb = copy_pps(unescape(nal[1:]), bipred=1)
+            st["pps"] = info
+            return nal[:1] + escape(rb)
+        if t in (1, 5):
+            return copy_slice(nal, st["sps"], st["pps"], inject_bweights=st["R"])
+        return nal
+    rewritten_test_generic("explicit_weighted_bipred", case, tr2)
+
+
+def rewritten_test_generic(label, case, transform):
+    if encode(case): fail(label + ": encode failed"); return
+    base = case_base(case)
+    nals = split_nals(open(base + ".h264", "rb").read())
+    out = bytearray()
+    try:
+        for i, nal in enumerate(nals):
+            nal = transform(i, nal, None, None, None)
+            if nal: out += b"\x00\x00\x00\x01" + nal
+    except (ValueError, KeyError) as e:
+        fail("%s: cannot rewrite stream: %s" % (label, e)); return
+    p = base + "." + label + ".h264"
+    open(p, "wb").write(out)
+    refp = base + "." + label + ".ref.yuv"
+    run(["ffmpeg", "-v", "error", "-y", "-i", p, "-f", "rawvideo", "-pix_fmt", "yuv420p", "-fps_mode", "passthrough", refp])
+    o = base + "." + label + ".yuv"
+    r = decode(ASAN, "annexb", p, o)
+    w, h = dims(case[2])
+    eq, na, nb, first = compare(o, refp, w, h)
+    if r.returncode or not eq or na == 0:
+        fail("%s: mismatch with ffmpeg (%d vs %d frames, first diff %s) %s" % (label, na, nb, first, r.stderr[-300:]))
+        return
+    print("%s: bit-exact with ffmpeg, %d frames" % (label, na))
+
+
+def test_pcm():
+    n = 0
+    for cabac in (0, 1):
+        for wm, hm, seed in ((11, 9, 1), (20, 15, 2), (3, 2, 3)):
+            p = os.path.join(CORPUS, "pcm_%d_%dx%d.h264" % (cabac, wm, hm))
+            open(p, "wb").write(synth.make_pcm_stream(wm, hm, 4, cabac, seed))
+            refp = p[:-5] + ".ref.yuv"
+            run(["ffmpeg", "-v", "error", "-y", "-i", p, "-f", "rawvideo", "-pix_fmt", "yuv420p", "-fps_mode", "passthrough", refp])
+            o = p[:-5] + ".yuv"
+            r = decode(ASAN, "annexb", p, o)
+            eq, na, nb, first = compare(o, refp, wm * 16, hm * 16)
+            if r.returncode or not eq or na != 4:
+                fail("I_PCM %s %dx%d: mismatch (%d vs %d frames, first diff %s) %s" % ("CABAC" if cabac else "CAVLC", wm, hm, na, nb, first, r.stderr[-300:]))
+            else: n += 1
+    print("I_PCM synthetic streams (CAVLC + CABAC): %d/6 bit-exact" % n)
+
+
 def test_unsupported():
     cases = [
         ("unsup_interlaced", "rot", "320x240", 6, ["-profile:v", "high", "-flags", "+ildct+ilme"], "interlaced=1", False),
@@ -750,7 +970,11 @@ def test_speed():
         r = run([FAST, "bench", base + ".smp", "3"])
         kbps = os.path.getsize(base + ".h264") * 8 / (n / 25.0) / 1000   # 25 fps clips
         fps = float(r.stdout.split("fps")[-1]) if "fps" in r.stdout else 0
-        print("speed %-22s %s %5.0f kbit/s: %6.1f fps (-O2, one core)" % (name, size, kbps, fps))
+        tfps = 0
+        if os.path.exists(TARGETBIN):
+            r = run([TARGETBIN, "bench", base + ".smp", "3"])
+            tfps = float(r.stdout.split("fps")[-1]) if "fps" in r.stdout else 0
+        print("speed %-20s %s %5.0f kbit/s: %6.1f fps host -O2, %6.1f fps with the AXIOM target flags (one core)" % (name, size, kbps, fps, tfps))
 
 
 def main():
@@ -766,10 +990,23 @@ def main():
     if ONLY:
         print("done in %.0f s" % (time.time() - t0))
         sys.exit(1 if FAILS else 0)
+    print("== plain C build (-DH264_NO_SIMD)", flush=True)
+    nos = 0
+    for n in ("main_cabac_b", "high_8x8", "high_weightp2", "main_weightb", "cbp_slices", "high_lossless_qp0"):
+        if n not in BASES: continue
+        base = BASES[n]
+        w, h = stream_dims(base + ".mp4")
+        r = decode(NOSIMD, "samples", base + ".smp", base + ".nosimd.yuv")
+        eq, na, nb, first = compare(base + ".nosimd.yuv", base + ".ref.yuv", w, h)
+        if r.returncode or not eq: fail("plain C build, %s: mismatch (first frame %s) %s" % (n, first, r.stderr[-300:]))
+        else: nos += 1
+        if os.path.exists(base + ".nosimd.yuv"): os.remove(base + ".nosimd.yuv")
+    print("plain C build: %d streams bit-exact" % nos)
     print("== seeking / damage", flush=True)
     seeks = 0
     for n in ("cbp_cavlc", "high_open_gop", "high_short_gop", "main_cabac_b"):
         if n in BASES: seeks += test_seek(n)
+    if "high_intra_refresh" in BASES: seeks += test_seek_gdr("high_intra_refresh")
     print("seek tests passed: %d" % seeks)
     tr = 0
     for n in ("cbp_cavlc", "main_cabac_b", "high_slices4", "high_open_gop"):
@@ -782,6 +1019,8 @@ def main():
     test_resolution_change()
     test_poc1()
     test_rewritten()
+    test_pcm()
+    test_rewritten_b()
     test_unsupported()
     print("== fuzz", flush=True)
     test_fuzz()

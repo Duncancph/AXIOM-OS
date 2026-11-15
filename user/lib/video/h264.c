@@ -131,6 +131,23 @@ static int unescape(h264dec *d, const uint8_t *p, int len, struct h264_br *b) {
     return n;
 }
 
+/* SEI: only the recovery point (payload type 6) is used */
+static void parse_sei(h264dec *d, struct h264_br *b) {
+    while (b->pos + 16 <= b->end) {
+        int type = 0, size = 0;
+        uint32_t v;
+        do { v = br_bits(b, 8); type += (int)v; } while (v == 255 && type < 100000);
+        do { v = br_bits(b, 8); size += (int)v; } while (v == 255 && size < 1000000);
+        uint32_t next = b->pos + (uint32_t)size * 8;
+        if (type == 6) {
+            uint32_t cnt = br_ue(b);
+            if (cnt < 65536 && b->pos <= b->end) d->recovery_cnt = (int)cnt;
+        }
+        if (next > b->end || next < b->pos) break;
+        b->pos = next;
+    }
+}
+
 static int decode_nal(h264dec *d, const uint8_t *p, int len) {
     if (len < 1) return 0;
     int type = p[0] & 31, ref_idc = (p[0] >> 5) & 3;
@@ -152,7 +169,11 @@ static int decode_nal(h264dec *d, const uint8_t *p, int len) {
         if (unescape(d, p + 1, len - 1, &b) <= 0) return 0;
         if (h264_parse_pps(d, &b) < 0) h264_set_error(d, "bad PPS (ignored)");
         return 0;
-    case 6: case 9: case 10: case 11:
+    case 6:
+        h264_finish_picture(d);
+        if (unescape(d, p + 1, len - 1, &b) > 0) parse_sei(d, &b);
+        return 0;
+    case 9: case 10: case 11:
         h264_finish_picture(d);
         return 0;
     case 2: case 3: case 4:
@@ -187,9 +208,12 @@ static int parse_avcc(h264dec *d, const uint8_t *e, int len) {
 h264dec *h264_open(const uint8_t *extradata, int len) {
     h264dec *d = (h264dec *)calloc(1, sizeof(h264dec));
     if (!d) return 0;
+    h264_tables_init();
     d->need_key = 1;
     d->dq_pps = -1;
     d->last_out_epoch = -1;
+    d->recovery_cnt = -1;
+    d->recover_until = -1;
     d->max_lt_idx = -1;
     if (extradata && len > 0) {
         d->avcc = 1;
@@ -356,6 +380,8 @@ void h264_reset(h264dec *d) {
     d->max_lt_idx = -1;
     d->flushing = 0;
     d->skip_pic = 0;
+    d->recovery_cnt = -1;
+    d->recover_until = -1;
     d->epoch++;
 }
 

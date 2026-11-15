@@ -98,8 +98,6 @@ static void inter_pred(h264dec *d) {
 }
 
 /* ---------------------------------------------------------------- lossless (transform bypass) */
-static const int16_t *bypass_res;   /* unused helper marker */
-
 /* adds an n x n residual (raster, int) to dst; dir: 0 vertical DPCM, 1 horizontal DPCM, else plain */
 static void bypass_add(uint8_t *dst, int stride, int *r, int n, int dir) {
     if (dir == 0) {
@@ -262,7 +260,6 @@ void h264_recon_mb(h264dec *d) {
         }
     }
     if (d->cbp & 0x30) chroma_residual(d, u, v, sc);
-    (void)bypass_res;
 }
 
 /* ---------------------------------------------------------------- bookkeeping */

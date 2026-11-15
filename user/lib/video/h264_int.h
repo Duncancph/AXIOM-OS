@@ -95,6 +95,7 @@ struct h264_cabac {
     const uint8_t *p, *start, *end;
 };
 extern const uint8_t h264_cabac_lps_range[64][4];
+extern uint8_t h264_cabac_lps2[512];   /* [(q << 7) | state]: rangeTabLPS for the combined state (built at open) */
 extern const uint8_t h264_cabac_next[256];   /* [s] after MPS, [128 + s] after LPS */
 extern const uint8_t h264_cabac_renorm[256];
 H264_INLINE void cabac_refill(struct h264_cabac *c) {
@@ -115,7 +116,7 @@ H264_INLINE void cabac_refill(struct h264_cabac *c) {
 /* branch-free decision (DecodeDecision 9.3.3.2.1): the LPS/MPS choice is data dependent and badly predicted */
 H264_INLINE int cabac_decide(struct h264_cabac *c, uint8_t *st) {
     int s = *st;
-    uint32_t rlps = h264_cabac_lps_range[s >> 1][(c->range >> 6) & 3];
+    uint32_t rlps = h264_cabac_lps2[((c->range & 0xc0) << 1) | (uint32_t)s];
     uint32_t rmps = c->range - rlps;
     uint64_t scaled = (uint64_t)rmps << c->bits;
     uint64_t lmask = (uint64_t)0 - (uint64_t)(c->low >= scaled);
@@ -303,6 +304,8 @@ struct h264dec {
     int need_key;                     /* waiting for a keyframe after open/reset */
     int key_poc, key_epoch, drop_leading;
     int last_out_poc, last_out_epoch, reorder_extra;
+    int recovery_cnt;                 /* recovery_frame_cnt of a recovery point SEI before the next picture, -1 none */
+    int recover_until, recover_left;  /* output suppressed until this frame_num (gradual refresh after a seek) */
     int recovery_seen;
     /* current picture */
     struct h264_slice sl;             /* current slice */
@@ -347,7 +350,6 @@ struct h264dec {
     int16_t dc_y[16], dc_c[2][4];
     int bypass;                       /* TransformBypassModeFlag for this MB */
     int ipred4[16];                   /* intra 4x4/8x8 modes, luma4x4BlkIdx order */
-    int col_spatial_zero;             /* scratch */
     /* CABAC */
     struct h264_cabac cabac;
     uint8_t cabac_state[460];
@@ -373,6 +375,7 @@ extern const uint8_t h264_sig8_ctx[63], h264_last8_ctx[63];
 
 /* ---------------------------------------------------------------- functions */
 void h264_set_error(h264dec *d, const char *msg);
+void h264_tables_init(void);
 int h264_parse_sps(h264dec *d, struct h264_br *b);
 int h264_parse_pps(h264dec *d, struct h264_br *b);
 void h264_build_dequant(h264dec *d, const struct h264_sps *s, const struct h264_pps *p);
