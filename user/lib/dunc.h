@@ -52,6 +52,11 @@ void ip_str(uint32_t ip, char *out);          /* out: at least 16 bytes */
 #define HTTP_EHTTPS -20
 #define HTTP_EURL -21
 #define HTTP_EBAD -22
+#define HTTP_ECLOSED -23        /* the server closed the connection without answering */
+#define HTTP_EHEADERS -24       /* the answer's headers were too big */
+#define HTTP_EREDIRECTS -25     /* too many redirects (a loop) */
+#define HTTP_EGZIP -26          /* the compressed page couldn't be unpacked */
+#define HTTP_ENOTHTTP -27       /* the answer wasn't HTTP/1.x */
 long http_get(const char *url, char *body, long max, int *status, char *ctype, int ctlen, char *final_url, int fulen);
 /* Streaming version: sink() receives the body piece by piece (return false to stop).
  * *total is set to Content-Length when the server sends it, else -1. Returns bytes received or an error. */

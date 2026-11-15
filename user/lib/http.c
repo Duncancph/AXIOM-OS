@@ -84,6 +84,11 @@ const char *http_strerror(long e) {
     }
     if (e == HTTP_EURL) return "That address doesn't look right";
     if (e == HTTP_EBAD) return "The server sent something AXIOM couldn't understand";
+    if (e == HTTP_ECLOSED) return "The server closed the connection without answering";
+    if (e == HTTP_EHEADERS) return "The server's answer had more header information than AXIOM can take (over 64 KB)";
+    if (e == HTTP_EREDIRECTS) return "The site kept redirecting (more than 20 times), so AXIOM stopped";
+    if (e == HTTP_EGZIP) return "The page came compressed and AXIOM couldn't unpack it";
+    if (e == HTTP_ENOTHTTP) return "The server didn't answer in HTTP/1.1";
     return net_strerror((int)e);
 }
 
@@ -434,7 +439,7 @@ static void encode_target(const char *in, char *out, int max) {
 
 long http_request(const char *url_in, const struct http_req *rq, http_sink sink, void *ctx, int *status, long *total, char *ctype, int ctlen,
                   char *final_url, int fulen) {
-    static char hdr[16384];
+    static char hdr[65536];
     static char req[12288 + URL_MAX];
     static char url[URL_MAX];
     strncpy0(url, url_in, sizeof url);
@@ -443,7 +448,8 @@ long http_request(const char *url_in, const struct http_req *rq, http_sink sink,
     if (cookies) jar_load();
     const char *method = rq && rq->method ? rq->method : "GET";
     const char *body = rq ? rq->body : 0; long body_len = body ? rq->body_len : 0;
-    for (int hop = 0; hop < 8; hop++) {
+    int retried = 0;
+    for (int hop = 0; hop < 20; hop++) {
         static struct url u;
         long e = parse_url(url, &u);
         if (e) return e;
@@ -482,11 +488,14 @@ long http_request(const char *url_in, const struct http_req *rq, http_sink sink,
         long hl = 0, hend = -1;
         while (hend < 0 && hl < (long)sizeof hdr - 1) {
             long n = c_read(&c, hdr + hl, sizeof hdr - 1 - hl, rq && rq->timeout_ms > 0 ? rq->timeout_ms : 15000);
-            if (n <= 0) { c_close(&c); return n == 0 ? HTTP_EBAD : n; }
+            if (n == 0 && hl == 0 && !retried && !body_len) { retried = 1; c_close(&c); hop--; break; }   /* closed straight away: try once more */
+            if (n <= 0) { c_close(&c); return n == 0 ? (hl ? HTTP_EBAD : HTTP_ECLOSED) : n; }
             hl += n; hdr[hl] = 0;
             for (long i = 3; i < hl; i++) if (hdr[i - 3] == '\r' && hdr[i - 2] == '\n' && hdr[i - 1] == '\r' && hdr[i] == '\n') { hend = i + 1; break; }
         }
-        if (hend < 0 || !starts_ci(hdr, "HTTP/1.")) { c_close(&c); return HTTP_EBAD; }
+        if (hend < 0 && hl == 0 && retried == 1) { retried = 2; continue; }           /* the retry above */
+        if (hend < 0) { c_close(&c); return hl >= (long)sizeof hdr - 1 ? HTTP_EHEADERS : HTTP_EBAD; }
+        if (!starts_ci(hdr, "HTTP/1.")) { c_close(&c); return HTTP_ENOTHTTP; }
         int code = 0; { const char *s = hdr + 8; while (*s == ' ') s++; while (*s >= '0' && *s <= '9') code = code * 10 + (*s++ - '0'); }
         long clen = -1; bool chunked = false, gz = false; static char loc[URL_MAX]; loc[0] = 0;
         if (ctype && ctlen) ctype[0] = 0;
@@ -541,7 +550,7 @@ long http_request(const char *url_in, const struct http_req *rq, http_sink sink,
         c_close(&c);
         if (!gz) return got;
         /* decode the gzip body and pass it on */
-        long r = HTTP_EBAD;
+        long r = HTTP_EGZIP;
         long osz = g.over ? -1 : gzip_size(g.b, g.len);
         if (osz >= 0 && osz <= GZ_MAX_OUT) {
             uint8_t *ob = malloc(osz ? osz : 1);
@@ -557,7 +566,7 @@ long http_request(const char *url_in, const struct http_req *rq, http_sink sink,
         free(g.b);
         return r;
     }
-    return HTTP_EBAD;
+    return HTTP_EREDIRECTS;
 }
 
 long http_fetch(const char *url, http_sink sink, void *ctx, int *status, long *total, char *ctype, int ctlen, char *final_url, int fulen) {
