@@ -25,7 +25,7 @@ static const char *defaults[][2] = {
     { "keyboard.layout", "us" }, { "time.zone", "UTC" }, { "time.rtc_local", "0" }, { "time.24h", "0" },
     { "display.mode", "" }, { "mouse.speed", "5" }, { "mouse.natural", "0" }, { "mouse.left", "0" }, { "sound.volume", "70" }, { "lock.password", "" }, { "lock.idle_min", "0" }, { "screen.off_min", "10" },
     { "update.url", UPDATE_URL },
-    { "ui.accent", "" }, { "desktop.wallpaper", "axiom" }, { "user.name", "bryan" }, { "system.cores", "one" }, { "system.cores_trying", "0" }, { "dock.apps", "files,web,notes,calendar,music,terminal,settings" }, { "display.native", "off" }, { "display.native_check", "0" },
+    { "ui.accent", "" }, { "desktop.wallpaper", "axiom" }, { "user.name", "bryan" }, { "system.cores", "one" }, { "system.cores_trying", "0" }, { "dock.apps", "files,web,notes,calendar,music,terminal,settings" }, { "display.native", "off" }, { "display.native_check", "0" }, { "sound.output", "auto" },
 };
 
 const char *settings_get(const char *key) {
@@ -50,6 +50,7 @@ static void apply(const char *key) {
         desktop_restyle();
     }
     if (!strcmp(key, "dock.apps")) { void desktop_dock_changed(void); desktop_dock_changed(); }
+    if (!strcmp(key, "sound.output")) hda_choose();
     if (!strcmp(key, "keyboard.layout")) kbd_set_layout(settings_get(key));
     if (!strcmp(key, "display.mode")) {
         char m[40] = "";
@@ -145,6 +146,9 @@ int settings_syscall_get(const char *key, char *out, int n) {
     if (!strcmp(key, "display.monitor")) return ksnprintf(out, n, "%s", intelgfx_monitor());
     if (!strcmp(key, "display.report")) return ksnprintf(out, n, "%s", intelgfx_report());
     if (!strcmp(key, "display.offer")) return ksnprintf(out, n, "%s", intelgfx_offer());
+    if (!strcmp(key, "sound.outputs")) return hda_outputs(out, n);
+    if (!strcmp(key, "sound.report")) return ksnprintf(out, n, "%s", hda_report());
+    if (!strcmp(key, "sound.current")) return ksnprintf(out, n, "%s", hda_current());
     if (!strcmp(key, "lock.password")) return ksnprintf(out, n, "%s", settings_get(key)[0] ? "set" : "");
     return ksnprintf(out, n, "%s", settings_get(key));
 }

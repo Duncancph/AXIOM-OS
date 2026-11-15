@@ -8,15 +8,44 @@
 #define BUF_BYTES (RATE * 4 * MAX_SECONDS)
 #define NBDL 16
 
-static volatile uint8_t *r;                  /* controller registers */
-static uint32_t *corb; static uint64_t *rirb; static uint16_t rirb_rp;
-static int cad = -1, afg, sd_off;            /* codec address, audio function group, output stream registers */
-static uint8_t *buf; static uint64_t *bdl;
+/* One per HD Audio controller: the PC's own sound chip (headphone jack, speakers) and, on Intel
+ * graphics, the one that sends sound to the monitor over HDMI. Sound plays through one of them. */
+struct hdac {
+    volatile uint8_t *r;                       /* controller registers */
+    uint32_t *corb; uint64_t *rirb; uint16_t rirb_rp;
+    int cad, afg, sd_off;                      /* codec address, audio function group, output stream registers */
+    uint8_t *buf; uint64_t *bdl;
+    int dacs[8], ndacs;
+    bool ready, hdmi, present;                 /* present: the jack / monitor says something is plugged in */
+    int pin, nodes;
+    uint32_t codec;
+};
+static struct hdac ctls[3], none; static int nctl;
+static struct hdac *C = &none;                 /* the one in use (or being set up) */
+#define r       (C->r)
+#define corb    (C->corb)
+#define rirb    (C->rirb)
+#define rirb_rp (C->rirb_rp)
+#define cad     (C->cad)
+#define afg     (C->afg)
+#define sd_off  (C->sd_off)
+#define buf     (C->buf)
+#define bdl     (C->bdl)
+#define dacs    (C->dacs)
+#define ndacs   (C->ndacs)
+#define ready   (C->ready)
 static uint64_t play_until;
 static bool streaming, paused;
 static uint64_t last_write;            /* a stream nobody writes to for 10 s is stopped (its app may have quit) */
-static bool ready;
-static int dacs[8], ndacs;
+
+static char rep[2500]; static int replen;  /* what was found, for Settings > Sound > Details */
+static void note(const char *f, ...) {
+    __builtin_va_list ap; __builtin_va_start(ap, f);
+    char line[200]; kvsnprintf(line, sizeof line, f, ap);
+    __builtin_va_end(ap);
+    replen += ksnprintf(rep + replen, sizeof rep - replen, "%s\n", line);
+    kprintf("[sound] %s\n", line);
+}
 
 static const int16_t sine[256] = { 0, 804, 1608, 2410, 3212, 4011, 4808, 5602, 6393, 7179, 7962, 8739, 9512, 10278, 11039, 11793, 12539, 13279, 14010, 14732, 15446, 16151, 16846, 17530, 18204, 18868, 19519, 20159, 20787, 21403, 22005, 22594, 23170, 23731, 24279, 24811, 25329, 25832, 26319, 26790, 27245, 27683, 28105, 28510, 28898, 29268, 29621, 29956, 30273, 30571, 30852, 31113, 31356, 31580, 31785, 31971, 32137, 32285, 32412, 32521, 32609, 32678, 32728, 32757, 32767, 32757, 32728, 32678, 32609, 32521, 32412, 32285, 32137, 31971, 31785, 31580, 31356, 31113, 30852, 30571, 30273, 29956, 29621, 29268, 28898, 28510, 28105, 27683, 27245, 26790, 26319, 25832, 25329, 24811, 24279, 23731, 23170, 22594, 22005, 21403, 20787, 20159, 19519, 18868, 18204, 17530, 16846, 16151, 15446, 14732, 14010, 13279, 12539, 11793, 11039, 10278, 9512, 8739, 7962, 7179, 6393, 5602, 4808, 4011, 3212, 2410, 1608, 804, 0, -804, -1608, -2410, -3212, -4011, -4808, -5602, -6393, -7179, -7962, -8739, -9512, -10278, -11039, -11793, -12539, -13279, -14010, -14732, -15446, -16151, -16846, -17530, -18204, -18868, -19519, -20159, -20787, -21403, -22005, -22594, -23170, -23731, -24279, -24811, -25329, -25832, -26319, -26790, -27245, -27683, -28105, -28510, -28898, -29268, -29621, -29956, -30273, -30571, -30852, -31113, -31356, -31580, -31785, -31971, -32137, -32285, -32412, -32521, -32609, -32678, -32728, -32757, -32767, -32757, -32728, -32678, -32609, -32521, -32412, -32285, -32137, -31971, -31785, -31580, -31356, -31113, -30852, -30571, -30273, -29956, -29621, -29268, -28898, -28510, -28105, -27683, -27245, -26790, -26319, -25832, -25329, -24811, -24279, -23731, -23170, -22594, -22005, -21403, -20787, -20159, -19519, -18868, -18204, -17530, -16846, -16151, -15446, -14732, -14010, -13279, -12539, -11793, -11039, -10278, -9512, -8739, -7962, -7179, -6393, -5602, -4808, -4011, -3212, -2410, -1608, -804 };
 
@@ -109,8 +138,65 @@ static void codec_setup(void) {
         unmute_out(nid);
         pins++;
     }
-    if (pins) LOG_OK("Sound: Intel HD Audio, codec %x, %d output%s\n", param(0, 0x00) >> 16, pins, pins == 1 ? "" : "s");
+    note("codec %08x: %d output%s (speaker, headphone or line out)", C->codec, pins, pins == 1 ? "" : "s");
+    if (pins) LOG_OK("Sound: Intel HD Audio, codec %x, %d output%s\n", C->codec >> 16, pins, pins == 1 ? "" : "s");
     ready = pins > 0 && ndacs > 0;
+}
+
+/* ---- the HDMI sound chip in Intel graphics (Haswell: codec 8086:2807 and relatives) ----
+ * Its pins are the graphics ports (B, C, D in order); a pin reports the monitor (presence) and that the
+ * graphics side handed over the monitor's sound abilities (ELD valid). */
+static void hdmi_setup(int gport) {
+    uint32_t v = verb(0x08, 0xF8100);                       /* Intel: show all pins and converters */
+    if (v != 0xFFFFFFFF && !(v & 1)) { SET(0x08, 0x781, (v | 1) & 0xFF); note("HDMI codec: hidden pins turned on (%08x)", v); }
+    uint32_t sub = param(0, 0x04);
+    int start = (sub >> 16) & 0xFF, cnt = sub & 0xFF;
+    for (int i = 0; i < cnt; i++) if ((param(start + i, 0x05) & 0xFF) == 1) { afg = start + i; break; }
+    if (!afg) { note("HDMI codec: no audio function"); return; }
+    SET(afg, 0x705, 0);
+    sleep_ms(10);
+    sub = param(afg, 0x04);
+    start = (sub >> 16) & 0xFF; cnt = sub & 0xFF;
+    int pins[8], np = 0, pick = -1;
+    for (int nid = start; nid < start + cnt && np < 8; nid++) {
+        uint32_t caps = param(nid, 0x09);
+        if (((caps >> 20) & 0xF) != 4) continue;
+        uint32_t pc = param(nid, 0x0C);
+        if (!(pc & (1 << 4))) continue;                        /* not an output */
+        SET(nid, 0x705, 0);
+        uint32_t sense = verb(nid, 0xF0900);
+        note("HDMI pin %02x (port %c): caps %08x, config %08x, sense %08x%s%s", nid, 'B' + np, pc, verb(nid, 0xF1C00), sense,
+             sense & (1u << 31) ? " monitor present" : "", sense & (1u << 30) ? " ELD valid" : "");
+        if (pick < 0 && (sense & (3u << 30)) == (3u << 30)) pick = np;
+        pins[np++] = nid;
+    }
+    if (pick < 0) for (int i = 0; i < np; i++) if (verb(pins[i], 0xF0900) & (1u << 31)) { pick = i; break; }
+    if (pick < 0 && gport >= 1 && gport - 1 < np) { pick = gport - 1; note("HDMI: no pin says a monitor is there; using port %c, the screen's port", 'A' + gport); }
+    if (pick < 0) { note("HDMI: no pin to use"); return; }
+    int pin = pins[pick];
+    C->present = (verb(pin, 0xF0900) & (1u << 31)) != 0;
+    int c[16], n = conn_list(pin, c, 16), cvt = -1, ci = 0;
+    for (int i = 0; i < n; i++) if (wtype(c[i]) == 0) { cvt = c[i]; ci = i; break; }
+    if (cvt < 0) { note("HDMI pin %02x: no converter connected", pin); return; }
+    SET(cvt, 0x705, 0);
+    SET(pin, 0x701, ci);                                       /* this pin plays from this converter */
+    verb(pin, 0x3B000);                                        /* unmute */
+    SET(pin, 0x707, 0x40);                                     /* output on */
+    SET(cvt, 0x72D, 1);                                        /* 2 channels */
+    SET(cvt, 0x70D, 1);                                        /* digital output on */
+    SET(pin, 0x734, 0x00); SET(pin, 0x734, 0x11);              /* channel 0 -> slot 0, 1 -> 1 */
+    /* the Audio InfoFrame: tells the monitor it's 2-channel sound, the rest from the stream */
+    uint8_t ai[14] = { 0x84, 0x01, 0x0A, 0, 0x01 };
+    uint8_t sum = 0; for (int i = 0; i < 14; i++) sum += ai[i];
+    ai[3] = (uint8_t)(0x100 - sum);
+    SET(pin, 0x730, 0); SET(pin, 0x732, 0x00);                 /* stop sending it while it changes */
+    SET(pin, 0x730, 0);
+    for (int i = 0; i < 14; i++) SET(pin, 0x731, ai[i]);
+    SET(pin, 0x732, 0xC0);                                     /* send it continuously */
+    dacs[0] = cvt; ndacs = 1; C->pin = pin; C->hdmi = true;
+    ready = true;
+    note("HDMI: playing through pin %02x from converter %02x%s", pin, cvt, C->present ? "" : " (the pin doesn't see the monitor)");
+    LOG_OK("Sound: HDMI to the monitor (pin %x)\n", pin);
 }
 
 static void stream_stop(void) {
@@ -119,20 +205,41 @@ static void stream_stop(void) {
     w8(sd_off + 3, 0x1C);                      /* clear status */
 }
 
+static bool is_hdmi_ctl(struct pci_dev *pd) {
+    return pd->vendor == 0x8086 && (pd->device == 0x0C0C || pd->device == 0x0D0C || pd->device == 0x0A0C || pd->device == 0x160C ||
+                                    (pd->bus == 0 && pd->dev == 3));
+}
 static void hda_init(struct pci_dev *pd) {
     uint64_t sz, phys = pci_bar(pd, 0, &sz);
     if (!phys) return;
+    bool hd = is_hdmi_ctl(pd);
+    int gport = -1;
+    note("controller %04x:%04x at %02x:%02x.%x%s", pd->vendor, pd->device, pd->bus, pd->dev, pd->fn, hd ? " (HDMI, in the graphics)" : "");
+    if (hd) gport = intelgfx_audio_enable();                    /* the graphics side first: power, HDMI mode, ELD */
+    cad = -1;
     pci_write16(pd->bus, pd->dev, pd->fn, 4, pci_read16(pd->bus, pd->dev, pd->fn, 4) | 6 | (1 << 10));
+    if (pd->vendor == 0x8086) {                /* Intel: the chip must see what the processor writes (snooping on, traffic class 0) */
+        uint16_t devc = pci_read16(pd->bus, pd->dev, pd->fn, 0x78);
+        if (devc & 0x800) pci_write16(pd->bus, pd->dev, pd->fn, 0x78, devc & ~0x800);
+        uint16_t tc = pci_read16(pd->bus, pd->dev, pd->fn, 0x44);
+        if (tc & 7) pci_write16(pd->bus, pd->dev, pd->fn, 0x44, tc & ~7);
+    }
     r = map_mmio(phys, sz ? sz : 0x4000);
     w32(0x08, r32(0x08) & ~1u);                /* controller reset */
     for (int i = 0; i < 1000 && (r32(0x08) & 1); i++) udelay(10);
     udelay(100);
     w32(0x08, r32(0x08) | 1);
     for (int i = 0; i < 1000 && !(r32(0x08) & 1); i++) udelay(10);
-    sleep_ms(2);                               /* codecs announce themselves */
+    if (hd) {                                  /* its clock from the display clock (Haswell/Broadwell) */
+        uint32_t cd = intelgfx_cdclk_khz(); uint16_t m = 4, nn = 75;
+        if (cd == 337500) { m = 16; nn = 225; } else if (cd == 540000) { m = 4; nn = 90; } else if (cd == 675000) { m = 8; nn = 225; }
+        w16(0x100C, m); w16(0x1010, nn);
+        note("HDMI controller: display clock %u kHz, link clock M/N %u/%u", cd, m, nn);
+    }
+    sleep_ms(hd ? 20 : 2);                     /* codecs announce themselves */
     uint16_t st = r16(0x0E);
     for (int i = 0; i < 15; i++) if (st & (1 << i)) { cad = i; break; }
-    if (cad < 0) { LOG_INFO("Sound: HD Audio controller without a codec\n"); return; }
+    if (cad < 0) { note("no codec answered (states %04x)", st); LOG_INFO("Sound: HD Audio controller without a codec\n"); return; }
     /* command (CORB) and response (RIRB) rings, 256 entries each */
     corb = page_alloc(1); rirb = page_alloc(1);
     if (!corb || !rirb) return;
@@ -145,8 +252,9 @@ static void hda_init(struct pci_dev *pd) {
     w16(0x48, 0);
     w16(0x58, 1 << 15); w16(0x5A, 0xFF); rirb_rp = 0;
     w8(0x4C, 2); w8(0x5C, 2);                  /* run the rings */
-    codec_setup();
-    if (!ready) { LOG_INFO("Sound: no usable speaker or headphone output found\n"); return; }
+    C->codec = param(0, 0x00);
+    if (hd || C->codec >> 16 == 0x8086) hdmi_setup(gport); else codec_setup();
+    if (!ready) { if (!hd) LOG_INFO("Sound: no usable speaker or headphone output found\n"); return; }
     /* output stream: the first one after the input streams */
     int iss = (r16(0x00) >> 8) & 0xF;
     sd_off = 0x80 + 0x20 * iss;
@@ -164,10 +272,40 @@ static void hda_init(struct pci_dev *pd) {
     for (int i = 0; i < ndacs; i++) { verb(dacs[i], 0x20011); SET(dacs[i], 0x706, 1 << 4); }   /* format, stream 1 channel 0 */
 }
 
+static void stream_end(void);
 void hda_init_all(void) {
-    for (int i = 0; i < pci_count && !ready; i++)
-        if (pci_devs[i].class_code == 0x04 && pci_devs[i].subclass == 0x03) hda_init(&pci_devs[i]);
+    for (int i = 0; i < pci_count && nctl < 3; i++)
+        if (pci_devs[i].class_code == 0x04 && pci_devs[i].subclass == 0x03) {
+            C = &ctls[nctl];
+            hda_init(&pci_devs[i]);
+            if (ready) nctl++; else memset(C, 0, sizeof *C);
+        }
+    C = &none;
+    hda_choose();
 }
+/* Settings > Sound: sound.output = auto | monitor | jack. Automatic: the monitor when it's connected
+ * over HDMI, else the PC's own sound chip. */
+void hda_choose(void) {
+    const char *want = settings_get("sound.output");
+    struct hdac *h = 0, *j = 0;
+    for (int i = 0; i < nctl; i++) { if (ctls[i].hdmi) { if (!h) h = &ctls[i]; } else if (!j) j = &ctls[i]; }
+    struct hdac *pick = !strcmp(want, "monitor") ? (h ? h : j) : !strcmp(want, "jack") ? (j ? j : h) : (h && (h->present || !j) ? h : (j ? j : h));
+    if (!pick) pick = &none;
+    if (pick == C) return;
+    if (streaming) stream_end();
+    if (play_until) { play_until = 0; stream_stop(); }
+    C = pick;
+    if (C != &none) note("playing through %s", C->hdmi ? "the monitor (HDMI)" : "the PC's sound chip (jack / speaker)");
+}
+const char *hda_report(void) { return rep; }
+/* "id=Name;..." of the outputs found, for Settings */
+int hda_outputs(char *out, int n) {
+    int o = 0;
+    for (int i = 0; i < nctl; i++)
+        o += ksnprintf(out + o, n - o, "%s%s", o ? ";" : "", ctls[i].hdmi ? "monitor=Monitor (HDMI)" : "jack=Headphone jack / speakers");
+    return o;
+}
+const char *hda_current(void) { return C == &none ? "" : C->hdmi ? "monitor" : "jack"; }
 
 /* play 16-bit stereo 48 kHz samples (frames = sample pairs) */
 static int play(const int16_t *pcm, uint32_t frames) {
@@ -242,9 +380,10 @@ static long stream_write(uint64_t ua, uint64_t n) {
     wtotal += n; last_write = uptime_ms();
     return (long)n;
 }
-static void stream_end(void) { if (!streaming) return; streaming = false; stream_stop(); set_format(RATE); }
+static void stream_end(void) { if (!streaming || C == &none) return; streaming = false; stream_stop(); set_format(RATE); }
 
 void hda_tick(void) {
+    if (C == &none) return;
     if (play_until && uptime_ms() > play_until) { play_until = 0; stream_stop(); }
     if (streaming && !paused) stream_fill_silence();
     if (streaming && !paused && uptime_ms() - last_write > 10000) stream_end();

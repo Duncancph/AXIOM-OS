@@ -224,10 +224,15 @@ static void draw_personal(void) {
     button(SIDE + 304, y + 12, 90, "Save", BTN_PRIMARY, H_BTN + 50, false);
 }
 
-static bool show_gfx;
+static bool show_gfx, show_snd;
+static void draw_report(const char *title, const char *sub, const char *key, int back_id, const char *none_text, const char *more);
 static void draw_gfx_details(void) {
-    heading("Graphics details", "How the firmware set up the screen, and what the monitor says about itself.");
-    static char rep[3000]; sys_setting_get("display.report", rep, sizeof rep);
+    draw_report("Graphics details", "How the firmware set up the screen, and what the monitor says about itself.", "display.report", H_BTN + 61,
+                "No Intel graphics found.", "All of it: type  gfx  in the Terminal.");
+}
+static void draw_report(const char *title, const char *sub, const char *key, int back_id, const char *none_text, const char *more) {
+    heading(title, sub);
+    static char rep[3000]; sys_setting_get(key, rep, sizeof rep);
     int y = 106;
     for (char *p = rep; *p && y < WH - 70;) {
         char *e = p; while (*e && *e != '\n') e++;
@@ -240,9 +245,9 @@ static void draw_gfx_details(void) {
         }
         *e = save; p = *e ? e + 1 : e;
     }
-    if (!rep[0]) label(SIDE + 32, y, UI_MUTED, "No Intel graphics found.");
-    button(SIDE + 24, WH - 56, 120, "Back", BTN_NORMAL, H_BTN + 61, false);
-    label(SIDE + 160, WH - 34, UI_MUTED, "All of it: type  gfx  in the Terminal.");
+    if (!rep[0]) label(SIDE + 32, y, UI_MUTED, none_text);
+    button(SIDE + 24, WH - 56, 120, "Back", BTN_NORMAL, back_id, false);
+    if (more) label(SIDE + 160, WH - 34, UI_MUTED, more);
 }
 static void draw_display(void) {
     char b[96];
@@ -293,6 +298,15 @@ static void draw_sound(void) {
     add_hit(x - 10, y - 4, w + 20, 30, H_TOGGLE + 10);
     char b[16]; ksnprintf(b, sizeof b, "%d%%", vol); label(x + w + 20, y + 16, UI_TEXT, b);
     button(SIDE + 32, 160, 160, "Play test sound", BTN_PRIMARY, H_BTN + 10, false);
+    label(SIDE + 32, 236, UI_TEXT, "Play sound through");
+    char cur[16] = "", want[16] = ""; sys_setting_get("sound.current", cur, sizeof cur); sys_setting_get("sound.output", want, sizeof want);
+    if (!want[0]) strncpy0(want, "auto", sizeof want);
+    option(SIDE + 32, 248, 420, "Automatic (the monitor when it's connected)", !strcmp(want, "auto"), H_LIST + 0);
+    for (int i = 0; i < nlist && i < 3; i++) option(SIDE + 32, 284 + i * 36, 420, lname[i], !strcmp(want, lid[i]), H_LIST + 1 + i);
+    int y2 = 284 + (nlist < 3 ? nlist : 3) * 36 + 20;
+    label(SIDE + 32, y2, UI_MUTED, !cur[0] ? "No sound chip AXIOM can use was found." :
+          !strcmp(cur, "monitor") ? "Now: the monitor's speakers, over HDMI (its own volume applies too)." : "Now: the headphone jack / the computer's speaker.");
+    button(SIDE + 32, y2 + 24, 120, "Details", BTN_NORMAL, H_BTN + 11, false);
 }
 
 static void draw_lock(void) {
@@ -556,7 +570,7 @@ void draw(void) {
     }
     switch (sect) {
     case S_KEYB: draw_keyboard(); break; case S_MOUSE: draw_mouse(); break; case S_TIME: draw_time(); break; case S_DISPLAY: draw_display(); break; case S_PERSONAL: draw_personal(); break;
-    case S_SOUND: draw_sound(); break; case S_LOCK: draw_lock(); break; case S_POWER: draw_power(); break;
+    case S_SOUND: if (show_snd) draw_report("Sound details", "The sound chips AXIOM found and how each was set up.", "sound.report", H_BTN + 12, "Nothing found.", 0); else draw_sound(); break; case S_LOCK: draw_lock(); break; case S_POWER: draw_power(); break;
     case S_UPDATES: draw_updates(); break; case S_STORAGE: draw_storage(); break; case S_ABOUT: draw_about(); break;
     }
     if (msg[0]) label(SIDE + 32, WH - 24, msg_col, msg);
@@ -591,6 +605,7 @@ void draw(void) {
 static void open_section(int s) {
     sect = s; msg[0] = 0; clear_fields(); confirm_disk = -1;
     if (s == S_KEYB) { load_list("keyboard.layouts"); focus = 2; }
+    if (s == S_SOUND) { load_list("sound.outputs"); show_snd = false; }
     if (s == S_TIME) {
         load_list("time.zones");
         for (int i = 0; i < nlist; i++) if (!strcmp(lid[i], get("time.zone"))) list_scroll = i > 4 ? i - 4 : 0;
@@ -616,6 +631,11 @@ static void click(int id, int mx) {
             return;
         }
         if (sect == S_DISPLAY) { set("display.mode", modes[i]); say(UI_MUTED, i ? "Saved. It takes effect the next time AXIOM starts." : "Saved: automatic."); }
+        if (sect == S_SOUND) {
+            if (i == 0) sys_setting_set("sound.output", "auto");
+            else if (i - 1 < nlist) sys_setting_set("sound.output", lid[i - 1]);
+            sys_call(SYS_SOUND, SOUND_TEST, 0, 0, 0, 0);
+        }
         if (sect == S_LOCK) { static const char *v[] = { "0", "1", "5", "10", "30" }; set("lock.idle_min", v[i]); }
         if (sect == S_POWER) { static const char *v[] = { "0", "2", "5", "10", "30" }; set("screen.off_min", v[i]); }
         return;
@@ -648,6 +668,8 @@ static void click(int id, int mx) {
     if (id == H_BTN + 62) { set("display.native", "off"); sys_power(1); }
     if (id == H_BTN + 63) { set("display.native", "try"); set("display.native_check", "0"); sys_power(1); }
     if (id == H_BTN + 61) { show_gfx = false; }
+    if (id == H_BTN + 11) { show_snd = true; }
+    if (id == H_BTN + 12) { show_snd = false; }
     if (id == H_TOGGLE + 40) set("system.cores", !strcmp(get("system.cores"), "all") ? "one" : "all");
     if (id == H_BTN + 50) {
         int k = 0; char nm[41];                                   /* letters, digits, - and _ only, lower case */

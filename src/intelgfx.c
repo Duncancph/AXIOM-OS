@@ -12,6 +12,7 @@ static uint8_t edid[256]; static int edid_len;
 struct dmode { int w, h, hz; uint32_t clk; int hss, hse, ht, vss, vse, vt; bool phs, pvs; };
 static struct dmode want_mode; static bool have_want;
 static bool native_on;
+static uint16_t gdev;
 bool intelgfx_native_active(void) { return native_on; }
 static char report[3000]; static int rlen;
 static char summary[160], monitor[160];
@@ -145,6 +146,7 @@ void intelgfx_probe(void) {
 #endif
         return;
     }
+    gdev = g->device;
     uint64_t sz, bar0 = pci_bar(g, 0, &sz), sz2, bar2 = pci_bar(g, 2, &sz2);
     ksnprintf(summary, sizeof summary, "Intel graphics, device %04x", g->device);
     add("Intel graphics %04x rev %02x at %02x:%02x.%x; registers %lx (%lu KB), memory window %lx (%lu MB)",
@@ -369,3 +371,103 @@ const char *intelgfx_offer(void) {                          /* for Settings: the
 const char *intelgfx_summary(void) { return summary; }
 const char *intelgfx_monitor(void) { return monitor; }
 const char *intelgfx_report(void) { return report; }
+
+/* ---------------- sound over HDMI (Haswell) ----------------
+ * The HDMI sound chip (the HD Audio controller at 00:03.0) only plays through the monitor when the
+ * graphics side is ready for it: the display power well on (it powers the sound link), the port in
+ * HDMI mode (DVI carries no sound), the monitor's sound abilities handed over as an "ELD" (made from
+ * its EDID), the audio clock matching the pixel clock, and audio output turned on for the transcoder.
+ * Called by the sound driver before it starts that controller. */
+static bool audio_on;
+static uint32_t port_khz(void) {                         /* the pixel clock of the port in use, from its PLL */
+    if (cur_port < 0) return 0;
+    uint32_t sel = rd(0x46100 + 4 * cur_port) >> 29;
+    if (sel != 4 && sel != 5) return 0;
+    uint32_t v = rd(sel == 4 ? 0x46040 : 0x46060);
+    uint32_t r2 = v & 0xFF, p = (v >> 8) & 0x3F, n2 = (v >> 16) & 0xFF, ref = ((v >> 28) & 3) == 1 ? 135000 : 2700000;
+    if (!r2 || !p) return 0;
+    return (uint32_t)((uint64_t)ref * n2 / ((uint64_t)r2 * p * 5));
+}
+static int build_eld(uint8_t *eld) {                     /* ELD version 2, from the EDID (CEA-861 audio blocks) */
+    memset(eld, 0, 84);
+    char name[16] = ""; int mnl = 0;
+    if (edid_len >= 128)
+        for (int d = 0; d < 4; d++) {
+            const uint8_t *b = edid + 54 + d * 18;
+            if (!b[0] && !b[1] && b[3] == 0xFC) { mnl = 0; for (int i = 5; i < 18 && b[i] != '\n' && mnl < 15; i++) name[mnl++] = (char)b[i]; }
+        }
+    while (mnl && name[mnl - 1] == ' ') mnl--;
+    uint8_t sad[45]; int nsad = 0, spk = 0, cea_ver = 3;
+    if (edid_len == 256 && edid[128] == 2) {
+        cea_ver = edid[129] >= 3 ? 3 : edid[129];
+        int dend = edid[130];
+        if (dend > 127) dend = 127;
+        for (int i = 132; i < 128 + dend;) {
+            int tag = edid[i] >> 5, len = edid[i] & 31;
+            if (i + 1 + len > 128 + dend) break;
+            if (tag == 1) for (int k = 0; k + 2 < len && nsad < 15; k += 3) { memcpy(sad + nsad * 3, edid + i + 1 + k, 3); nsad++; }
+            if (tag == 4 && len >= 1) spk = edid[i + 1];
+            i += len + 1;
+        }
+    }
+    if (!nsad) { sad[0] = 0x09; sad[1] = 0x07; sad[2] = 0x07; nsad = 1; }   /* stereo PCM, 32/44.1/48 kHz, 16/20/24 bit */
+    if (!spk) spk = 1;                                                       /* front left and right */
+    eld[0] = 2 << 3;
+    eld[4] = (uint8_t)(cea_ver << 5 | mnl);
+    eld[5] = (uint8_t)(nsad << 4);                                           /* connection type 0: HDMI */
+    eld[7] = (uint8_t)spk;
+    if (edid_len >= 128) { eld[16] = edid[8]; eld[17] = edid[9]; eld[18] = edid[10]; eld[19] = edid[11]; }
+    memcpy(eld + 20, name, mnl);
+    memcpy(eld + 20 + mnl, sad, nsad * 3);
+    int total = 20 + mnl + nsad * 3;
+    eld[2] = (uint8_t)((total - 4 + 3) / 4);                                 /* baseline length in dwords */
+    return (total + 3) & ~3;
+}
+static void audio_config(void) {                          /* the audio clock follows the pixel clock */
+    static const uint32_t clk[14] = { 25175, 25200, 27000, 27027, 54000, 54054, 74176, 74250, 148352, 148500, 296703, 297000, 593407, 594000 };
+    uint32_t khz = port_khz();
+    int idx = 1;
+    for (int i = 0; i < 14; i++) { uint32_t d = khz > clk[i] ? khz - clk[i] : clk[i] - khz; if (d * 500 <= clk[i]) { idx = i; break; } }
+    uint32_t reg = 0x65000 + 0x100 * cur_trans, ac = rd(reg);
+    ac &= ~((1u << 29) | (0xFu << 16) | (1u << 28));        /* HDMI, pixel clock index, automatic N */
+    ac |= (uint32_t)idx << 16;
+    wr(reg, ac);
+    add("audio: pixel clock %u kHz -> audio clock setting %d (%u kHz)%s", khz, idx, clk[idx],
+        idx == 1 && khz != 25200 ? " - not a standard HDMI clock, the sound may not play at this screen size" : "");
+}
+int intelgfx_audio_enable(void) {                        /* returns the port (1 = B, 2 = C, 3 = D) or -1 */
+    if (!mmio || cur_trans < 0 || cur_trans > 2 || cur_port < 1 || cur_port > 3) {
+        if (mmio) add("audio: the screen isn't on an HDMI port driven by transcoder A, B or C - no sound over HDMI");
+        return -1;
+    }
+    uint32_t pw = rd(0x45404);
+    if (!(pw & (1u << 30))) { wr(0x45404, pw | (1u << 31)); wait_bit(0x45404, 1u << 30, true, 20); }
+    add("audio: display power well %08x -> %08x", pw, rd(0x45404));
+    uint32_t freg = 0x60400 + 0x1000 * cur_trans, fn = rd(freg);
+    int mode = (fn >> 24) & 7;
+    if (mode == 1) { wr(freg, fn & ~(7u << 24)); cur_mode = 0; add("audio: port was in DVI mode (no sound); switched to HDMI mode"); }
+    else if (mode != 0) { add("audio: port mode %d isn't HDMI - no sound over it", mode); return -1; }
+    int t = cur_trans;
+    uint32_t v = rd(0x650C0);
+    v |= 1u << (t * 4 + 2); v &= ~(1u << (t * 4));          /* audio output on, ELD not valid while it's written */
+    wr(0x650C0, v);
+    uint8_t eld[84]; int len = build_eld(eld);
+    uint32_t ctl = 0x650B4 + 0x100 * t;
+    wr(ctl, rd(ctl) & ~(0x1Fu << 5));                        /* write from the start of the ELD buffer */
+    for (int i = 0; i < len / 4; i++) { uint32_t d; memcpy(&d, eld + i * 4, 4); wr(0x65050 + 0x100 * t, d); }
+    wr(0x650C0, rd(0x650C0) | 1u << (t * 4));               /* ELD valid: the sound chip sees the monitor */
+    audio_config();
+    audio_on = true;
+    add("audio: transcoder %c, port %c, ELD %d bytes (%d sound format%s), pin/ELD bits %08x, video DIP %08x",
+        'A' + t, 'A' + cur_port, len, eld[5] >> 4, (eld[5] >> 4) == 1 ? "" : "s", rd(0x650C0), rd(0x60200 + 0x1000 * t));
+    return cur_port;
+}
+uint32_t intelgfx_cdclk_khz(void) {
+    if (!mmio) return 450000;
+    uint32_t lc = rd(0x130040), fz = rd(0xC2014), f = (lc >> 26) & 3;
+    if (lc & (1u << 21)) return 800000;
+    if (fz & (1u << 24)) return 450000;
+    if (f == 0) return 450000;
+    if (gdev >> 8 == 0x0A) return 337500;                  /* Haswell ULT */
+    return 540000;
+}
