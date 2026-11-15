@@ -7,6 +7,7 @@
 #define W 2ULL
 #define U 4ULL
 #define OWNED (1ULL << 9)     /* page belongs to this address space; free it on exit */
+#define NX (1ULL << 63)       /* not executable (EFER.NXE is on) */
 #define ADDR(e) ((e) & 0x000FFFFFFFFFF000ULL)
 #define USER_PML4_INDEX 1     /* 0x8000000000 - 0x10000000000 */
 
@@ -15,6 +16,10 @@ extern uint64_t boot_pml4[];
 /* Programs copy the kernel's top-level page table entries when they're created, so the kernel
  * window must already exist: pre-create its PML4 entries at boot. */
 void vm_init(void) {
+    uint32_t lo, hi;                                       /* no-execute pages: EFER.NXE (the other cores copy EFER) */
+    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(0xC0000080));
+    lo |= 1u << 11;
+    __asm__ volatile("wrmsr" :: "c"(0xC0000080), "a"(lo), "d"(hi));
     for (int i = 256; i < 512; i++)
         if (!(boot_pml4[i] & P)) boot_pml4[i] = (uint64_t)page_alloc_or_panic(1) | P | W;
 }
@@ -80,7 +85,12 @@ bool user_ok(uint64_t *pml4, const void *p, uint64_t len, bool write) {
     if (a < USER_BASE || a + len > USER_END || a + len < a) return false;
     for (uint64_t pg = a & ~0xFFFULL; pg < a + len; pg += 4096) {
         uint64_t *pte = pte_of(pml4, pg, false);
-        if (!pte || !(*pte & P) || !(*pte & U) || (write && !(*pte & W))) return false;
+        if (!pte || !(*pte & P) || !(*pte & U) || (write && !(*pte & W))) {
+            /* not there yet (or read-only): an SYS_MMAP area gives it its page now, as an app's own access would */
+            struct mm *m = current ? current->mm : 0; uint64_t np = 0;
+            if (!m || m->pml4 != pml4 || !mm_fault(m, pg, write, false, &np)) return false;
+            if (current->proc) current->proc->pages += np;
+        }
     }
     return true;
 }
@@ -95,7 +105,7 @@ void vm_destroy(uint64_t *pml4) {
                 if (!(l2[j] & P)) continue;
                 uint64_t *l1 = (uint64_t *)ADDR(l2[j]);
                 for (int k = 0; k < 512; k++)
-                    if ((l1[k] & P) && (l1[k] & OWNED)) page_free((void *)ADDR(l1[k]));
+                    if ((l1[k] & OWNED) && ADDR(l1[k])) page_free((void *)ADDR(l1[k]));   /* (PROT_NONE pages too) */
                 page_free(l1);
             }
             page_free(l2);
@@ -138,4 +148,197 @@ void vm_unmap(uint64_t *pml4, uint64_t va, uint64_t pages) {
         uint64_t *pte = pte_of(pml4, va + i * 4096, false);
         if (pte) { *pte = 0; __asm__ volatile("invlpg (%0)" ::"r"(va + i * 4096) : "memory"); }
     }
+}
+
+/* ---------------- program memory: SYS_MMAP areas, threads sharing them ---------------- */
+struct mm *mm_new(void) {
+    struct mm *m = kmalloc(sizeof *m);
+    if (!m) return 0;
+    memset(m, 0, sizeof *m);
+    m->pml4 = vm_create();
+    if (!m->pml4) { kfree(m); return 0; }
+    m->refs = 1;
+    return m;
+}
+void mm_put(struct mm *m) {
+    if (!m || --m->refs > 0) return;
+    vm_destroy(m->pml4);
+    kfree(m->v); kfree(m);
+}
+
+/* the areas, sorted and not overlapping */
+static bool vma_room(struct mm *m, int more) {
+    if (m->nv + more <= m->cap) return true;
+    int nc = m->cap ? m->cap * 2 : 64;
+    while (nc < m->nv + more) nc *= 2;
+    struct vma *n = kmalloc(nc * sizeof *n);
+    if (!n) return false;
+    if (m->v) memcpy(n, m->v, m->nv * sizeof *n);
+    kfree(m->v); m->v = n; m->cap = nc;
+    return true;
+}
+static int vma_find(struct mm *m, uint64_t a) {           /* index of the first area ending after a */
+    int lo = 0, hi = m->nv;
+    while (lo < hi) { int mid = (lo + hi) / 2; if (m->v[mid].e <= a) lo = mid + 1; else hi = mid; }
+    return lo;
+}
+static bool vma_cut(struct mm *m, uint64_t s, uint64_t e) {   /* take [s, e) out of the areas */
+    if (!vma_room(m, 1)) return false;
+    int i = vma_find(m, s);
+    while (i < m->nv && m->v[i].s < e) {
+        struct vma *v = &m->v[i];
+        if (v->s < s && v->e > e) {                          /* split in two */
+            memmove(&m->v[i + 2], &m->v[i + 1], (m->nv - i - 1) * sizeof *v);
+            m->v[i + 1] = (struct vma){ e, v->e, v->prot }; v->e = s; m->nv++;
+            return true;
+        }
+        if (v->s < s) { v->e = s; i++; continue; }
+        if (v->e > e) { v->s = e; break; }
+        memmove(&m->v[i], &m->v[i + 1], (m->nv - i - 1) * sizeof *v); m->nv--;
+    }
+    return true;
+}
+static bool vma_add(struct mm *m, uint64_t s, uint64_t e, int prot) {   /* (after vma_cut of the range) */
+    if (!vma_room(m, 1)) return false;
+    int i = vma_find(m, s);
+    if (i > 0 && m->v[i - 1].e == s && m->v[i - 1].prot == prot) {   /* join the one before */
+        m->v[i - 1].e = e;
+        if (i < m->nv && m->v[i].s == e && m->v[i].prot == prot) { m->v[i - 1].e = m->v[i].e; memmove(&m->v[i], &m->v[i + 1], (m->nv - i - 1) * sizeof *m->v); m->nv--; }
+        return true;
+    }
+    memmove(&m->v[i + 1], &m->v[i], (m->nv - i) * sizeof *m->v);
+    m->v[i] = (struct vma){ s, e, prot }; m->nv++;
+    return true;
+}
+static uint64_t pte_flags(int prot) {
+    if (!prot) return OWNED | U;                            /* kept, but not present: any access faults */
+    return P | U | OWNED | ((prot & DPROT_WRITE) ? W : 0) | ((prot & DPROT_EXEC) ? 0 : NX);
+}
+
+/* TLB shootdown: other cores running this program's threads drop their cached translations */
+static void tlb_shootdown(struct mm *m) {
+    __asm__ volatile("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax", "memory");
+    uint64_t gen = __atomic_add_fetch(&m->tlb_gen, 1, __ATOMIC_SEQ_CST);
+    cpu_self()->tlb_gen = gen;
+    for (int i = 0; i < ncpus_on; i++) {
+        struct cpu *c = &cpus[i];
+        if (c == cpu_self() || !c->in_user || !c->cur || c->cur->mm != m) continue;
+        lapic_ipi(c->apic_id, 0xF1);
+        uint64_t t0 = uptime_ms();
+        while (c->tlb_ack < gen && c->in_user && uptime_ms() - t0 < 50) cpu_relax();
+    }
+}
+void tlb_ipi(void) {                                       /* (no kernel lock: it may be held by the core waiting for this) */
+    struct cpu *c = cpu_self();
+    __asm__ volatile("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax", "memory");
+    struct task *t = c->cur;
+    if (t && t->mm) { c->tlb_gen = t->mm->tlb_gen; c->tlb_ack = c->tlb_gen; }
+    lapic_eoi();
+}
+void tlb_sync(void) {
+    struct cpu *c = cpu_self();
+    struct task *t = c->cur;
+    c->in_user = 1;
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    if (t && t->mm && c->tlb_gen != t->mm->tlb_gen) {
+        __asm__ volatile("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax", "memory");
+        c->tlb_gen = t->mm->tlb_gen;
+    }
+}
+
+static bool in_area(uint64_t s, uint64_t e) { return s >= USER_MMAP && e <= USER_MMAP_END && s < e; }
+/* drop the pages of [s, e) (freeing the program's own) */
+static uint64_t drop_pages(struct mm *m, uint64_t s, uint64_t e) {
+    uint64_t freed = 0;
+    for (uint64_t a = s; a < e; a += 4096) {
+        uint64_t *t = next_level(m->pml4, (a >> 39) & 511, false);
+        if (t) t = next_level(t, (a >> 30) & 511, false);
+        if (!t) { a = (a | ((1ULL << 30) - 1)) + 1 - 4096; continue; }      /* nothing in this GiB */
+        t = next_level(t, (a >> 21) & 511, false);
+        if (!t) { a = (a | ((1ULL << 21) - 1)) + 1 - 4096; continue; }      /* nothing in this 2 MiB */
+        uint64_t *pte = &t[(a >> 12) & 511];
+        if (*pte) { if ((*pte & OWNED) && ADDR(*pte)) { page_free((void *)ADDR(*pte)); freed++; } *pte = 0; }
+    }
+    return freed;
+}
+long mm_mmap(struct mm *m, uint64_t addr, uint64_t len, int prot, int flags, uint64_t *pages) {
+    len = (len + 4095) & ~4095ULL;
+    if (!len || len > USER_MMAP_END - USER_MMAP) return -DERR_INVAL;
+    uint64_t s;
+    if (flags & DMAP_FIXED) {
+        if ((addr & 4095) || !in_area(addr, addr + len)) return -DERR_INVAL;
+        s = addr;
+        uint64_t fr = drop_pages(m, s, s + len);
+        if (pages) *pages -= fr < *pages ? fr : *pages;
+        if (!vma_cut(m, s, s + len)) return -DERR_NOMEM;
+        tlb_shootdown(m);
+    } else {
+        /* the first gap big enough, from the hint (or the start of the area) */
+        uint64_t from = (addr & ~4095ULL) && in_area(addr & ~4095ULL, (addr & ~4095ULL) + len) ? addr & ~4095ULL : USER_MMAP;
+        for (int pass = 0; ; pass++) {
+            s = from;
+            int i = vma_find(m, s);
+            for (; i < m->nv; i++) {
+                if (m->v[i].s >= s + len) break;
+                if (m->v[i].e > s) s = m->v[i].e;
+            }
+            if (s + len <= USER_MMAP_END) break;
+            if (pass || from == USER_MMAP) return -DERR_NOMEM;
+            from = USER_MMAP;
+        }
+    }
+    if (!vma_add(m, s, s + len, prot & 7)) return -DERR_NOMEM;
+    return (long)s;
+}
+long mm_munmap(struct mm *m, uint64_t addr, uint64_t len, uint64_t *pages) {
+    len = (len + 4095) & ~4095ULL;
+    if ((addr & 4095) || !in_area(addr, addr + len)) return -DERR_INVAL;
+    uint64_t fr = drop_pages(m, addr, addr + len);
+    if (pages) *pages -= fr < *pages ? fr : *pages;
+    if (!vma_cut(m, addr, addr + len)) return -DERR_NOMEM;
+    tlb_shootdown(m);
+    return 0;
+}
+long mm_mprotect(struct mm *m, uint64_t addr, uint64_t len, int prot) {
+    len = (len + 4095) & ~4095ULL;
+    if (addr & 4095) return -DERR_INVAL;
+    if (!in_area(addr, addr + len)) return 0;                /* (outside the area: nothing to change) */
+    /* every page must be in an area */
+    for (uint64_t a = addr; a < addr + len;) {
+        int i = vma_find(m, a);
+        if (i >= m->nv || m->v[i].s > a) return -DERR_INVAL;
+        a = m->v[i].e;
+    }
+    if (!vma_cut(m, addr, addr + len) || !vma_add(m, addr, addr + len, prot & 7)) return -DERR_NOMEM;
+    for (uint64_t a = addr; a < addr + len; a += 4096) {    /* the pages already given */
+        uint64_t *t = next_level(m->pml4, (a >> 39) & 511, false);
+        if (t) t = next_level(t, (a >> 30) & 511, false);
+        if (!t) { a = (a | ((1ULL << 30) - 1)) + 1 - 4096; continue; }
+        t = next_level(t, (a >> 21) & 511, false);
+        if (!t) { a = (a | ((1ULL << 21) - 1)) + 1 - 4096; continue; }
+        uint64_t *pte = &t[(a >> 12) & 511];
+        if ((*pte & OWNED) && ADDR(*pte)) *pte = ADDR(*pte) | pte_flags(prot & 7);
+    }
+    tlb_shootdown(m);
+    return 0;
+}
+/* a page fault (or the kernel checking an address): give the page if its area allows the access */
+bool mm_fault(struct mm *m, uint64_t addr, bool write, bool exec, uint64_t *pages) {
+    if (!m || !in_area(addr, addr + 1)) return false;
+    int i = vma_find(m, addr);
+    if (i >= m->nv || m->v[i].s > addr) return false;
+    int prot = m->v[i].prot;
+    if (!prot || (write && !(prot & DPROT_WRITE)) || (exec && !(prot & DPROT_EXEC))) return false;
+    uint64_t va = addr & ~4095ULL;
+    uint64_t *pte = pte_of(m->pml4, va, true);
+    if (!pte) return false;
+    if ((*pte & OWNED) && ADDR(*pte)) *pte = ADDR(*pte) | pte_flags(prot);   /* there already (another core's stale view) */
+    else {
+        void *pg = page_alloc(1);
+        if (!pg) return false;
+        *pte = (uint64_t)pg | pte_flags(prot);
+        if (pages) (*pages)++;
+    }
+    __asm__ volatile("invlpg (%0)" ::"r"(va) : "memory");
+    return true;
 }

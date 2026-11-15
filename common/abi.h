@@ -7,6 +7,27 @@
 #define USER_WIN_BASE  0x0000008080000000ULL   /* window pixel buffers are mapped here */
 #define USER_HEAP      0x0000008100000000ULL   /* grows upwards with SYS_MEM_GROW */
 #define USER_END       0x0000010000000000ULL
+#define USER_MMAP      0x000000C000000000ULL   /* SYS_MMAP's area (to USER_MMAP_END) */
+#define USER_MMAP_END  0x000000FF00000000ULL
+
+/* SYS_MMAP(addr, len, prot, flags) -> address, or a negative error; memory is zeroed and given out page by page
+ * when first touched, so big reservations (PROT_NONE) cost nothing */
+#define DPROT_READ  1
+#define DPROT_WRITE 2
+#define DPROT_EXEC  4
+#define DMAP_FIXED  0x10          /* exactly at addr (replacing what was there) */
+/* SYS_THREAD(rip, rsp, fs_base, clear_tid) -> thread id: a new thread in this program, starting at rip with stack rsp;
+ * when it ends (SYS_THREAD_EXIT) the u32 at clear_tid is set to 0 and its futex woken. SYS_EXIT ends every thread. */
+/* SYS_FUTEX(op, addr, val, timeout_ms): op 0 = wait while *addr == val (timeout_ms < 0: no limit), 1 = wake up to val */
+enum { FUTEX_OP_WAIT, FUTEX_OP_WAKE };
+/* SYS_CLOCK(id) -> nanoseconds: 0 = real time (since 1970, UTC), 1 = since start-up, 2 = this thread's CPU time */
+/* errors returned (negated), with POSIX's numbers */
+#define DERR_PERM 1
+#define DERR_AGAIN 11
+#define DERR_NOMEM 12
+#define DERR_FAULT 14
+#define DERR_INVAL 22
+#define DERR_TIMEDOUT 110
 
 enum {
     SYS_EXIT, SYS_YIELD, SYS_SLEEP, SYS_TIME, SYS_LOG,
@@ -17,6 +38,8 @@ enum {
     SYS_RANDOM, SYS_FS_APPEND, SYS_NET_INFO, SYS_NET_CONFIG, SYS_NET_PING, SYS_NET_RESOLVE, SYS_TCP_CONNECT, SYS_TCP_SEND, SYS_TCP_RECV, SYS_TCP_CLOSE,
     SYS_DISK_LIST, SYS_DISK_INSTALL, SYS_DISK_STATUS, SYS_MEM_GROW, SYS_SETTING_GET, SYS_SETTING_SET, SYS_SOUND, SYS_LOCK, SYS_CLIP_SET, SYS_CLIP_GET,
     SYS_UPDATE, SYS_ALARM, SYS_SIGRETURN,
+    /* for ported software (a POSIX layer on top): memory maps, threads, futexes, thread-local storage, clocks */
+    SYS_MMAP, SYS_MUNMAP, SYS_MPROTECT, SYS_THREAD, SYS_THREAD_EXIT, SYS_FUTEX, SYS_SET_FS, SYS_CLOCK, SYS_GETTID,
     SYS_COUNT
 };
 

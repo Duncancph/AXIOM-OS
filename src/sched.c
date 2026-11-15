@@ -77,13 +77,16 @@ int task_spawn_arg(const char *app, const char *arg) {
     strncpy0(t->appid, ae->id, sizeof t->appid);
     t->app = t->appid;
     strncpy0(t->arg, arg ? arg : "", sizeof t->arg);
-    t->pml4 = vm_create();
+    t->mm = mm_new();
+    t->pml4 = t->mm ? t->mm->pml4 : 0;
+    t->proc = t;
     uint64_t entry;
     long pages = t->pml4 ? elf_load(t->pml4, img, img_len, &entry) : -1;
     long sp = pages >= 0 ? vm_alloc(t->pml4, USER_STACK_TOP - 256 * 1024, 256 * 1024) : -1;
     kfree(loaded);
     if (pages < 0 || sp < 0) {
-        if (t->pml4) vm_destroy(t->pml4);
+        if (t->mm) mm_put(t->mm);
+        t->mm = 0;
         for (int i = 0; i < KSTACK_PAGES; i++) page_free(t->kstack + i * 4096);
         t->state = 0;
         return -1;
@@ -101,6 +104,58 @@ int task_spawn_arg(const char *app, const char *arg) {
     t->state = PS_READY;
     kprintf("[sched] started '%s' (pid %d, %lu KiB)\n", t->name, t->pid, t->pages * 4);
     return t->pid;
+}
+
+/* Another thread of the running program (SYS_THREAD): same memory, its own registers, stack and %fs. */
+long task_thread(uint64_t rip, uint64_t rsp, uint64_t fs, uint64_t clear_tid) {
+    struct task *p = current->proc;
+    if (!current->user || !p || !current->mm) return -DERR_INVAL;
+    if (rip < USER_BASE || rip >= USER_END || rsp < USER_BASE || rsp > USER_END) return -DERR_FAULT;
+    char nm[32]; ksnprintf(nm, sizeof nm, "%s thread", p->name);
+    struct task *t = alloc_task(nm);
+    if (!t) return -DERR_AGAIN;
+    t->user = true;
+    memcpy(t->fx, fx_init, sizeof t->fx);
+    strncpy0(t->appid, p->appid, sizeof t->appid);
+    t->app = t->appid;
+    t->mm = current->mm; t->mm->refs++;
+    t->pml4 = t->mm->pml4;
+    t->proc = p;
+    t->fs_base = fs; t->clear_tid = clear_tid;
+    uint64_t *s = (uint64_t *)t->kstack_top;
+    *--s = 0x1B; *--s = rsp; *--s = 0x202; *--s = 0x23; *--s = rip;
+    *--s = (uint64_t)user_entry;
+    for (int i = 0; i < 6; i++) *--s = 0;
+    t->rsp = (uint64_t)s;
+    t->state = PS_READY;
+    return t->pid;
+}
+
+/* ---- futexes: threads waiting for a word of their program's memory to change ---- */
+long futex_wait(uint64_t addr, uint32_t val, int64_t timeout_ms) {
+    struct task *t = current;
+    if ((addr & 3) || !user_ok(t->pml4, (const void *)addr, 4, false)) return -DERR_FAULT;
+    if (__atomic_load_n((volatile uint32_t *)addr, __ATOMIC_SEQ_CST) != val) return -DERR_AGAIN;
+    if (timeout_ms == 0) return -DERR_TIMEDOUT;
+    t->futex_mm = t->mm; t->futex_addr = addr; t->futex_woken = false;
+    t->wake_at = timeout_ms > 0 ? uptime_ms() + (uint64_t)timeout_ms : 0;
+    t->state = PS_BLOCKED;
+    schedule();
+    bool woken = t->futex_woken;
+    t->futex_mm = 0; t->futex_addr = 0; t->futex_woken = false;
+    if (t->killed) task_exit(-1);
+    return woken ? 0 : -DERR_TIMEDOUT;
+}
+long futex_wake(struct mm *m, uint64_t addr, int n) {
+    int k = 0;
+    for (int i = 0; i < MAX_TASKS && k < n; i++) {
+        struct task *t = &tasks[i];
+        if (t->state != PS_BLOCKED || t->futex_mm != m || t->futex_addr != addr || !m) continue;
+        t->futex_woken = true; t->futex_mm = 0;
+        t->state = PS_READY; t->wake_at = 0;
+        k++;
+    }
+    return k;
 }
 
 /* A core with nothing to do: let go of the kernel lock and sleep until the next interrupt. */
@@ -197,13 +252,16 @@ void schedule(void) {
     if (next == current) { current->state = PS_RUNNING; if (!current->user) __asm__ volatile("sti"); return; }
     struct task *prev = current;
     if (prev->user && prev->state != PS_ZOMBIE) __asm__ volatile("fxsave64 %0" : "=m"(prev->fx) :: "memory");
-    if (next->user) __asm__ volatile("fxrstor64 %0" :: "m"(next->fx) : "memory");
+    if (next->user) {
+        __asm__ volatile("fxrstor64 %0" :: "m"(next->fx) : "memory");
+        __asm__ volatile("wrmsr" :: "c"(0xC0000100), "a"((uint32_t)next->fs_base), "d"((uint32_t)(next->fs_base >> 32)));   /* its %fs (thread-local storage) */
+    }
     if (prev->state == PS_RUNNING) prev->state = PS_READY;
     next->state = PS_RUNNING;
     next->cpu = me->id;
     current = next;
     tss_set_rsp0(next->kstack_top);
-    if (read_cr3() != (uint64_t)next->pml4) write_cr3((uint64_t)next->pml4);
+    if (read_cr3() != (uint64_t)next->pml4) { write_cr3((uint64_t)next->pml4); if (next->mm) me->tlb_gen = next->mm->tlb_gen; }
     switch_to(&prev->rsp, next->rsp);
     if (!current->user) __asm__ volatile("sti");     /* see thread_entry */
 }
@@ -232,9 +290,40 @@ void task_sleep(uint64_t ms) {
     schedule();
 }
 
+static void kill_one(struct task *t) {                    /* (not current) */
+    if (t->busy || t->state == PS_RUNNING) { t->killed = true; return; }   /* running on another core: it stops at its next tick */
+    wm_task_exit(t);
+    net_task_exit(t);
+    t->state = PS_ZOMBIE;
+}
+static void kill_threads(struct task *except) {           /* the other threads of except's program */
+    struct task *p = except->proc;
+    if (!p) return;
+    for (int i = 0; i < MAX_TASKS; i++) {
+        struct task *t = &tasks[i];
+        if (t == except || !t->state || t->state == PS_ZOMBIE || t->proc != p) continue;
+        kill_one(t);
+    }
+}
+/* the end of one thread: its clear_tid word is cleared and its waiters woken (how threads are joined) */
+void task_thread_exit(void) {
+    struct task *t = current;
+    if (t->proc == t) task_exit(0);                       /* the program's first thread: the program ends */
+    if (t->clear_tid && user_ok(t->pml4, (const void *)t->clear_tid, 4, true)) {
+        *(volatile uint32_t *)t->clear_tid = 0;
+        futex_wake(t->mm, t->clear_tid, 1 << 30);
+    }
+    wm_task_exit(t);
+    net_task_exit(t);
+    t->state = PS_ZOMBIE;
+    schedule();
+    panic("zombie thread was scheduled");
+}
+
 void task_exit(int code) {
     struct task *t = current;
     if (t->user) kprintf("[sched] '%s' (pid %d) exited with code %d\n", t->name, t->pid, code);
+    if (t->user) kill_threads(t);                         /* a program ends with all its threads */
     wm_task_exit(t);
     net_task_exit(t);
     t->state = PS_ZOMBIE;
@@ -247,12 +336,11 @@ bool task_kill(int pid) {
         struct task *t = &tasks[i];
         if (!t->state || t->state == PS_ZOMBIE || t->pid != pid) continue;
         if (!t->user) return false;            /* kernel threads can't be killed */
-        if (t == current) task_exit(-1);
-        if (t->busy || t->state == PS_RUNNING) { t->killed = true; return true; }   /* running on another core: it stops at its next tick */
+        if (t->proc && t->proc->state && t->proc->state != PS_ZOMBIE) t = t->proc;   /* a thread: its whole program */
+        if (t == current || (current && current->proc == t->proc && current->proc)) task_exit(-1);
         kprintf("[sched] killed '%s' (pid %d)\n", t->name, t->pid);
-        wm_task_exit(t);
-        net_task_exit(t);
-        t->state = PS_ZOMBIE;
+        kill_threads(t);
+        kill_one(t);
         return true;
     }
     return false;
@@ -262,7 +350,11 @@ void task_reap(void) {
     for (int i = 0; i < MAX_TASKS; i++) {
         struct task *t = &tasks[i];
         if (t->state != PS_ZOMBIE || t == current) continue;
-        if (t->user && t->pml4) vm_destroy(t->pml4);
+        bool threads_left = false;                        /* a program's first thread goes last (the others point to it) */
+        for (int j = 0; j < MAX_TASKS && t->user && t->proc == t; j++) if (&tasks[j] != t && tasks[j].state && tasks[j].proc == t) threads_left = true;
+        if (threads_left) continue;
+        if (t->user && t->mm) mm_put(t->mm);             /* the memory goes with its last thread */
+        t->mm = 0;
         for (int k = 0; k < KSTACK_PAGES; k++) page_free(t->kstack + k * 4096);
         t->state = 0;
     }

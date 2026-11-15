@@ -99,12 +99,13 @@ uint64_t syscall_dispatch(struct frame *f) {
     case SYS_WIN_CREATE: {
         char title[64];
         if (!copy_str(title, c, sizeof title) || !UOK(d, sizeof(struct win_info), true)) return (uint64_t)-1;
-        if (current->nwin >= 16) return (uint64_t)-1;
+        struct task *P = current->proc ? current->proc : current;   /* (a program's threads share its window area) */
+        if (P->nwin >= 16) return (uint64_t)-1;
         uint32_t *buf; int pages;
-        uint64_t va = USER_WIN_BASE + (uint64_t)current->nwin * 0x4000000ULL;
+        uint64_t va = USER_WIN_BASE + (uint64_t)P->nwin * 0x4000000ULL;
         struct window *w = wm_create(current, (int)a, (int)b, title, &buf, &pages, va, (int)e);
         if (!w) return (uint64_t)-1;
-        current->nwin++;
+        P->nwin++;
         for (int i = 0; i < pages; i++) vm_map(current->pml4, va + i * 4096ULL, (uint64_t)buf + i * 4096ULL, true, false);
         struct win_info *wi = (struct win_info *)d;
         wi->id = wm_id(w); wi->buf = (uint32_t *)va; wi->w = (int)a; wi->h = (int)b;
@@ -319,17 +320,46 @@ uint64_t syscall_dispatch(struct frame *f) {
         memcpy((void *)a, tmp, n * sizeof tmp[0]);
         return n;
     }
+    case SYS_MMAP: return (uint64_t)mm_mmap(current->mm, a, b, (int)c, (int)d, &current->proc->pages);
+    case SYS_MUNMAP: return (uint64_t)mm_munmap(current->mm, a, b, &current->proc->pages);
+    case SYS_MPROTECT: return (uint64_t)mm_mprotect(current->mm, a, b, (int)c);
+    case SYS_THREAD: return (uint64_t)task_thread(a, b, c, d);
+    case SYS_THREAD_EXIT: task_thread_exit();
+    case SYS_FUTEX:
+        if (a == FUTEX_OP_WAIT) return (uint64_t)futex_wait(b, (uint32_t)c, (int64_t)d);
+        if (a == FUTEX_OP_WAKE) return (uint64_t)futex_wake(current->mm, b, (int)c);
+        return (uint64_t)-DERR_INVAL;
+    case SYS_SET_FS:
+        current->fs_base = a;
+        __asm__ volatile("wrmsr" :: "c"(0xC0000100), "a"((uint32_t)a), "d"((uint32_t)(a >> 32)));
+        return 0;
+    case SYS_CLOCK: {
+        if (a == 1) return uptime_ns();
+        if (a == 2) { cpu_time_us(); return current->ticks * 1000; }
+        static uint64_t boot_epoch_ns;                    /* real time: the clock chip's time at start-up, then the counter */
+        if (!boot_epoch_ns) {
+            struct rtc_time t; rtc_read_local(&t);
+            static const int cum[] = { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };
+            long y = t.year, days = (y - 1970) * 365 + (y - 1969) / 4 - (y - 1901) / 100 + (y - 1601) / 400 + cum[(t.mon - 1) % 12] + t.day - 1;
+            if (t.mon > 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0)) days++;
+            long secs = days * 86400 + t.hour * 3600 + t.min * 60 + t.sec - t.utc_offset_min * 60;
+            boot_epoch_ns = (uint64_t)secs * 1000000000ull - uptime_ns();
+        }
+        return boot_epoch_ns + uptime_ns();
+    }
+    case SYS_GETTID: return (uint64_t)current->pid;
     case SYS_MEM_GROW: {                     /* a: bytes more; returns the start of the new memory, or 0 */
+        struct task *P = current->proc ? current->proc : current;   /* (the program's heap, shared by its threads) */
         uint64_t len = (a + 4095) & ~4095ull;
-        if (!current->heap_top) current->heap_top = USER_HEAP;
-        uint64_t used = current->heap_top - USER_HEAP;
+        if (!P->heap_top) P->heap_top = USER_HEAP;
+        uint64_t used = P->heap_top - USER_HEAP;
         if (!len || len > (512ull << 20) || used + len > (1024ull << 20)) return 0;     /* 1 GiB per app */
         if (mem_used() + len + (32ull << 20) > mem_total()) return 0;                 /* keep 32 MiB for the system */
-        long n = vm_alloc(current->pml4, current->heap_top, len);
+        long n = vm_alloc(current->pml4, P->heap_top, len);
         if (n < 0) return 0;
-        current->pages += n;
-        uint64_t start = current->heap_top;
-        current->heap_top += len;
+        P->pages += n;
+        uint64_t start = P->heap_top;
+        P->heap_top += len;
         return start;
     }
     case SYS_SETTING_GET: {

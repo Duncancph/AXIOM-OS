@@ -36,6 +36,7 @@ void timer_init(void) {
 
 uint64_t tsc_hz(void) { return hz; }
 uint64_t uptime_us(void) { return (rdtsc() - boot_tsc) / (hz / 1000000); }
+uint64_t uptime_ns(void) { uint64_t t = rdtsc() - boot_tsc; return t / hz * 1000000000ull + t % hz * 1000000000ull / hz; }
 uint64_t uptime_ms(void) { return (rdtsc() - boot_tsc) / (hz / 1000); }
 void udelay(uint64_t us) {
     uint64_t end = rdtsc() + us * (hz / 1000000);

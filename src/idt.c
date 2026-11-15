@@ -44,6 +44,11 @@ static void dispatch(struct frame *f) {
     }
     if (v == 0xF0) { lapic_eoi(); return; }    /* another core woke this one */
     if (v >= 32) return;                       /* spurious / stray legacy IRQs */
+    if (v == 14 && (f->cs & 3) == 3 && current->mm) {   /* a page of a memory area, used for the first time */
+        uint64_t cr2; __asm__ volatile("mov %%cr2,%0" : "=r"(cr2));
+        uint64_t dummy = 0;
+        if (mm_fault(current->mm, cr2, f->err & 2, f->err & 16, current->proc ? &current->proc->pages : &dummy)) return;
+    }
     if ((f->cs & 3) == 3) { user_fault(f); return; }
     kernel_panic(f);
 }
@@ -52,10 +57,15 @@ static void dispatch(struct frame *f) {
  * kernel); give it back on the way out. The task may come back on another core: whichever core it is,
  * it holds the lock while in the kernel, and returning to the app is where it lets go. */
 void isr_dispatch(struct frame *f) {
+    if (f->vec == 0xF1) { tlb_ipi(); return; }     /* TLB shootdown: without the lock (its sender holds it) */
+    if ((f->cs & 3) == 3) cpu_self()->in_user = 0;
     bool took = !cpu_self()->bkl_held;
     if (took) bkl_lock();
     dispatch(f);
-    if (took) bkl_unlock();
+    if (took) {
+        if ((f->cs & 3) == 3) tlb_sync();          /* back to the app: fresh translations if its memory changed */
+        bkl_unlock();
+    }
 }
 
 static void kernel_panic(struct frame *f) {

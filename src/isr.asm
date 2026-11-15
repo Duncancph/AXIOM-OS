@@ -100,6 +100,8 @@ thread_entry:
 ; First run of a user process: the stack holds an iretq frame into ring 3
 global user_entry
 user_entry:
+    extern tlb_sync
+    call tlb_sync           ; (its program's memory may have changed since this core last used it)
     call bkl_unlock         ; leaving the kernel for the app's first instruction
     swapgs
     xor eax, eax
