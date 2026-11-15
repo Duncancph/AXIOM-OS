@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 100
-notes Device Manager: Settings > Devices lists every device and its driver (also 'devices' in CMD)
-file kernel b100/thane.elf.gz 18062712 9760cef902eaa4b651b4c43a6db5ef537b2ee683a045c21da99b8fa5d16413e9
-file initrd b100/initrd.tar.gz 1280000 0913756856836a255b5a362c54cbbbd71e19a74a53e7206939d0498a242ea7e1
-file bootx64 b100/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b100/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 304502201ef42f7e6541b72cb32ca9abec00e864940dc15d6cb17fa89e6291f1d1f821fd0221008204fe769fc78e41d6eda260af49d97faf338fac7fd123072e00a4879427c9ad
+build 103
+notes New window title bars (thin buttons on the right); Arc loads large style sheets (YouTube's layout starts to work)
+file kernel b103/thane.elf.gz 18066056 5758222035237eb8d4ffdabc5c7e0ff7c715b00d3b319ce17d32f5091bfad5ad
+file initrd b103/initrd.tar.gz 1280000 8dd6d704f39d0f0c0a63ad3abfbd7ef9694e7fc920d6c0b2012de66be3f2f963
+file bootx64 b103/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b103/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022100fe3a1b66b4f25d7ba461be46b94de13d61ed5ac9c9a5a9b3060b63baddc9884d022051044c08034620de655ab4b3ba4fc9813313505107c9852a3f0dc359212921c8
