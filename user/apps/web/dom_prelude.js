@@ -5,7 +5,9 @@
   var D = g.__d;
   delete g.__d;
   var hidden = function (o, k, v) { Object.defineProperty(o, k, { value: v, writable: true, configurable: true, enumerable: false }); };
-  var getter = function (o, k, get, set) { Object.defineProperty(o, k, { get: get, set: set, configurable: true, enumerable: true }); };
+  // read-only ones: an object may still give itself its own value of that name (frameworks' components do: content, host...)
+  var ownSetter = function (k) { return function (v) { Object.defineProperty(this, k, { value: v, writable: true, configurable: true, enumerable: true }); }; };
+  var getter = function (o, k, get, set) { Object.defineProperty(o, k, { get: get, set: set || ownSetter(k), configurable: true, enumerable: true }); };
 
   // ---------------- events ----------------
   function Event(type, init) {
@@ -173,10 +175,19 @@
   };
   NP.removeChild = function (n) { if (D.parent(n) !== this) throw new Error('NotFoundError: the node is not a child of this node'); D.remove(n); return n; };
   NP.replaceChild = function (n, old) { this.insertBefore(n, old); D.remove(old); return old; };
-  NP.cloneNode = function (deep) {
-    if (deep && D.type(this) === 1 && D.tag(this) === 'template') { var c = D.clone(this, false); hidden(c, '_content', D.clone(tplContent(this), true)); return c; }
-    return D.clone(this, !!deep);
-  };
+  // a deep copy also copies the contents of every <template> inside it (they live outside the tree)
+  function deepClone(n) {
+    var c = D.clone(n, true);
+    if (D.type(n) !== 1) return c;
+    var a = D.tag(n) === 'template' ? [n] : [], b = D.tag(c) === 'template' ? [c] : [];
+    a = a.concat(D.query(n, 'template', true)); b = b.concat(D.query(c, 'template', true));
+    for (var i = 0; i < a.length && i < b.length; i++) {
+      var src = a[i]._content || (D.first(a[i]) ? tplContent(a[i]) : null);
+      if (src) { hidden(b[i], '_content', deepClone(src)); var k; while ((k = D.first(b[i]))) (ceRawInsert || D.insert)(b[i]._content, k, null); }
+    }
+    return c;
+  }
+  NP.cloneNode = function (deep) { return deep ? deepClone(this) : D.clone(this, false); };
   NP.isEqualNode = function (o) { return o && D.html(this, true) === D.html(o, true); };
   NP.isSameNode = function (o) { return o === this; };
   NP.compareDocumentPosition = function (o) {
@@ -208,7 +219,7 @@
   ['id', 'title', 'lang', 'dir', 'name', 'alt', 'placeholder', 'type', 'rel', 'target', 'accept', 'pattern', 'autocomplete', 'role', 'download'].forEach(function (k) { reflect(k, k); });
   reflect('className', 'class'); reflect('htmlFor', 'for'); reflect('accessKey', 'accesskey');
   var boolAttr = function (prop, attr) { getter(P, prop, function () { return D.attr(this, attr) !== null; }, function (v) { if (v) D.setAttr(this, attr, ''); else D.removeAttr(this, attr); }); };
-  ['hidden', 'required', 'readOnly', 'multiple', 'autofocus', 'open', 'async', 'defer', 'noValidate', 'draggable', 'selected', 'novalidate'].forEach(function (k) { boolAttr(k, k.toLowerCase()); });
+  ['hidden', 'required', 'readOnly', 'multiple', 'autofocus', 'open', 'noValidate', 'draggable', 'selected', 'novalidate'].forEach(function (k) { boolAttr(k, k.toLowerCase()); });
   getter(P, 'disabled', function () { return D.disabled(this); }, function (v) { D.setDisabled(this, !!v); });
   var urlAttr = function (prop, attr) { getter(P, prop, function () { var v = D.attr(this, attr); return v === null ? '' : D.resolve(v); }, function (v) { D.setAttr(this, attr, String(v)); }); };
   urlAttr('href', 'href'); urlAttr('src', 'src'); urlAttr('action', 'action');
@@ -222,7 +233,15 @@
   P.toggleAttribute = function (k, force) { var has = this.hasAttribute(k); if (force === undefined ? has : !force) { this.removeAttribute(k); return false; } this.setAttribute(k, ''); return true; };
   P.getAttributeNames = function () { return D.attrNames(this); };
   P.getAttributeNS = function (ns, k) { return this.getAttribute(k); }; P.setAttributeNS = function (ns, k, v) { this.setAttribute(k, v); };
-  getter(P, 'attributes', function () { var self = this; return D.attrNames(this).map(function (k) { return { name: k, localName: k, value: D.attr(self, k), nodeName: k }; }); });
+  getter(P, 'attributes', function () {                // a NamedNodeMap: a list with lookups by name
+    var self = this, l = D.attrNames(this).map(function (k) { return { name: k, localName: k, nodeName: k, value: D.attr(self, k), nodeValue: D.attr(self, k), nodeType: 2, specified: true, ownerElement: self, namespaceURI: null, prefix: null }; });
+    l.getNamedItem = function (k) { k = String(k).toLowerCase(); for (var i = 0; i < l.length; i++) if (l[i].name === k) return l[i]; return null; };
+    l.getNamedItemNS = function (ns, k) { return l.getNamedItem(k); };
+    l.item = function (i) { return l[i] || null; };
+    l.setNamedItem = function (at) { self.setAttribute(at.name, at.value); return null; };
+    l.removeNamedItem = function (k) { var at = l.getNamedItem(k); self.removeAttribute(k); return at; };
+    return l;
+  });
   getter(P, 'children', function () { return elems(this); });
   getter(P, 'childElementCount', function () { return elems(this).length; });
   getter(P, 'firstElementChild', function () { return elems(this)[0] || null; });
@@ -506,7 +525,7 @@
     collapse: function () {}, collapseToStart: function () {}, collapseToEnd: function () {}, selectAllChildren: function () {}, extend: function () {}, setBaseAndExtent: function () {},
     containsNode: function () { return false; }, toString: function () { return ''; } };
   g.getSelection = doc.getSelection = function () { return theSelection; }; g.Selection = function () {};
-  doc.importNode = function (n, deep) { if (D.type(n) === 1 && D.tag(n) === 'template' && deep) { var c = D.clone(n, false); hidden(c, '_content', D.clone(tplContent(n), true)); return c; } return D.clone(n, !!deep); };
+  doc.importNode = function (n, deep) { return deep ? deepClone(n) : D.clone(n, false); };
   doc.adoptNode = function (n) { if (D.parent(n)) D.remove(n); return n; };
   doc.hasFocus = function () { return true; };
   doc.elementFromPoint = function () { return null; };

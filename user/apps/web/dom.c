@@ -286,6 +286,9 @@ static struct node *parse_fragment(const char *s, long n) {
     return first;
 }
 static void run_script_node(struct node *s);
+static bool connected(struct node *n);
+/* load/error events for scripts the page added, sent from the main loop (not inside the script that added them) */
+static struct node *sev_node[64]; static bool sev_ok[64]; static int nsev;
 
 /* ---------------- natives: the tree ---------------- */
 #define NATIVE(name) static jsval name(js_rt *rt_, jsval self, int argc, jsval *argv, void *data)
@@ -326,8 +329,10 @@ NATIVE(n_set_attr) {
     long vl; char *v = T(A(argc, argv, 2), &vl);
     set_attr(n, k, v, vl);
     bool init = !strcmp(k, "src") || !strcmp(k, "href") || !strcmp(k, "value") || !strcmp(k, "checked") || !strcmp(k, "type");
+    bool run = !strcmp(k, "src") && n->tag == T_SCRIPT && connected(n);   /* a script that got its src after it was added */
     free(k); free(v);
     web_dom_changed(init ? n : 0);
+    if (run) run_script_node(n);
     return js_undefined();
 }
 NATIVE(n_remove_attr) {
@@ -586,7 +591,7 @@ NATIVE(n_url) { char u[600]; web_page_url(u, sizeof u); return js_str(rt, u, -1)
 NATIVE(n_base) { return js_str(rt, D->base, -1); }
 NATIVE(n_navigate) { char *u = js_to_cstring(rt, A(argc, argv, 0)); if (u) { char abs[600]; resolve_url(D->base, u, abs, sizeof abs); web_navigate(abs); free(u); } return js_undefined(); }
 NATIVE(n_alert) { char *t = T(A(argc, argv, 0), 0); web_message("The page says", t); free(t); return js_undefined(); }
-NATIVE(n_resolve) { char *u = js_to_cstring(rt, A(argc, argv, 0)); char abs[600] = ""; if (u) { resolve_url(D->base, u, abs, sizeof abs); free(u); } return js_str(rt, abs, -1); }
+NATIVE(n_resolve) { char *u = js_to_cstring(rt, A(argc, argv, 0)); static char abs[8192]; abs[0] = 0; if (u) { resolve_url(D->base, u, abs, sizeof abs); free(u); } return js_str(rt, abs, -1); }
 
 /* ---------------- natives: timers ---------------- */
 #define MAXT 256
@@ -626,6 +631,12 @@ static void report(const char *where) {
 static void after_task(void) { script_end(); script_begin(); js_run_jobs(rt); script_end(); }
 void js_run_timers(void) {
     if (!page_on) return;
+    while (nsev && page_on) {                                /* scripts that finished loading */
+        struct node *n = sev_node[0]; bool ok = sev_ok[0];
+        for (int i = 1; i < nsev; i++) { sev_node[i - 1] = sev_node[i]; sev_ok[i - 1] = sev_ok[i]; }
+        nsev--;
+        js_event(n, ok ? "load" : "error", 0, 0, 0);
+    }
     uint64_t now = sys_time();
     for (int i = 0; i < MAXT && page_on; i++) {
         if (!timers[i].used || timers[i].due > now) continue;
@@ -647,8 +658,8 @@ NATIVE(n_http) {
     char *method = js_to_cstring(rt, A(argc, argv, 0)), *u = js_to_cstring(rt, A(argc, argv, 1));
     char *body = js_is_undefined(A(argc, argv, 2)) || js_is_null(A(argc, argv, 2)) ? 0 : js_to_cstring(rt, A(argc, argv, 2));
     char *hdr = js_is_string(A(argc, argv, 3)) ? js_to_cstring(rt, A(argc, argv, 3)) : 0;
-    char abs[600]; resolve_url(D->base, u ? u : "", abs, sizeof abs);
-    char *out = 0, ctype[128] = "", final[600] = ""; int status = 0;
+    static char abs[8192], final[8192]; final[0] = 0; resolve_url(D->base, u ? u : "", abs, sizeof abs);
+    char *out = 0, ctype[128] = ""; int status = 0;
     /* Requests made by scripts (often advertising and statistics servers) each wait at most 5 s, and a
      * page gets 20 s of them in all: past that its scripts' requests fail at once instead of keeping
      * the window waiting. */
@@ -754,27 +765,33 @@ static void run_code(const char *code, long n, const char *name) {
     if (js_eval(rt, code, n, name, &res) < 0) report(name);
     after_task();
 }
+static void script_event(struct node *s, bool ok) { if (nsev < 64) { sev_node[nsev] = s; sev_ok[nsev] = ok; nsev++; } }
 static void run_script_node(struct node *s) {
     if (!page_on || !js_type_ok(s)) return;
     if (node_attr(s, "data-axiom-ran")) return;
-    set_attr(s, "data-axiom-ran", "1", 1);
     const char *src = node_attr(s, "src");
-    if (sys_time() > page_deadline) {
+    if ((!src || !src[0]) && !s->first && (!s->text || !s->tlen)) return;   /* empty for now: runs once it gets a src or text */
+    set_attr(s, "data-axiom-ran", "1", 1);
+    src = node_attr(s, "src");
+    if (sq_active && sys_time() > page_deadline) {           /* the page's own scripts get 15 s; ones added later run when added */
         if (!skip_said) { skip_said = true; con_add("[skipped] ", "the page's scripts took too long (over 15 seconds); the rest were skipped"); }
         return;
     }
     if (src && src[0]) {
-        char u[600]; resolve_url(D->base, src, u, sizeof u);
-        char *t = 0, ct[96], fin[600]; int st = 0;           /* scripts are run as sent (UTF-8), not converted like page text */
+        char *u = malloc(8192), *fin = malloc(8192);          /* long addresses (lists of modules) */
+        if (!u || !fin) { free(u); free(fin); return; }
+        resolve_url(D->base, src, u, 8192);
+        char *t = 0, ct[96]; int st = 0;           /* scripts are run as sent (UTF-8), not converted like page text */
         uint64_t now = sys_time();                        /* a script file gets until the page's time is up (5 s at least) */
         web_fetch_deadline = page_deadline > now + 5000 ? page_deadline : now + 5000;
         web_script_waiting++;
-        long n = web_http_script(u, &t, &st, ct, sizeof ct, fin, sizeof fin);
+        long n = web_http_script(u, &t, &st, ct, sizeof ct, fin, 8192);
         web_script_waiting--;
         web_fetch_deadline = 0;
         if (n > (24l << 20)) { char m[700]; ksnprintf(m, sizeof m, "%s is too big to run here (%ld KB)", u, n / 1024); con_add("[skipped] ", m); free(t); }
-        else if (n >= 0 && t && st < 400) { run_code(t, n, u); free(t); }
-        else { char m[700]; ksnprintf(m, sizeof m, "couldn't load %s", u); con_add("[error] ", m); }
+        else if (n >= 0 && t && st < 400) { run_code(t, n, u); free(t); script_event(s, true); }
+        else { script_event(s, false); char m[700]; ksnprintf(m, sizeof m, "couldn't load %s (%s, status %d)", u, n < 0 ? http_strerror(n) : "empty", st); con_add("[error] ", m); }
+        free(u); free(fin);
         return;
     }
     char *b = 0; long len = 0, cap = 0;
@@ -885,7 +902,7 @@ bool js_page_step(char *status, int n) {
 void js_abandon(uint64_t where) {
     char m[160]; ksnprintf(m, sizeof m, "Web got stuck in its own code (at %lx) while running this page's scripts; they were turned off", where);
     con_add("[stuck] ", m);
-    page_on = false; sq_active = false; nsq = sqpos = 0;
+    page_on = false; sq_active = false; nsq = sqpos = 0; nsev = 0;
     for (int i = 0; i < MAXT; i++) timers[i].used = false;
     if (D && D->root) {                                   /* forget the nodes' script objects (at most a million nodes) */
         struct node *st[256]; int sp = 0; long seen = 0; st[sp++] = D->root;
@@ -895,7 +912,7 @@ void js_abandon(uint64_t where) {
 }
 
 void js_page_end(void) {
-    sq_active = false; nsq = sqpos = 0;
+    sq_active = false; nsq = sqpos = 0; nsev = 0;
     if (!rt) { page_on = false; return; }
     page_on = false;
     for (int i = 0; i < MAXT; i++) { js_unroot(rt, &timers[i].fn); timers[i].used = false; }

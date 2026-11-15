@@ -57,7 +57,7 @@ static int scheme_len(const char *s) {                  /* "https:" -> 5, or 0 *
 
 /* remove "." and ".." segments from a path (in place, at most 600 bytes) */
 static void norm_path(char *p) {
-    static char out[700], tail[600];
+    static char out[8300], tail[16384];                  /* p holds up to 16384 (resolve_url's res) */
     int o = 0;
     char *q = p; while (*q && *q != '?' && *q != '#') q++;
     strncpy0(tail, q, sizeof tail); *q = 0;
@@ -66,19 +66,19 @@ static void norm_path(char *p) {
         int n = e - s;
         if (n == 1 && s[0] == '.') { }
         else if (n == 2 && s[0] == '.' && s[1] == '.') { if (o > 1) { o--; while (o > 0 && out[o - 1] != '/') o--; } }
-        else if (n || !o) { if (o + n + 2 < 650) { memcpy(out + o, s, n); o += n; if (*e) out[o++] = '/'; } }
+        else if (n || !o) { if (o + n + 2 < 8190) { memcpy(out + o, s, n); o += n; if (*e) out[o++] = '/'; } }
         if (!*e) break;
         s = e + 1;
     }
     out[o] = 0;
     if (!o || out[0] != '/') { memmove(out + 1, out, o + 1); out[0] = '/'; }
-    ksnprintf(p, 600, "%s%s", out, tail);
+    ksnprintf(p, 16384, "%s%s", out, tail);
 }
 
 void resolve_url(const char *base, const char *href_in, char *out, int n) {
-    char href[600]; int k = 0;
+    static char href[8192]; int k = 0;                  /* addresses can be long (lists of modules) */
     while (*href_in == ' ' || *href_in == '\n' || *href_in == '\t' || *href_in == '\r') href_in++;
-    for (const char *s = href_in; *s && k < 598; s++) if (*s != '\n' && *s != '\r' && *s != '\t') href[k++] = *s;
+    for (const char *s = href_in; *s && k < (int)sizeof href - 2; s++) if (*s != '\n' && *s != '\r' && *s != '\t') href[k++] = *s;
     while (k && href[k - 1] == ' ') k--;
     href[k] = 0;
     if (scheme_len(href)) {
@@ -96,8 +96,8 @@ void resolve_url(const char *base, const char *href_in, char *out, int n) {
     char origin[300]; int o = 0;
     while (*h && *h != '/' && *h != '?' && *h != '#' && o < 299) origin[o++] = *h++;
     origin[o] = 0;
-    char path[600]; ksnprintf(path, sizeof path, "%s%s", *h == '/' ? "" : "/", h);
-    char res[1300];
+    static char path[8192]; ksnprintf(path, sizeof path, "%s%s", *h == '/' ? "" : "/", h);
+    static char res[16384];
     if (href[0] == '/' && href[1] == '/') { ksnprintf(out, n, "%s:%s", scheme, href); return; }
     if (href[0] == '/') ksnprintf(res, sizeof res, "%s", href);
     else if (href[0] == '#') { char *q = path; while (*q && *q != '#') q++; *q = 0; ksnprintf(res, sizeof res, "%s%s", path, href); }
@@ -108,7 +108,6 @@ void resolve_url(const char *base, const char *href_in, char *out, int n) {
         char *d = path + strlen(path); while (d > path && d[-1] != '/') d--; *d = 0;
         ksnprintf(res, sizeof res, "%s%s", path, href);
     }
-    res[599] = 0;
     norm_path(res);
     ksnprintf(out, n, "%s://%s%s", scheme, origin, res);
 }
@@ -1754,7 +1753,7 @@ static void handle_event(struct dunc_event *e) {
 int main(void) {
     char arg[256];
     http_options = HTTP_OPT_COOKIES | HTTP_OPT_GZIP;
-    { char ts[8] = ""; sys_setting_get("web.test_slow", ts, sizeof ts); if (ts[0] == '1') web_time_scale = 10; }   /* emulator testing only */
+    { char ts[8] = ""; sys_setting_get("web.test_slow", ts, sizeof ts); if (ts[0] == '1') web_time_scale = 40; }   /* emulator testing only */
     css_init();
     if (!app_open_ex(&a, WW, WH, "Web", WIN_RESIZABLE)) return 1;
     http_wait_hook = web_wait;

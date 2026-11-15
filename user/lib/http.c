@@ -92,7 +92,8 @@ void ip_str(uint32_t ip, char *out) { ksnprintf(out, 16, "%u.%u.%u.%u", ip & 255
 static int lower(int c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 static bool starts_ci(const char *s, const char *p) { for (; *p; s++, p++) if (lower(*s) != lower(*p)) return false; return true; }
 
-struct url { char host[128], path[512]; int port; bool https, v6lit; };
+#define URL_MAX 8192   /* addresses can be long (YouTube lists hundreds of loaded modules in them) */
+struct url { char host[128], path[URL_MAX]; int port; bool https, v6lit; };
 static long parse_url(const char *u, struct url *o) {
     while (*u == ' ') u++;
     o->https = false;
@@ -116,7 +117,7 @@ static long parse_url(const char *u, struct url *o) {
     if (*u == ':') { u++; o->port = 0; while (*u >= '0' && *u <= '9') o->port = o->port * 10 + (*u++ - '0'); if (!o->port || o->port > 65535) return HTTP_EURL; }
     k = 0;
     if (*u != '/') o->path[k++] = '/';
-    while (*u && *u != '#' && k < 511) { char c = *u++; if (c == ' ') { if (k < 509) { o->path[k++] = '%'; o->path[k++] = '2'; o->path[k++] = '0'; } } else o->path[k++] = c; }
+    while (*u && *u != '#' && k < URL_MAX - 1) { char c = *u++; if (c == ' ') { if (k < URL_MAX - 3) { o->path[k++] = '%'; o->path[k++] = '2'; o->path[k++] = '0'; } } else o->path[k++] = c; }
     o->path[k] = 0;
     return 0;
 }
@@ -434,8 +435,8 @@ static void encode_target(const char *in, char *out, int max) {
 long http_request(const char *url_in, const struct http_req *rq, http_sink sink, void *ctx, int *status, long *total, char *ctype, int ctlen,
                   char *final_url, int fulen) {
     static char hdr[16384];
-    static char req[12288];
-    char url[600];
+    static char req[12288 + URL_MAX];
+    static char url[URL_MAX];
     strncpy0(url, url_in, sizeof url);
     if (total) *total = -1;
     bool cookies = http_options & HTTP_OPT_COOKIES, want_gz = http_options & HTTP_OPT_GZIP;
@@ -443,7 +444,7 @@ long http_request(const char *url_in, const struct http_req *rq, http_sink sink,
     const char *method = rq && rq->method ? rq->method : "GET";
     const char *body = rq ? rq->body : 0; long body_len = body ? rq->body_len : 0;
     for (int hop = 0; hop < 8; hop++) {
-        struct url u;
+        static struct url u;
         long e = parse_url(url, &u);
         if (e) return e;
         for (char *h = u.host; *h; h++) *h = lower(*h);
@@ -487,7 +488,7 @@ long http_request(const char *url_in, const struct http_req *rq, http_sink sink,
         }
         if (hend < 0 || !starts_ci(hdr, "HTTP/1.")) { c_close(&c); return HTTP_EBAD; }
         int code = 0; { const char *s = hdr + 8; while (*s == ' ') s++; while (*s >= '0' && *s <= '9') code = code * 10 + (*s++ - '0'); }
-        long clen = -1; bool chunked = false, gz = false; char loc[600] = "";
+        long clen = -1; bool chunked = false, gz = false; static char loc[URL_MAX]; loc[0] = 0;
         if (ctype && ctlen) ctype[0] = 0;
         for (char *line = hdr; line < hdr + hend;) {
             char *nl = line; while (nl < hdr + hend && *nl != '\n') nl++;
@@ -509,7 +510,7 @@ long http_request(const char *url_in, const struct http_req *rq, http_sink sink,
             else if (loc[0] == '/' && loc[1] == '/') ksnprintf(url, sizeof url, "%s:%s", scheme, loc);
             else if (loc[0] == '/') ksnprintf(url, sizeof url, "%s://%s%s", scheme, hpp, loc);
             else {
-                char base[512]; strncpy0(base, u.path, sizeof base);
+                static char base[URL_MAX]; strncpy0(base, u.path, sizeof base);
                 char *q = base; while (*q && *q != '?') q++; *q = 0;
                 char *sl = base + strlen(base); while (sl > base && sl[-1] != '/') sl--; *sl = 0;
                 ksnprintf(url, sizeof url, "%s://%s%s%s", scheme, hpp, base, loc);
