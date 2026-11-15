@@ -153,7 +153,17 @@ static int ctx_app = -1, ctx_slot;
 static struct rect dock_item(int i);
 static struct rect ctx_rect(void) { struct rect d = dock_item(ctx_slot); return (struct rect){ d.x + d.w / 2 - 85, d.y - 54, 170, 36 }; }
 static struct rect toast_rect(int i) { return (struct rect){ W - 376, HL_BAR_H + 12 + i * 102, 360, 92 }; }
-static struct rect dot(struct window *w, int k) { return (struct rect){ w->x + 20 + k * 20 - 8, w->y + HL_TITLE_H / 2 - 8, 16, 16 }; }
+/* the window buttons, on the right of the title bar: k = 0 close, 1 minimise, 2 maximise (only on resizable windows) */
+static int btn_cx(struct window *w, int k) {
+    int right = w->x + fw(w);
+    if (k == 0) return right - 24;
+    if (k == 2) return right - 64;
+    return right - (w->resizable ? 104 : 64);
+}
+static struct rect dot(struct window *w, int k) {
+    if (k == 2 && !w->resizable) return (struct rect){ 0, 0, 0, 0 };
+    return (struct rect){ btn_cx(w, k) - 18, w->y + 6, 36, HL_TITLE_H - 12 };
+}
 
 /* ---------------- damage tracking ---------------- */
 static struct rect dmg[32]; static int ndmg;
@@ -324,14 +334,29 @@ static void draw_window(int idx, struct rect r) {
     struct framebuffer sub = { bb + r.y * W + r.x, r.w, r.h, W * 4 };
     hl_render_window(&sub, w->x - r.x, w->y - r.y, fw(w), fh(w), t, HL_WIN_BG, active);
     gfx_blit_rr(&cv, w->x + 1, w->y + TITLE, w->buf, w->w, w->h, w->w, w->x + 1, w->y + 1, fw(w) - 2, fh(w) - 2, HL_WIN_RADIUS - 1);
-    if (hover_ctl >= 1000 && (hover_ctl - 1000) / 4 == idx) {   /* show symbols on the window dots */
-        int cy = w->y + HL_TITLE_H / 2;
-        gfx_line(&cv, w->x + 17, cy - 3, w->x + 23, cy + 3, 0x5A1010, 2);
-        gfx_line(&cv, w->x + 17, cy + 3, w->x + 23, cy - 3, 0x5A1010, 2);
-        gfx_fill(&cv, w->x + 36, cy - 1, 9, 2, 0x5A3C00);
-        if (w->resizable) { gfx_fill(&cv, w->x + 56, cy - 1, 9, 2, 0x0E4A22); gfx_fill(&cv, w->x + 59, cy - 4, 2, 9, 0x0E4A22); }
+    /* title on the left, quiet buttons on the right (close turns red under the mouse) */
+    int cy = w->y + HL_TITLE_H / 2;
+    int hk = hover_ctl >= 1000 && (hover_ctl - 1000) / 4 == idx ? (hover_ctl - 1000) % 4 : -1;
+    int maxw = btn_cx(w, 1) - 18 - (w->x + 20) - 12;
+    char tt[80]; strncpy0(tt, t, sizeof tt);
+    for (int n = strlen(tt); n > 3 && gfx_text_width(&font_ui, tt) > maxw; n--) { tt[n - 1] = 0; tt[n - 2] = tt[n - 3] = '.'; }
+    gfx_text(&cv, &font_ui, w->x + 20, cy + 5, active ? HL_TEXT_DIM : HL_TEXT_FAINT, tt);
+    for (int k = 0; k < 3; k++) {
+        if (k == 2 && !w->resizable) continue;
+        struct rect b = dot(w, k); int bx = btn_cx(w, k);
+        uint32_t ic = active ? HL_TEXT_FAINT : 0x55534Bu;
+        if (hk == k) {
+            gfx_rrect(&cv, b.x, b.y, b.w, b.h, 7, k == 0 ? HL_RED : 0x2A2A28u, 255);
+            ic = k == 0 ? 0x111111u : HL_TEXT;
+        }
+        if (k == 0) { gfx_line(&cv, bx - 5, cy - 5, bx + 5, cy + 5, ic, 1); gfx_line(&cv, bx - 5, cy + 5, bx + 5, cy - 5, ic, 1); }
+        else if (k == 1) gfx_fill(&cv, bx - 5, cy, 11, 1, ic);
+        else if (w->maximized) {                               /* restore: two overlapping squares */
+            gfx_rrect_outline(&cv, bx - 3, cy - 6, 9, 9, 1, ic, 255);
+            gfx_fill(&cv, bx - 6, cy - 3, 9, 9, hk == k ? 0x2A2A28u : 0x181817u);
+            gfx_rrect_outline(&cv, bx - 6, cy - 3, 9, 9, 1, ic, 255);
+        } else gfx_rrect_outline(&cv, bx - 5, cy - 5, 11, 11, 1, ic, 255);
     }
-    if (!w->resizable) gfx_circle(&cv, w->x + 60, w->y + HL_TITLE_H / 2, HL_DOT_R + 1, HL_WIN_BG, 170);   /* can't maximise */
 }
 
 static void draw_dock_overlay(void) {
@@ -844,8 +869,7 @@ static void update_hover(void) {
     int wi = window_at(mx, my);
     if (wi >= 0) {
         struct window *w = &wins[wi];
-        struct rect dots = { w->x + 10, w->y + 10, 60, 20 };
-        if (in_rect(dots, mx, my)) { set_hover(1000 + wi * 4, dots); return; }
+        for (int k = 0; k < 3; k++) { struct rect b = dot(w, k); if (b.w && in_rect(b, mx, my)) { set_hover(1000 + wi * 4 + k, b); return; } }
     }
     set_hover(0, (struct rect){0, 0, 0, 0});
 }

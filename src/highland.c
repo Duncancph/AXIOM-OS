@@ -200,12 +200,7 @@ int ax_draw_window(const struct framebuffer *fb, const struct hl_window *win) {
     fill_rect_a(fb, win->x, win->y + HL_TITLE_H, win->w, r, win->body, 255);
     stroke_round_rect(fb, win->x, win->y, win->w, win->h, r, HL_CREAM, win->focused ? 70 : 22);
     fill_rect_a(fb, win->x + 1, win->y + HL_TITLE_H, win->w - 2, 1, HL_CREAM, 18);
-    int cy = win->y + HL_TITLE_H / 2;
-    fill_circle_a(fb, win->x + 20, cy, HL_DOT_R, win->focused ? HL_RED : 0x3A3936u, 255);
-    fill_circle_a(fb, win->x + 40, cy, HL_DOT_R, win->focused ? HL_GOLD : 0x3A3936u, 255);
-    fill_circle_a(fb, win->x + 60, cy, HL_DOT_R, win->focused ? HL_GREEN : 0x3A3936u, 255);
-    int tw = text_width(win->title, 1);
-    draw_text(fb, win->title, win->x + (win->w - tw) / 2, cy - FONT_H / 2, 1, win->focused ? HL_TEXT : HL_TEXT_FAINT);
+    /* the title and the minimise/maximise/close buttons are drawn by the compositor (desktop.c) */
     return win->y + HL_TITLE_H + 1;
 }
 
