@@ -1359,15 +1359,28 @@ static void layout_block_(struct fctx *c, struct node *n, struct ictx ic, int fo
     if (cc.fl != c->fl) { int fb = fl_clear(cc.fl, 3) - (top + bt + pt); if (fb > content) content = fb; }   /* its own floats are inside it */
     if (st->h.t == L_PX) { int h = st->h.v - (st->bsizing ? pt + pb + bt + bb : 0); if (h > content) content = h; }
     int bottom = top + bt + pt + content + pb + bb;
-    if (bgi >= 0) { struct ditem *b = IT(bgi); b->x = x0; b->y = top; b->w = w + frame; b->h = bottom - top; b->col = st->bg; }
+    int rad = st->radius < 0 ? 100000 : st->radius;
+    if (rad > (w + frame) / 2) rad = (w + frame) / 2;
+    if (rad > (bottom - top) / 2) rad = (bottom - top) / 2;
+    if (bgi >= 0) {
+        struct ditem *b = IT(bgi); b->x = x0; b->y = top; b->w = w + frame; b->h = bottom - top; b->col = st->bg; b->asc = rad;
+        if (st->grad) { b->mark = st->grad; b->off = st->bg2; }
+    }
     if (bgimg >= 0) { struct ditem *b = IT(bgimg); b->x = x0; b->y = top; b->w = w + frame; b->h = bottom - top; }
-    borders(st, x0, top, w + frame, bottom - top);
+    if (rad > 1 && st->vis && bt && bt == bb && bt == bl && bt == br && st->bc[0] == st->bc[1] && st->bc[0] == st->bc[2] && st->bc[0] == st->bc[3]) {
+        int fi = push(DI_RFRAME);                          /* the same border all round: drawn rounded */
+        if (fi >= 0) { struct ditem *f = IT(fi); f->x = x0; f->y = top; f->w = w + frame; f->h = bottom - top; f->col = st->bc[0]; f->asc = rad; f->mark = (uint8_t)(bt > 8 ? 8 : bt); }
+    } else borders(st, x0, top, w + frame, bottom - top);
     n->bx = x0; n->by = top; n->bw = w + frame; n->bh = bottom - top; n->bgen = layout_pass;
     if (st->pos >= 1 && st->pos <= 3)                        /* a containing block for absolute boxes inside */
         place_pending(p0, x0 + bl, top + bt, w + pl + pr, bottom - top - bt - bb, first_item, false);
     if (st->pos == 3) {                                       /* relative: shifted, without moving anything else */
         int dx = st->inset[3].t != L_AUTO ? rlen(st->inset[3], cbw) : st->inset[1].t != L_AUTO ? -rlen(st->inset[1], cbw) : 0;
         int dy = st->inset[0].t == L_PX ? st->inset[0].v : st->inset[2].t == L_PX ? -st->inset[2].v : 0;
+        if (dx || dy) { shift_xy(first_item, L->nit, dx, dy); n->bx += dx; n->by += dy; }
+    }
+    if (st->tx.v || st->ty.v) {                              /* transform: translate() moves what was drawn */
+        int dx = st->tx.t == L_PCT ? (int)((long)(w + frame) * st->tx.v / 10000) : st->tx.v, dy = st->ty.t == L_PCT ? (int)((long)(bottom - top) * st->ty.v / 10000) : st->ty.v;
         if (dx || dy) { shift_xy(first_item, L->nit, dx, dy); n->bx += dx; n->by += dy; }
     }
     cur_layer = saved_layer;

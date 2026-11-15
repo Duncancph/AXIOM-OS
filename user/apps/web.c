@@ -1436,10 +1436,27 @@ static void draw(void) {
         switch (it->kind) {
         case DI_RECT: {                                 /* backgrounds may be see-through (alpha in the top byte) */
             uint32_t al = it->col >> 24;
+            if (it->mark && it->w > 0 && it->h > 0) {         /* a linear gradient, a line at a time */
+                uint32_t c0 = it->col, c1 = it->off; int horiz = it->mark == 2 || it->mark == 4;
+                if (it->mark == 3 || it->mark == 4) { uint32_t t = c0; c0 = c1; c1 = t; }
+                int n = horiz ? it->w : it->h, a0 = (int)(c0 >> 24), a1 = (int)(c1 >> 24);
+                if (a0 <= 1) a0 = 0;
+                for (int k = 0; k < n; k++) {
+                    uint32_t col = gfx_lerp(c0 & 0xFFFFFF, c1 & 0xFFFFFF, k, n > 1 ? n - 1 : 1); int a = a0 + (a1 - a0) * k / (n > 1 ? n - 1 : 1);
+                    if (a <= 2) continue;
+                    if (horiz) { if (a >= 250) gfx_fill(c, x + k, y, 1, it->h, col); else gfx_blend(c, x + k, y, 1, it->h, col, a); }
+                    else { if (a >= 250) gfx_fill(c, x, y + k, it->w, 1, col); else gfx_blend(c, x, y + k, it->w, 1, col, a); }
+                }
+                break;
+            }
+            if (it->asc > 0) { gfx_rrect(c, x, y, it->w, it->h, it->asc, it->col & 0xFFFFFF, al ? (int)al : 255); break; }
             if (al && al < 250) gfx_blend(c, x, y, it->w, it->h, it->col & 0xFFFFFF, (int)al);
             else gfx_fill(c, x, y, it->w, it->h, it->col & 0xFFFFFF);
             break;
         }
+        case DI_RFRAME:
+            for (int k = 0; k < it->mark; k++) gfx_rrect_outline(c, x + k, y + k, it->w - 2 * k, it->h - 2 * k, it->asc - k > 1 ? it->asc - k : 1, it->col & 0xFFFFFF, 255);
+            break;
         case DI_FRAME: {
             int t = it->asc > 0 ? it->asc : 1;
             gfx_fill(c, x, y, it->w, t, it->col); gfx_fill(c, x, y + it->h - t, it->w, t, it->col);

@@ -1024,6 +1024,7 @@ static void apply(struct style *st, const struct style *ps, const char *prop, co
     if (P("background") || P("background-image")) {
         if (inherit) { st->bg = ps->bg; st->bgimage = ps->bgimage; return; }
         bool img_only = P("background-image");
+        st->grad = 0;                                    /* a new background replaces an earlier gradient */
         if (!img_only) { st->bg = 0; st->bgrep = 0; st->bgcenter = 0; }
         st->bgimage = 0;
         int k = tokens(v, vl, t, tl, 8);
@@ -1045,6 +1046,7 @@ static void apply(struct style *st, const struct style *ps, const char *prop, co
                 const char *o = a; while (o < a + al && *o != '(') o++;
                 const char *q = o + 1;
                 long sr = 0, sg = 0, sb = 0, sa = 0; int ns = 0;
+                uint32_t gc0 = 0, gc1 = 0; bool grad_first = false;
                 bool radial = pre_ci(t[i], tl[i], "radial-gradient("), clear_stop = false;
                 while (q < a + al) {
                     const char *b = q; int depth = 0;
@@ -1052,6 +1054,8 @@ static void apply(struct style *st, const struct style *ps, const char *prop, co
                     const char *tt[3]; int ttl[3]; int kk = tokens(b, q - b, tt, ttl, 3);
                     if (kk && (color_val(tt[0], ttl[0], &c) || eq_ci(tt[0], ttl[0], "transparent"))) {
                         if (eq_ci(tt[0], ttl[0], "transparent")) c = 0;
+                        if (!ns) gc0 = c == CURRENT ? 0xFF000000 | st->color : c;
+                        gc1 = c == CURRENT ? 0xFF000000 | st->color : c;
                         if (!(c >> 24)) clear_stop = true;
                         if (c == CURRENT) c = 0xFF000000 | st->color;
                         long ca = c >> 24; sa += ca; sr += ca * (c >> 16 & 255); sg += ca * (c >> 8 & 255); sb += ca * (c & 255); ns++;
@@ -1059,9 +1063,18 @@ static void apply(struct style *st, const struct style *ps, const char *prop, co
                     q++;
                 }
                 if (radial && clear_stop) ns = 0;          /* a glow that fades out: nothing is closer than a flat patch */
+                if (!radial && ns >= 2 && !img_only) {     /* a linear gradient: from its first colour to its last */
+                    const char *g0 = o + 1; while (*g0 == ' ') g0++;
+                    int gl = (int)(a + al - g0);
+                    st->grad = pre_ci(g0, gl, "to right") || pre_ci(g0, gl, "90deg") ? 2 : pre_ci(g0, gl, "to left") || pre_ci(g0, gl, "270deg") || pre_ci(g0, gl, "-90deg") ? 4 :
+                               pre_ci(g0, gl, "to top") || pre_ci(g0, gl, "0deg") || pre_ci(g0, gl, "360deg") ? 3 : 1;
+                    grad_first = true;
+                }
                 if (ns && !img_only) {
                     long ma = sa / ns;
                     st->bg = ma < 13 ? 0 : (uint32_t)(ma > 255 ? 255 : ma) << 24 | (uint32_t)(sr / sa) << 16 | (uint32_t)(sg / sa) << 8 | (uint32_t)(sb / sa);
+                    if (grad_first && (gc0 >> 24 || gc1 >> 24)) { st->bg = gc0 ? gc0 : (gc1 & 0xFFFFFF) | 0x01000000; st->bg2 = gc1 ? gc1 : (gc0 & 0xFFFFFF); }
+                    else st->grad = 0;
                 }
             } else if (!img_only && color_val(t[i], tl[i], &c)) st->bg = c == CURRENT ? 0xFF000000 | st->color : c;
             else if (eq_ci(t[i], tl[i], "no-repeat")) st->bgrep = 1;
@@ -1213,6 +1226,28 @@ static void apply(struct style *st, const struct style *ps, const char *prop, co
         return;
     }
     if (P("row-gap") || P("grid-row-gap")) { struct len l; if (parse_len(v, vl, st->fsize, &l, false) && l.t == L_PX) st->rgap = l.v < 0 ? 0 : l.v > 200 ? 200 : l.v; return; }
+    if (P("border-radius") || P("border-top-left-radius")) {
+        int k = tokens(v, vl, t, tl, 2); struct len l;
+        if (k && tl[0] && t[0][tl[0] - 1] == '%') st->radius = num100(t[0], tl[0] - 1) >= 4000 ? -1 : 0;
+        else if (k && parse_len(t[0], tl[0], st->fsize, &l, false) && l.t == L_PX) st->radius = l.v < 0 ? 0 : l.v > 4000 ? -1 : l.v;
+        return;
+    }
+    if (P("transform") || P("-webkit-transform")) {
+        st->tx.t = st->ty.t = L_PX; st->tx.v = st->ty.v = 0;
+        for (int i = 0; i + 9 < vl; i++) if (pre_ci(v + i, vl - i, "translate")) {
+            const char *q = v + i + 9; char ax = 0;
+            if (*q == 'X' || *q == 'x' || *q == 'Y' || *q == 'y') ax = *q++ | 32;
+            if (*q == '3') { q += 2; }                       /* translate3d(x, y, z) */
+            if (*q != '(') continue;
+            const char *e = q + 1; while (e < v + vl && *e != ')') e++;
+            const char *c1 = q + 1, *cm = c1; while (cm < e && *cm != ',') cm++;
+            struct len l;
+            if (parse_len(c1, (int)(cm - c1), st->fsize, &l, true)) { if (ax == 'y') st->ty = l; else st->tx = l; }
+            if (!ax && cm < e) { const char *c2 = cm + 1, *ce = c2; while (ce < e && *ce != ',') ce++; if (parse_len(c2, (int)(ce - c2), st->fsize, &l, true)) st->ty = l; }
+            i = (int)(e - v);
+        }
+        return;
+    }
     if (P("flex-grow")) { st->fgrow = (int16_t)num100(v, vl); return; }
     if (P("flex-shrink")) { st->fshrink = (int16_t)num100(v, vl); return; }
     if (P("flex-basis")) { struct len l; if (eq_ci(v, vl, "auto") || eq_ci(v, vl, "content")) st->fbasis.t = L_AUTO; else if (parse_len(v, vl, st->fsize, &l, true)) st->fbasis = l; return; }
