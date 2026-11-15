@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 121
-notes Arc: scripts run inside frames, each in its own separate environment; pages and frames talk with postMessage; clicks inside frames work
-file kernel b121/thane.elf.gz 18466848 a1add6b6afc8c18af6fc1fd908b6b68b19696bdc1d220f1e70646ba51858a828
-file initrd b121/initrd.tar.gz 1290240 dc76c288c130bb8db63dbc77ed3e73fbe1034113697d1277e61c31231d1f4875
-file bootx64 b121/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b121/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022100fadbb3fada187e96ec348564a332c8668b9fc58fda8d81ff67cea72f33d55765022035744ce329388d9e3c072117e717ba81b045142caf80cb8d646c147a9aa11eaa
+build 122
+notes Arc: canvas drawing (shapes, text, images, toDataURL), sends a proper browser User-Agent and language, performance timing entries, fixes for challenge pages
+file kernel b122/thane.elf.gz 18593824 5104c8d1d4b9060dbce05831164e420d0171756942dab83079c137d30811d889
+file initrd b122/initrd.tar.gz 1290240 f1e136cc46619594c47070e53d846b577a409e573323c29b55e1b09a05e6580f
+file bootx64 b122/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b122/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022035ec8e0e45af67ecef11886617d5fceeb6ad711c0f78013886e0232ef228eb420221009415df47ed986d7de38d55baadab095453b6a1542a3ee5b6cf5ea8d51cce84a6
