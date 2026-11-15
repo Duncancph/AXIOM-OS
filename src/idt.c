@@ -21,12 +21,12 @@ static void user_fault(struct frame *f) {
         else if (cr2 < 0x1000 + USER_BASE) what = "It used an invalid (null) pointer";
         else what = "It accessed memory it doesn't own";
         break;
-    case 13: what = "It tried to run a privileged instruction"; break;
+    case 13: what = "It used a bad memory address (or a privileged instruction)"; break;
     case 6:  what = "It ran an invalid instruction"; break;
     case 0:  what = "It divided by zero"; break;
     default: what = f->vec < 20 ? names[f->vec] : "CPU exception"; break;
     }
-    ksnprintf(msg, sizeof msg, "%s and was stopped. Other apps are unaffected.", what);
+    ksnprintf(msg, sizeof msg, "%s and was stopped (at %lx). Other apps are unaffected.", what, f->rip);
     kprintf("[protect] '%s' (pid %d): %s at rip=%lx addr=%lx -> terminated\n", current->name, current->pid,
             f->vec < 20 ? names[f->vec] : "exception", f->rip, cr2);
     char title[64]; ksnprintf(title, sizeof title, "%s crashed", current->name);
