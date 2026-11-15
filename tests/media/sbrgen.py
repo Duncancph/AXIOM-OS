@@ -590,7 +590,7 @@ def add_sbr(adts_in, adts_out, elements_listing, core_rate, seed, ps=False, forc
     for line in elements_listing:
         f = line.split()
         off, ln = int(f[0]), int(f[1])
-        els = [tuple(map(int, x.split(":"))) for x in f[2:]]
+        els = [tuple(map(int, x.split(":"))) for x in f[2:] if not x.startswith("P")]
         frame = data[off:off + ln]
         bits = bits_of(frame)
         hdr_bits = 56 if frame[1] & 1 else 72

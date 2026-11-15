@@ -95,7 +95,7 @@ struct h264_cabac {
     const uint8_t *p, *start, *end;
 };
 extern const uint8_t h264_cabac_lps_range[64][4];
-extern const uint8_t h264_cabac_mps_next[128], h264_cabac_lps_next[128];
+extern const uint8_t h264_cabac_next[256];   /* [s] after MPS, [128 + s] after LPS */
 extern const uint8_t h264_cabac_renorm[256];
 H264_INLINE void cabac_refill(struct h264_cabac *c) {
     if (c->p + 4 <= c->end) {
@@ -112,26 +112,21 @@ H264_INLINE void cabac_refill(struct h264_cabac *c) {
     }
     c->bits += 32;
 }
+/* branch-free decision (DecodeDecision 9.3.3.2.1): the LPS/MPS choice is data dependent and badly predicted */
 H264_INLINE int cabac_decide(struct h264_cabac *c, uint8_t *st) {
     int s = *st;
     uint32_t rlps = h264_cabac_lps_range[s >> 1][(c->range >> 6) & 3];
     uint32_t rmps = c->range - rlps;
     uint64_t scaled = (uint64_t)rmps << c->bits;
-    int bin;
-    if (c->low < scaled) {
-        bin = s & 1;
-        *st = h264_cabac_mps_next[s];
-        if (rmps >= 256) { c->range = rmps; return bin; }
-        c->range = rmps << 1;
-        c->bits--;
-    } else {
-        c->low -= scaled;
-        bin = (s & 1) ^ 1;
-        *st = h264_cabac_lps_next[s];
-        int n = h264_cabac_renorm[rlps];
-        c->range = rlps << n;
-        c->bits -= n;
-    }
+    uint64_t lmask = (uint64_t)0 - (uint64_t)(c->low >= scaled);
+    c->low -= scaled & lmask;
+    uint32_t m32 = (uint32_t)lmask;
+    uint32_t r = rmps ^ ((rmps ^ rlps) & m32);
+    int bin = (s ^ (int)m32) & 1;
+    *st = h264_cabac_next[s + (int)(m32 & 128)];
+    int n = __builtin_clz(r) - 23;
+    c->range = r << n;
+    c->bits -= n;
     if (c->bits < 16) cabac_refill(c);
     return bin;
 }
@@ -246,7 +241,7 @@ enum {
 /* per-macroblock data kept for the whole current picture (neighbour context, deblocking) */
 struct h264_mbinfo {
     uint32_t type;
-    int16_t slice;               /* slice number in the picture, -1 = not decoded */
+    int32_t slice;               /* slice number in the picture, -1 = not decoded */
     int8_t qp;                   /* QPY (0 for I_PCM) */
     uint8_t cbp;                 /* bits 0-3 luma 8x8, 4-5 chroma (0,1,2) */
     uint32_t cbf;                /* CABAC coded_block_flag bits: 0-15 luma 4x4 (raster), 16-19 Cb AC, 20-23 Cr AC,
@@ -255,6 +250,7 @@ struct h264_mbinfo {
     uint8_t t8x8;
     uint8_t chroma_pred;
     uint8_t direct8;             /* B: 8x8 blocks predicted in direct mode (CABAC ref_idx context) */
+    uint8_t mvedges;             /* deblocking: internal edges where motion may differ (bit e: vertical edge e, 4+e: horizontal) */
     uint8_t nnz[24];             /* total_coeff: 16 luma (raster), 4 Cb, 4 Cr */
     int8_t ipred[16];            /* intra 4x4 / 8x8 modes (raster) */
     uint8_t mvd[2][16][2];       /* |mvd| clamped to 127 (raster) */
@@ -306,6 +302,7 @@ struct h264dec {
     int frame_num_offset;
     int need_key;                     /* waiting for a keyframe after open/reset */
     int key_poc, key_epoch, drop_leading;
+    int last_out_poc, last_out_epoch, reorder_extra;
     int recovery_seen;
     /* current picture */
     struct h264_slice sl;             /* current slice */

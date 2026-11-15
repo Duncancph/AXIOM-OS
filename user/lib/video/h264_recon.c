@@ -271,7 +271,7 @@ void h264_save_mb(h264dec *d) {
     uint32_t t = d->mb_type;
     int pcm = (t & MB_PCM) != 0;
     m->type = t;
-    m->slice = (int16_t)d->sl.slice_num;
+    m->slice = d->sl.slice_num;
     m->qp = (int8_t)(pcm ? 0 : d->qp);
     m->cbp = (uint8_t)(pcm ? 0x2f : d->cbp);
     m->cbf = pcm ? 0x7ffffffu : d->cbf_cur;
@@ -279,6 +279,25 @@ void h264_save_mb(h264dec *d) {
     m->t8x8 = (uint8_t)d->t8x8;
     m->chroma_pred = (uint8_t)(((t & MB_INTRA) && !pcm) ? d->chroma_pred : 0);
     m->direct8 = d->direct8_cur;
+    {
+        uint8_t me = 0;
+        int infer = d->act_sps->direct_8x8_inference;
+        if (t & MB_INTRA) me = 0;
+        else if (t & MB_16x16) me = 0;
+        else if (t & MB_16x8) me = 0x40;
+        else if (t & MB_8x16) me = 0x04;
+        else if (t & MB_DIRECT) me = infer ? 0x44 : 0xee;
+        else {
+            int small = 0;
+            for (int i = 0; i < 4; i++) {
+                int st = d->sub_type[i];
+                if (d->sl.type == 1) { if (st == 0 ? !infer : h264_b_sub[st][0] > 1) small = 1; }
+                else if (st) small = 1;
+            }
+            me = small ? 0xee : 0x44;
+        }
+        m->mvedges = me;
+    }
     if (pcm) memset(m->nnz, 16, 24);
     else {
         const int8_t *nz = d->nnz_c[0];

@@ -260,6 +260,7 @@ int aac_vlc_build(struct aac_vlc *v, const struct aac_hsrc *src, int bits, int s
     int total = prim;
     for (int p = 0; p < prim; p++)
         if (sub[p]) total += 1 << sub[p];
+    if (total <= 0 || total > (1 << 22)) return 0;
     uint32_t *t = calloc((size_t)total, sizeof *t);
     if (!t) return 0;
     int off = prim;

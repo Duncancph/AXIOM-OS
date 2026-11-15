@@ -133,12 +133,30 @@ def match_channels(ref, mine, n):
 RESULTS = {"lc": []}
 
 
-def check_stream(name, path, nch, is_mp4=False, ref_path=None, min_snr=None, quiet=False):
+def ff_decode_all(path, runs=6):
+    """ffmpeg's SBR decoder reads uninitialised memory on some streams (its output then changes from run to run,
+    sometimes to NaN): decode twice, and if the two differ, a few more times; returns the distinct outputs."""
+    outs = [ff_decode(path), ff_decode(path)]
+    if np.array_equal(outs[0], outs[1]):
+        return outs[:1]
+    for _ in range(runs - 2):
+        outs.append(ff_decode(path))
+    return outs
+
+
+def best_ref(refs, mine):
+    best = max(refs, key=lambda r: snr(r, mine) if len(r) == len(mine) else -1e9)
+    if len(refs) > 1:
+        print("  (ffmpeg nondeterministic on this stream: %d runs, best match used)" % len(refs), flush=True)
+    return best
+
+
+def check_stream(name, path, nch, is_mp4=False, ref_path=None, min_snr=None, quiet=False, multi=False):
     """Decodes `path` with the decoder (all channels) and compares with ffmpeg's decode of ref_path (or path)."""
     min_snr = T.MIN_SNR if min_snr is None else min_snr
     try:
-        ref = ff_decode(ref_path or path)
         info, mine, msgs = my_decode(path, "f32", all_ch=True)
+        ref = best_ref(ff_decode_all(ref_path or path), mine) if multi else ff_decode(ref_path or path)
     except Exception as e:
         T.fail("%s: %s" % (name, e))
         return None
@@ -184,7 +202,7 @@ def lc_cases():
         ("coder_fast", ["-aac_coder", "fast", "-b:a", "128k"], "music"),
         ("coder_fast_lo", ["-aac_coder", "fast", "-b:a", "24k"], "music"),
         ("coder_twoloop", ["-aac_coder", "twoloop", "-b:a", "96k"], "chord"),
-        ("coder_anmr", ["-aac_coder", "anmr", "-b:a", "96k"], "music"),
+        ("coder_anmr", ["-strict", "-2", "-aac_coder", "anmr", "-b:a", "96k"], "music"),
         ("vbr_q1", ["-q:a", "0.5"], "music"),
         ("vbr_q2", ["-q:a", "2"], "sweep"),
         ("lowpass", ["-cutoff", "4000", "-b:a", "64k"], "noise"),
@@ -275,6 +293,26 @@ def test_lc():
         print("AAC-LC: %d streams, SNR min %.1f dB, median %.1f dB" % (len(v), v.min(), np.median(v)))
 
 
+def test_ltp():
+    """ffmpeg's encoder writes the LTP profile but never uses LTP; ltpgen.py adds random LTP data to such streams."""
+    import ltpgen
+    print("== AAC-LTP (synthetic long term prediction data) vs ffmpeg", flush=True)
+    for nm, kind, rate, ch, opts in (("ltpx_music", "music", 44100, 2, ["-b:a", "128k"]),
+                                     ("ltpx_chord", "chord", 32000, 1, ["-b:a", "64k"]),
+                                     ("ltpx_tns", "transient", 48000, 2, ["-b:a", "128k", "-aac_tns", "1"]),
+                                     ("ltpx_noise", "noise", 22050, 2, ["-b:a", "64k", "-aac_tns", "1", "-aac_pns", "0"])):
+        sig = signal(kind, rate, ch, 3, np.random.default_rng(31))
+        base = encode(nm, sig, rate, ch, ["-strict", "-2", "-profile:a", "aac_ltp", "-aac_ltp", "1"] + opts, 3, None)
+        lst = T.run([T.BIN["aac_test_fast"], "elements", base]).stdout.decode().splitlines()
+        out = T.p("aac_%s_inj.aac" % nm)
+        ltpgen.add_ltp(base, out, lst, 17)
+        s = check_stream(nm, out, ch, quiet=True)
+        if s is not None:
+            RESULTS["lc"].append(s)
+            print("  %-22s SNR %6.1f dB" % (nm, s), flush=True)
+        T.LTP_FILES = getattr(T, "LTP_FILES", []) + [out]
+
+
 def test_seek():
     print("== seek / reset", flush=True)
     sig = signal("music", 44100, 2, 6, np.random.default_rng(5))
@@ -352,7 +390,9 @@ def test_fuzz():
     m4a = files[0][:-4] + ".m4a"
     T.ff("-i", files[0], "-c", "copy", m4a)
     files.append(m4a)
-    files += [f for f in T.SBR_FILES[:3]]
+    files += [f for f in T.SBR_FILES if os.path.basename(f) in ("he_st22k_noise.aac", "he_ps24k.aac", "he_ps_headers.aac",
+                                                                  "he_ch6.aac", "he_smooth_lim.aac", "he_st24k_coupled.aac")]
+    files += getattr(T, "LTP_FILES", [])[:2]
     iters = 3 if T.QUICK else 20
 
     def one(a):
@@ -376,7 +416,7 @@ def test_speed():
         r = T.run([T.BIN["aac_test_fast"], "bench", path, "3"]).stdout.decode().strip()
         print("  %-10s %s" % (nm, r), flush=True)
         res[nm] = r
-    for f in T.SBR_FILES[-2:]:
+    for f in [f for f in T.SBR_FILES if os.path.basename(f) in ("he_st22k_noise.aac", "he_ps24k.aac", "he_st24k_coupled.aac")]:
         r = T.run([T.BIN["aac_test_fast"], "bench", f, "3"]).stdout.decode().strip()
         print("  %-10s %s" % (os.path.basename(f), r), flush=True)
     return res
@@ -390,6 +430,10 @@ def main(t):
     only = T.ONLY
     if not only or "aac" in only:
         test_lc()
+        test_ltp()
+        v = np.array(RESULTS["lc"])
+        print("AAC-LC/Main/LTP total: %d streams, SNR min %.1f dB, median %.1f dB (required >= %.0f)"
+              % (len(v), v.min(), np.median(v), T.MIN_SNR))
         test_seek()
         test_damaged()
     if not only or "sbr" in only or "fuzz" in only or "speed" in only:

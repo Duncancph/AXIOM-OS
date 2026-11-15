@@ -19,7 +19,7 @@ Usage: python3 tests/h264/run.py [--quick] [--keep] [--out DIR] [--only SUBSTR]
    NAL units (must recover exactly at the next IDR), unsupported streams (must fail cleanly), a mutation
    fuzz pass under ASan+UBSan, and decode speed for 720p / 1080p clips.
 Exits non-zero on any failure."""
-import os, random, shutil, struct, subprocess, sys, tempfile, time
+import hashlib, os, random, shutil, struct, subprocess, sys, tempfile, time
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -34,6 +34,7 @@ ONLY = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None
 CORPUS = os.path.join(OUT, "corpus")
 os.makedirs(CORPUS, exist_ok=True)
 FAILS = []
+BASES = {}   # case name -> corpus path prefix
 JOBS = max(1, min(8, os.cpu_count() or 1))
 R = random.Random(1234)
 
@@ -202,9 +203,15 @@ def frame_bytes(w, h):
     return w * h + 2 * ((w + 1) // 2) * ((h + 1) // 2)
 
 
+def case_base(case):
+    name, src, size, n, args, params, _ = case
+    h = hashlib.sha1(repr((src, SOURCES[src], size, n, args, params)).encode()).hexdigest()[:8]
+    return os.path.join(CORPUS, "%s-%s" % (name, h))
+
+
 def encode(case):
     name, src, size, n, args, params, _ = case
-    base = os.path.join(CORPUS, name)
+    base = case_base(case)
     mp4 = base + ".mp4"
     if not os.path.exists(mp4):
         filt = SOURCES[src].format(s=size, r=25)
@@ -255,7 +262,8 @@ def check_case(case):
     name = case[0]
     msg = encode(case)
     if msg: return [name + ": " + msg], name + ": skipped"
-    base = os.path.join(CORPUS, name)
+    base = case_base(case)
+    BASES[name] = base
     w, h = stream_dims(base + ".mp4")
     fails = []
     big = w * h > 700 * 400
@@ -291,7 +299,7 @@ def keyframes_and_display(smp_path_mp4):
 
 
 def test_seek(name):
-    base = os.path.join(CORPUS, name)
+    base = BASES[name]
     w, h = stream_dims(base + ".mp4")
     keys, disp, n = keyframes_and_display(base + ".mp4")
     fb = frame_bytes(w, h)
@@ -322,7 +330,7 @@ def test_seek(name):
 
 
 def test_truncated(name):
-    base = os.path.join(CORPUS, name)
+    base = BASES[name]
     w, h = stream_dims(base + ".mp4")
     data = open(base + ".h264", "rb").read()
     fb = frame_bytes(w, h)
@@ -351,7 +359,7 @@ def test_truncated(name):
 
 def test_lost_nal(name):
     """drop one NAL unit of a P picture: the decoder must conceal, keep going and be exact again after the next IDR"""
-    base = os.path.join(CORPUS, name)
+    base = BASES[name]
     w, h = stream_dims(base + ".mp4")
     data = open(base + ".h264", "rb").read()
     starts = []
@@ -396,12 +404,11 @@ def test_lost_nal(name):
 
 
 def test_resolution_change():
-    a, b = os.path.join(CORPUS, "cbp_cavlc"), os.path.join(CORPUS, "main_cabac_b")
-    if not (os.path.exists(a + ".h264") and os.path.exists(b + ".h264")):
+    if "cbp_cavlc" not in BASES or "main_cabac_b" not in BASES:
         return
+    a, b = BASES["cbp_cavlc"], BASES["main_cabac_b"]
     c = os.path.join(CORPUS, "reschange")
-    sa = os.path.join(CORPUS, "size_200x120")
-    parts = [a, sa, b] if os.path.exists(sa + ".h264") else [a, b]
+    parts = [a, BASES["size_200x120"], b] if "size_200x120" in BASES else [a, b]
     open(c + ".h264", "wb").write(b"".join(open(p + ".h264", "rb").read() for p in parts))
     out = c + ".yuv"
     r = decode(ASAN, "annexb", c + ".h264", out)
@@ -485,7 +492,7 @@ def rewrite_sps_poc1(nal):
 def test_poc1():
     case = ("poc_type1_src", "rot", "320x240", 30, ["-profile:v", "high"], "bframes=0:ref=3", True)
     if encode(case): fail("poc1: encode failed"); return
-    base = os.path.join(CORPUS, case[0])
+    base = case_base(case)
     data = open(base + ".h264", "rb").read()
     out, i = bytearray(), 0
     pos = [m for m in range(len(data) - 3) if data[m:m + 3] == b"\x00\x00\x01"]
@@ -508,6 +515,168 @@ def test_poc1():
         fail("POC type 1 stream: mismatch (%d vs %d frames, first diff %s) %s" % (na, nb, first, r.stderr[-300:]))
     else:
         print("POC type 1 (rewritten SPS): bit-exact, %d frames" % na)
+
+
+# -- slice header rewriting (streams without B-frames, POC type 2): long-term references / MMCO / list
+#    modification, and frame_num gaps. ffmpeg decodes the rewritten stream as the reference.
+def split_nals(data):
+    pos = [m for m in range(len(data) - 3) if data[m:m + 3] == b"\x00\x00\x01"]
+    out = []
+    for k, s_ in enumerate(pos):
+        e = pos[k + 1] if k + 1 < len(pos) else len(data)
+        nal = data[s_ + 3:e]
+        while nal and nal[-1] == 0: nal = nal[:-1]
+        out.append(nal)
+    return out
+
+
+def bits_to_bytes(bits):
+    bits = bits + [0] * (-len(bits) % 8)
+    return bytes(int("".join(map(str, bits[i:i + 8])), 2) for i in range(0, len(bits), 8))
+
+
+def parse_sps_min(rb):
+    r = Bits(rb)
+    prof = r.u(8); r.u(16); r.ue()
+    if prof in (100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135):
+        cf = r.ue()
+        if cf == 3: r.u(1)
+        r.ue(); r.ue(); r.u(1)
+        if r.u(1): raise ValueError("scaling lists")
+    lmfn = r.ue() + 4
+    pt = r.ue()
+    if pt != 2: raise ValueError("POC type 2 expected")
+    gaps_pos_before = None
+    r.ue()                       # max_num_ref_frames
+    gaps_pos = r.p
+    return lmfn, gaps_pos
+
+
+def parse_pps_min(rb):
+    r = Bits(rb)
+    r.ue(); r.ue()
+    cabac = r.u(1); r.u(1)
+    if r.ue(): raise ValueError("slice groups")
+    r.ue(); r.ue()
+    wp = r.u(1); r.u(2); r.se(); r.se(); r.se()
+    dfc = r.u(1); r.u(1); red = r.u(1)
+    if wp or red: raise ValueError("weighted pred / redundant pictures")
+    return cabac, dfc
+
+
+def rewrite_slice(nal, lmfn, cabac, dfc, longterm):
+    ref_idc, typ = (nal[0] >> 5) & 3, nal[0] & 31
+    rb = unescape(nal[1:])
+    r, w = Bits(rb), W()
+    w.ue(r.ue())
+    st = r.ue(); w.ue(st)
+    w.ue(r.ue())
+    w.u(lmfn, r.u(lmfn))
+    if typ == 5: w.ue(r.ue())
+    sty = st % 5
+    if sty == 0:
+        if r.u(1): r.ue()
+        w.u(1, 1); w.ue(0)                       # num_ref_idx_active_override: 1 reference
+        if r.u(1):
+            while True:
+                idc = r.ue()
+                if idc == 3: break
+                r.ue()
+        if longterm:
+            w.u(1, 1); w.ue(2); w.ue(0); w.ue(3)  # ref_pic_list_modification: long_term_pic_num 0
+        else:
+            w.u(1, 1); w.ue(0); w.ue(0); w.ue(3)  # abs_diff_pic_num_minus1 = 0 (the previous frame)
+    if ref_idc:
+        if typ == 5:
+            w.u(1, r.u(1)); r.u(1); w.u(1, 1 if longterm else 0)
+        else:
+            if r.u(1):
+                while True:
+                    op = r.ue()
+                    if op == 0: break
+                    if op in (1, 3, 2, 4, 6): r.ue()
+                    if op == 3: r.ue()
+            if longterm:
+                w.u(1, 1); w.ue(4); w.ue(1); w.ue(6); w.ue(0); w.ue(0)   # MMCO 4 (max idx 0), MMCO 6 (idx 0), end
+            else:
+                w.u(1, 0)
+    if cabac and sty != 2: w.ue(r.ue())
+    w.se(r.se())
+    if dfc:
+        idc = r.ue(); w.ue(idc)
+        if idc != 1: w.se(r.se()); w.se(r.se())
+    if cabac:
+        while r.p % 8: r.u(1)
+        while len(w.b) % 8: w.u(1, 1)
+        out = bits_to_bytes(w.b) + rb[r.p // 8:]
+    else:
+        total = len(rb) * 8
+        rest = [(rb[i >> 3] >> (7 - (i & 7))) & 1 for i in range(r.p, total)]
+        out = bits_to_bytes(w.b + rest)
+    return nal[:1] + escape(out)
+
+
+def set_sps_gaps(nal):
+    rb = bytearray(unescape(nal[1:]))
+    lmfn, gp = parse_sps_min(bytes(rb))
+    rb[gp >> 3] |= 0x80 >> (gp & 7)
+    return nal[:1] + escape(bytes(rb))
+
+
+def rewritten_test(label, case, transform):
+    if encode(case): fail(label + ": encode failed"); return
+    base = case_base(case)
+    nals = split_nals(open(base + ".h264", "rb").read())
+    lmfn = cabac = dfc = None
+    out = bytearray()
+    try:
+        for i, nal in enumerate(nals):
+            t = nal[0] & 31
+            if t == 7: lmfn = parse_sps_min(unescape(nal[1:]))[0]
+            if t == 8: cabac, dfc = parse_pps_min(unescape(nal[1:]))
+            nal = transform(i, nal, lmfn, cabac, dfc)
+            if nal: out += b"\x00\x00\x00\x01" + nal
+    except ValueError as e:
+        fail("%s: cannot rewrite stream: %s" % (label, e)); return
+    p = base + "." + label + ".h264"
+    open(p, "wb").write(out)
+    refp = base + "." + label + ".ref.yuv"
+    run(["ffmpeg", "-v", "error", "-y", "-i", p, "-f", "rawvideo", "-pix_fmt", "yuv420p", "-fps_mode", "passthrough", refp])
+    o = base + "." + label + ".yuv"
+    r = decode(ASAN, "annexb", p, o)
+    w, h = dims(case[2])
+    eq, na, nb, first = compare(o, refp, w, h)
+    if r.returncode or not eq:
+        fail("%s: mismatch with ffmpeg (%d vs %d frames, first diff %s) %s" % (label, na, nb, first, r.stderr[-300:]))
+        return None
+    print("%s: bit-exact with ffmpeg, %d frames" % (label, na))
+    return refp
+
+
+def test_rewritten():
+    for cab in (0, 1):
+        case = ("lt_src%d" % cab, "rot", "320x240", 30, ["-profile:v", "main" if cab else "baseline"],
+                "bframes=0:ref=1:weightp=0:cabac=%d" % cab, True)
+        for lt in (1, 0):
+            label = ("longterm_mmco" if lt else "list_modification") + ("_cabac" if cab else "_cavlc")
+            def tr(i, nal, lmfn, cabac, dfc, lt=lt):
+                if nal[0] & 31 in (1, 5): return rewrite_slice(nal, lmfn, cabac, dfc, lt)
+                return nal
+            refp = rewritten_test(label, case, tr)
+            if refp and open(refp, "rb").read() != open(case_base(case) + ".ref.yuv", "rb").read():
+                fail("%s: rewritten stream does not decode to the original pictures" % label)
+    # frame_num gaps: gaps_in_frame_num_allowed + dropped reference pictures ("non-existing" frames)
+    case = ("gap_src", "rot", "320x240", 40, ["-profile:v", "baseline"], "bframes=0:ref=3:keyint=100", True)
+    drop = {9, 10, 17, 25, 26, 27}
+    state = {"slice": -1}
+    def tr(i, nal, lmfn, cabac, dfc):
+        t = nal[0] & 31
+        if t == 7: return set_sps_gaps(nal)
+        if t in (1, 5):
+            state["slice"] += 1
+            if state["slice"] in drop: return None
+        return nal
+    rewritten_test("frame_num_gaps", case, tr)
 
 
 def test_unsupported():
@@ -540,12 +709,12 @@ def test_unsupported():
 def test_fuzz():
     names = ["cbp_cavlc", "main_cabac_b", "high_cqmfile", "high_weightp2", "high_slices4", "high_lossless_qp0",
              "cbp_constrained_intra", "main_temporal", "high_8x8", "size_48x34"]
-    names = [n for n in names if os.path.exists(os.path.join(CORPUS, n + ".smp"))]
+    names = [n for n in names if n in BASES]
     iters = 3 if QUICK else 12
     jobs = []
     for i, n in enumerate(names):
-        jobs.append(([ASAN, "fuzz", os.path.join(CORPUS, n + ".smp"), str(1000 + i), str(iters)], n))
-        jobs.append(([ASAN, "fuzzab", os.path.join(CORPUS, n + ".h264"), str(2000 + i), str(max(2, iters // 2))], n + "(annexb)"))
+        jobs.append(([ASAN, "fuzz", BASES[n] + ".smp", str(1000 + i), str(iters)], n))
+        jobs.append(([ASAN, "fuzzab", BASES[n] + ".h264", str(2000 + i), str(max(2, iters // 2))], n + "(annexb)"))
     def one(j):
         cmd, n = j
         r = run(cmd)
@@ -571,15 +740,15 @@ def test_speed():
         case = (name, src, size, n, args, params, True)
         msg = encode(case)
         if msg: fail(name + ": " + msg); continue
-        base = os.path.join(CORPUS, name)
-        if not QUICK or True:
+        base = case_base(case)
+        if True:
             r = decode(FAST, "samples", base + ".smp", base + ".yuv")
             w, h = dims(size)
             eq, na, nb, first = compare(base + ".yuv", base + ".ref.yuv", w, h)
             if not eq: fail("%s: output differs (first frame %s)" % (name, first))
             os.remove(base + ".yuv")
         r = run([FAST, "bench", base + ".smp", "3"])
-        kbps = os.path.getsize(base + ".h264") * 8 / (n / 25.0) / 1000
+        kbps = os.path.getsize(base + ".h264") * 8 / (n / 25.0) / 1000   # 25 fps clips
         fps = float(r.stdout.split("fps")[-1]) if "fps" in r.stdout else 0
         print("speed %-22s %s %5.0f kbit/s: %6.1f fps (-O2, one core)" % (name, size, kbps, fps))
 
@@ -600,18 +769,19 @@ def main():
     print("== seeking / damage", flush=True)
     seeks = 0
     for n in ("cbp_cavlc", "high_open_gop", "high_short_gop", "main_cabac_b"):
-        if os.path.exists(os.path.join(CORPUS, n + ".smp")): seeks += test_seek(n)
+        if n in BASES: seeks += test_seek(n)
     print("seek tests passed: %d" % seeks)
     tr = 0
     for n in ("cbp_cavlc", "main_cabac_b", "high_slices4", "high_open_gop"):
-        if os.path.exists(os.path.join(CORPUS, n + ".h264")): tr += test_truncated(n)
+        if n in BASES: tr += test_truncated(n)
     print("truncated-file tests passed: %d" % tr)
     lost = 0
     for n in ("cbp_cavlc", "high_short_gop", "cbp_constrained_intra", "high_open_gop"):
-        if os.path.exists(os.path.join(CORPUS, n + ".h264")): lost += test_lost_nal(n)
+        if n in BASES: lost += test_lost_nal(n)
     print("lost-NAL recovery tests passed: %d" % lost)
     test_resolution_change()
     test_poc1()
+    test_rewritten()
     test_unsupported()
     print("== fuzz", flush=True)
     test_fuzz()

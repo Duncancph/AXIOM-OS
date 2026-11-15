@@ -158,6 +158,7 @@ struct aacdec {
     struct aac_pce pce;
     int out_ch, out_rate;
     int all_channels;        /* test hook: output every decoded channel in decode order, no downmix */
+    int last_nc;             /* channels written by the last decode call */
     /* state */
     struct aac_elem elem[AAC_MAX_ELEM];
     int elem_type_idx[AAC_MAX_ELEM];
@@ -172,6 +173,8 @@ struct aacdec {
     int frames;
     /* test hook: element types and end bit positions of the last frame (EL_END: its start) */
     int dbg_n, dbg_type[64], dbg_end[64];
+    int dbg_pdp_n, dbg_pdp_pos[16], dbg_pdp_maxsfb[16];   /* long-window ics_info: bit after predictor_data_present */
+    int in_common;
 };
 
 /* aac.c */

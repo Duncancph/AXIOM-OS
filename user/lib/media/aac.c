@@ -99,7 +99,7 @@ static int parse_asc(aacdec *d, const uint8_t *cfg, int len) {
     d->ps = -1;
     if (aot == AOT_SBR || aot == AOT_PS) {
         d->sbr = 1;
-        d->ps = aot == AOT_PS;
+        d->ps = aot == AOT_PS ? 1 : -1;
         int esfi;
         d->ext_rate = get_rate(&b, &esfi);
         aot = get_aot(&b);
@@ -310,6 +310,10 @@ static int decode_ics_info(aacdec *d, struct aac_ics *ics, struct aac_bits *b) {
         ics->group_len[0] = 1;
         ics->swb = aac_swb_long[d->sfi];
         ics->num_swb = aac_num_swb_long[d->sfi];
+        if (d->dbg_pdp_n < 16) {
+            d->dbg_pdp_pos[d->dbg_pdp_n] = (b->pos + 1) * (d->in_common ? -1 : 1);
+            d->dbg_pdp_maxsfb[d->dbg_pdp_n++] = ics->max_sfb;
+        }
         if (aac_get1(b)) {   /* predictor_data_present */
             ics->pdp = 1;
             if (d->aot == AOT_MAIN) {
@@ -419,14 +423,16 @@ static int decode_tns(struct aac_chan *c, struct aac_bits *b) {
     return !b->err;
 }
 
-static void apply_tns(aacdec *d, struct aac_chan *c) {
+/* decode: all-pole synthesis filter (the decoder); otherwise the all-zero analysis filter (the encoder's, used
+   on the LTP prediction) */
+static void apply_tns(aacdec *d, struct aac_chan *c, float *coefs, int decode) {
     struct aac_ics *ics = &c->ics;
     struct aac_tns *t = &c->tns;
     int is8 = ics->ws == EIGHT_SHORT;
     int mmm = is8 ? aac_tns_max_short[d->sfi] : aac_tns_max_long[d->sfi];
     if (mmm > ics->max_sfb) mmm = ics->max_sfb;
     for (int w = 0; w < ics->num_windows; w++) {
-        float *coef = c->coef + w * 128;
+        float *coef = coefs + w * 128;
         int bottom = ics->num_swb;
         for (int f = 0; f < t->n_filt[w]; f++) {
             int top = bottom;
@@ -441,11 +447,19 @@ static void apply_tns(aacdec *d, struct aac_chan *c) {
             const float *a = t->lpc[w][f];
             int inc = 1;
             if (t->dir[w][f]) { inc = -1; start = end - 1; }
-            /* all-pole (IIR) filter, as in the standard and ffmpeg */
-            for (int m = 0; m < size; m++, start += inc) {
-                float acc = coef[start];
-                for (int i = 1; i <= (m < order ? m : order); i++) acc -= coef[start - i * inc] * a[i - 1];
-                coef[start] = acc;
+            if (decode) {
+                for (int m = 0; m < size; m++, start += inc) {
+                    float acc = coef[start];
+                    for (int i = 1; i <= (m < order ? m : order); i++) acc -= coef[start - i * inc] * a[i - 1];
+                    coef[start] = acc;
+                }
+            } else {
+                float tmp[21];
+                for (int m = 0; m < size; m++, start += inc) {
+                    tmp[0] = coef[start];
+                    for (int i = 1; i <= (m < order ? m : order); i++) coef[start] += tmp[i] * a[i - 1];
+                    for (int i = order; i > 0; i--) tmp[i] = tmp[i - 1];
+                }
             }
         }
     }
@@ -699,10 +713,11 @@ static void apply_ltp(aacdec *d, struct aac_chan *c) {
     } else
         for (int i = 0; i < 1024; i++) x[1024 + i] *= rw[1023 - i];
     aac_mdct(x, X, 2048);
-    float s = 1.0f / 1024.0f;
+    for (int k = 0; k < 1024; k++) X[k] *= 2.0f;   /* the standard's forward MDCT has a factor 2 */
+    if (c->tns.present) apply_tns(d, c, X, 0);
     for (int sfb = 0; sfb < ics->max_sfb && sfb < 40; sfb++)
         if (ics->ltp_used[sfb])
-            for (int k = ics->swb[sfb]; k < ics->swb[sfb + 1]; k++) c->coef[k] += X[k] * s;
+            for (int k = ics->swb[sfb]; k < ics->swb[sfb + 1]; k++) c->coef[k] += X[k];
 }
 
 /* ---------------------------------------------------------------- filterbank */
@@ -751,7 +766,7 @@ static void finish_channel(aacdec *d, struct aac_chan *c) {
         /* prediction is applied in the element decoder */
     }
     apply_ltp(d, c);
-    if (c->tns.present) apply_tns(d, c);
+    if (c->tns.present) apply_tns(d, c, c->coef, 1);
     filterbank(c, c->out);
     if (c->ltp_buf) {
         /* LTP history: last 2048 output samples + the current overlap (the next frame's first half estimate) */
@@ -775,7 +790,10 @@ static int decode_cpe(aacdec *d, struct aac_elem *e, struct aac_bits *b) {
     int ms_present = 0;
     int common = (int)aac_get1(b);
     if (common) {
-        if (!decode_ics_info(d, &l->ics, b)) return 0;
+        d->in_common = 1;
+        int ok = decode_ics_info(d, &l->ics, b);
+        d->in_common = 0;
+        if (!ok) return 0;
         r->ics = l->ics;
         if (d->aot == AOT_LTP) {   /* the second channel's ltp data follows the first one's */
             r->ics.ltp_present = 0;
@@ -864,6 +882,7 @@ static int decode_block(aacdec *d, struct aac_bits *b) {
     for (int i = 0; i < d->nelem; i++) d->elem[i].sbr_seen = d->elem[i].decoded = 0;
     int n = 0;
     d->dbg_n = 0;
+    d->dbg_pdp_n = 0;
     for (;;) {
         if (b->err || aac_left(b) < 3) return 0;
         int type = (int)aac_get(b, 3);
@@ -996,11 +1015,13 @@ static int decode_frame(aacdec *d, const uint8_t *data, int len, float *out) {
     }
     d->frames++;
     int n = d->sbr == 1 ? 2048 : 1024;
-    if (d->all_channels) {
+    if (d->all_channels && !(d->ps == 1 && d->nch == 1)) {
+        d->last_nc = d->nch;
         for (int c = 0; c < d->nch; c++)
             for (int k = 0; k < n; k++) out[k * d->nch + c] = d->ch[c]->out[k];
         return n;
     }
+    d->last_nc = d->out_ch;
     if (d->out_ch == 1) {
         int src = 0;
         for (int c = 0; c < d->nch; c++)
@@ -1035,8 +1056,9 @@ static int decode_frame(aacdec *d, const uint8_t *data, int len, float *out) {
     return n;
 silence: {
         int n = d->sbr == 1 ? 2048 : 1024;
-        int nc = d->all_channels ? d->nch : d->out_ch;
+        int nc = d->all_channels && !(d->ps == 1 && d->nch == 1) ? d->nch : d->out_ch;
         if (nc < 1) nc = 1;
+        d->last_nc = nc;
         memset(out, 0, sizeof(float) * (size_t)(n * nc));
         /* keep the overlap consistent: the next frame fades in from silence */
         for (int c = 0; c < d->nch; c++) memset(d->ch[c]->overlap, 0, sizeof(float) * 1024);
@@ -1074,7 +1096,7 @@ int aac_decode(aacdec *d, const uint8_t *data, int len, int16_t *pcm) {
     float *tmp = d->fbuf;
     int n = decode_frame(d, data, len, tmp);
     if (n <= 0) return n;
-    int nc = d->all_channels ? d->nch : d->out_ch;
+    int nc = d->last_nc;
     for (int i = 0; i < n * nc; i++) {
         float v = tmp[i] * 32768.0f;
         int s = (int)(v < 0 ? v - 0.5f : v + 0.5f);

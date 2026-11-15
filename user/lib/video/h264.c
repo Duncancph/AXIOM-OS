@@ -189,6 +189,7 @@ h264dec *h264_open(const uint8_t *extradata, int len) {
     if (!d) return 0;
     d->need_key = 1;
     d->dq_pps = -1;
+    d->last_out_epoch = -1;
     d->max_lt_idx = -1;
     if (extradata && len > 0) {
         d->avcc = 1;
@@ -316,6 +317,8 @@ int h264_get_frame(h264dec *d, struct h264_frame *f) {
     if (!d->flushing && best->epoch == d->epoch && n_cur <= d->reorder) return 0;
     best->waiting = 0;
     best->held = 1;
+    d->last_out_poc = best->poc;
+    d->last_out_epoch = best->epoch;
     int sy = best->stride_y, sc = best->stride_c;
     f->stride_y = sy;
     f->stride_uv = sc;

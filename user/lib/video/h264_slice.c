@@ -432,6 +432,10 @@ static void build_lists(h264dec *d) {
 }
 
 /* ---------------------------------------------------------------- pictures */
+static void fill_gray_pic(h264dec *d, struct h264_pic *p) {
+    memset(p->mem, 128, d->img_size);
+}
+
 static struct h264_pic *latest_ref(h264dec *d) {
     struct h264_pic *best = 0;
     for (int i = 0; i < d->n_pics; i++) {
@@ -481,6 +485,12 @@ void h264_finish_picture(h264dec *d) {
     int out = 1;
     if (d->drop_leading && cur->epoch == d->key_epoch && cur->poc < d->key_poc) out = 0;
     cur->waiting = out;
+    /* a picture that should have been output before one already returned: the stream reorders more than
+       it announced (or announced nothing); grow the reorder window like other decoders do */
+    if (out && cur->epoch == d->last_out_epoch && cur->poc < d->last_out_poc && d->reorder < d->max_frames) {
+        d->reorder++;
+        d->reorder_extra++;
+    }
     d->cur = 0;
 }
 
@@ -499,7 +509,7 @@ static int start_picture(h264dec *d, const struct h264_slice *s, const struct h2
     maxf = h264_max(maxf, a->max_num_ref_frames);
     if (a->max_dec_buf > maxf) maxf = a->max_dec_buf;
     d->max_frames = maxf;
-    d->reorder = a->reorder >= 0 ? a->reorder : (a->poc_type == 2 ? 0 : maxf);
+    d->reorder = (a->reorder >= 0 ? a->reorder : (a->poc_type == 2 ? 0 : maxf)) + d->reorder_extra;
     if (d->reorder > maxf) d->reorder = maxf;
 
     /* keyframe gating */
@@ -534,7 +544,13 @@ static int start_picture(h264dec *d, const struct h264_slice *s, const struct h2
             p->poc = src ? src->poc : 0;
             p->idr = 0;
             int n4 = d->mb_w * 4 * d->mb_h * 4, n8 = d->mb_w * 2 * d->mb_h * 2;
-            if (src) memcpy(p->mem, src->mem, d->img_size);
+            if (src) {
+                /* concealment: the frame is a copy of the latest reference and is treated as the same picture
+                   (deblocking / direct prediction), which is what ffmpeg does as well */
+                memcpy(p->mem, src->mem, d->img_size);
+                p->uid = src->uid;
+                p->poc = src->poc + 2;
+            } else fill_gray_pic(d, p);
             for (int li = 0; li < 2; li++) {
                 memset(p->mv[li], 0, (size_t)n4 * 4);
                 memset(p->refidx[li], -1, (size_t)n8);
@@ -549,9 +565,14 @@ static int start_picture(h264dec *d, const struct h264_slice *s, const struct h2
             p->frame_num_wrap = fn;
             p->busy = 0;
             p->waiting = 0;
+            {
+                int prev_off = d->prev_has_mmco5 ? 0 : d->prev_frame_num_offset;
+                d->prev_frame_num_offset = d->prev_frame_num > fn ? prev_off + maxfn : prev_off;
+                d->frame_num_offset = d->prev_frame_num_offset;
+            }
+            d->prev_has_mmco5 = 0;
             d->prev_ref_frame_num = fn;
             d->prev_frame_num = fn;
-            d->prev_frame_num_offset = d->frame_num_offset;
         }
         d->cur_frame_num = s->frame_num;
     }

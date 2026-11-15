@@ -85,6 +85,7 @@ int main(int argc, char **argv) {
             aac_decode(d, data + aus[i].off, aus[i].len, sbuf);
             printf("%ld %d", aus[i].off, aus[i].len);
             for (int k = 0; k < d->dbg_n; k++) printf(" %d:%d", d->dbg_type[k], d->dbg_end[k]);
+            for (int k = 0; k < d->dbg_pdp_n; k++) printf(" P:%d:%d", d->dbg_pdp_pos[k], d->dbg_pdp_maxsfb[k]);
             printf("\n");
         }
         return 0;
@@ -132,7 +133,7 @@ int main(int argc, char **argv) {
             int n = s16 ? aac_decode(d, data + aus[i].off, aus[i].len, sbuf)
                         : aac_decode_float(d, data + aus[i].off, aus[i].len, fbuf);
             if (n < 0) { printf("error at frame %ld\n", i); continue; }
-            int nc = all ? d->nch : aac_channels(d);
+            int nc = d->last_nc;
             if (i == start) { rate = aac_sample_rate(d); ch = nc; }
             if (nc != ch) { printf("channel count changed at frame %ld: %d -> %d\n", i, ch, nc); ch = nc; }
             if (s16) fwrite(sbuf, 2, (size_t)n * nc, o);
@@ -144,7 +145,7 @@ int main(int argc, char **argv) {
         int aot, sbr, ps;
         aac_info(d, &aot, &sbr, &ps);
         printf("rate %d channels %d frames %ld samples %ld aot %d sbr %d ps %d first_rate %d first_ch %d\n",
-               aac_sample_rate(d), all ? d->nch : aac_channels(d), frames, samples, aot, sbr, ps, rate, ch);
+               aac_sample_rate(d), d->last_nc, frames, samples, aot, sbr, ps, rate, ch);
         aac_close(d);
     } else if (!strcmp(cmd, "bench")) {
         int reps = atoi(argv[3]);
