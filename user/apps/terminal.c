@@ -374,6 +374,16 @@ static void run(char *line) {
         }
         char fp[256]; struct dunc_stat st;
         path_resolve(cwd, app, fp, sizeof fp);
+        char magic[4] = { 0 };
+        if (fs_stat(fp, &st) == 0 && !st.is_dir && fs_read(fp, magic, 0, 4) == 4 && !memcmp(magic, "\x7F" "ELF", 4)) {
+            /* a Linux program: the kernel runs it, and what it prints shows here when it ends */
+            char cmd[400]; ksnprintf(cmd, sizeof cmd, "run %s%s%s", fp, arg[k] == ' ' ? " " : "", arg[k] == ' ' ? arg + k + 1 : "");
+            puts_c("Running (its output shows when it finishes)...\n", C_DIM); draw();
+            static char out[16384];
+            sys_kcmd(cmd, out, sizeof out);
+            print("%s", out);
+            return;
+        }
         if (!full[0] && fs_stat(fp, &st) == 0 && !st.is_dir) {      /* "open photo.png": the file's own app */
             const char *why = open_file(fp);
             if (why) { puts_c(why, C_RED); putch('\n'); } else print("Opened %s\n", app);

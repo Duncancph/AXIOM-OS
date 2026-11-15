@@ -42,6 +42,11 @@ static void dispatch(struct frame *f) {
         if (current->killed) task_exit(-1);
         return;
     }
+    if (v == 0x81) {                           /* a Linux program's system call */
+        f->rax = linux_syscall(f);
+        if (current->killed) task_exit(-1);
+        return;
+    }
     if (v == 0xF0) { lapic_eoi(); return; }    /* another core woke this one */
     if (v >= 32) return;                       /* spurious / stray legacy IRQs */
     if (v == 14 && (f->cs & 3) == 3 && current->mm) {   /* a page of a memory area, used for the first time */

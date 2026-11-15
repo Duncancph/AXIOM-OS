@@ -27,6 +27,7 @@ isr_common:
     jz .k_in
     swapgs
 .k_in:
+isr_after_swapgs:
     push rax
     push rbx
     push rcx
@@ -67,6 +68,46 @@ isr_common:
 .k_out:
     iretq
 
+; Linux programs' system calls (the syscall instruction): made into the same frame as an interrupt (vector 0x81)
+global syscall_entry
+syscall_entry:
+    swapgs
+    mov [gs:16], rsp            ; the app's stack
+    mov rsp, [gs:24]            ; this task's kernel stack
+    push 0x1B                   ; ss
+    push qword [gs:16]          ; rsp
+    push r11                    ; rflags
+    push 0x23                   ; cs
+    push rcx                    ; rip
+    push 0                      ; error code
+    push 0x81                   ; vector
+    jmp isr_after_swapgs
+
+; First run of a thread made by clone(): the stack holds a whole saved frame (its registers start as its parent's)
+global frame_entry
+frame_entry:
+    extern tlb_sync
+    call tlb_sync
+    call bkl_unlock
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    add rsp, 16
+    swapgs
+    iretq
+
 ; void switch_to(uint64_t *save_rsp, uint64_t new_rsp)
 global switch_to
 switch_to:
@@ -100,7 +141,6 @@ thread_entry:
 ; First run of a user process: the stack holds an iretq frame into ring 3
 global user_entry
 user_entry:
-    extern tlb_sync
     call tlb_sync           ; (its program's memory may have changed since this core last used it)
     call bkl_unlock         ; leaving the kernel for the app's first instruction
     swapgs

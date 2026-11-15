@@ -31,11 +31,12 @@ void cpu_setup(struct cpu *c) {
         "mov $0x28, %%ax\n ltr %%ax\n" ::"m"(p) : "rax", "memory");
     wrmsr(0xC0000101, (uint64_t)c);   /* GS base: this core */
     wrmsr(0xC0000102, 0);             /* the apps' GS base (swapgs) */
+    linux_cpu_init();
 }
 
 void gdt_init(void) { cpu_setup(&cpus[0]); }
 
-void tss_set_rsp0(uint64_t rsp) { cpu_self()->tss.rsp0 = rsp; }
+void tss_set_rsp0(uint64_t rsp) { struct cpu *c = cpu_self(); c->tss.rsp0 = rsp; c->sc_kstack = rsp; }
 
 /* ---------------- local APIC ---------------- */
 static volatile uint32_t *lapic;

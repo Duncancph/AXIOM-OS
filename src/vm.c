@@ -299,6 +299,14 @@ long mm_munmap(struct mm *m, uint64_t addr, uint64_t len, uint64_t *pages) {
     tlb_shootdown(m);
     return 0;
 }
+long mm_dontneed(struct mm *m, uint64_t addr, uint64_t len, uint64_t *pages) {   /* pages freed; they come back zeroed */
+    len = (len + 4095) & ~4095ULL;
+    if ((addr & 4095) || !in_area(addr, addr + len)) return 0;
+    uint64_t fr = drop_pages(m, addr, addr + len);
+    if (pages) *pages -= fr < *pages ? fr : *pages;
+    tlb_shootdown(m);
+    return 0;
+}
 long mm_mprotect(struct mm *m, uint64_t addr, uint64_t len, int prot) {
     len = (len + 4095) & ~4095ULL;
     if (addr & 4095) return -DERR_INVAL;

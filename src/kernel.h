@@ -241,12 +241,22 @@ void mm_put(struct mm *m);
 long mm_mmap(struct mm *m, uint64_t addr, uint64_t len, int prot, int flags, uint64_t *pages);
 long mm_munmap(struct mm *m, uint64_t addr, uint64_t len, uint64_t *pages);
 long mm_mprotect(struct mm *m, uint64_t addr, uint64_t len, int prot);
+long mm_dontneed(struct mm *m, uint64_t addr, uint64_t len, uint64_t *pages);
+struct frame;
 bool mm_fault(struct mm *m, uint64_t addr, bool write, bool exec, uint64_t *pages);
 void tlb_sync(void);                   /* before going back to an app: drop stale translations */
 void tlb_ipi(void);                    /* the shootdown interrupt (no kernel lock) */
 long futex_wait(uint64_t addr, uint32_t val, int64_t timeout_ms);
 long futex_wake(struct mm *m, uint64_t addr, int n);
 long task_thread(uint64_t rip, uint64_t rsp, uint64_t fs, uint64_t clear_tid);
+struct task *task_new_user(const char *name, struct mm *mm, struct task *proc, uint64_t rip, uint64_t rsp);
+long task_clone(const struct frame *f, uint64_t rsp, uint64_t fs, uint64_t clear_tid);   /* a thread starting as a copy of f (rax = 0) */
+struct lxproc;
+void linux_cpu_init(void);                 /* the syscall instruction (each core) */
+uint64_t linux_syscall(struct frame *f);
+int linux_spawn(const char *path, int argc, char **argv, struct task *out);   /* -> pid */
+void linux_task_exit(struct task *t);
+bool task_alive(int pid);
 void task_thread_exit(void) __attribute__((noreturn));
 long elf_load(uint64_t *pml4, const uint8_t *img, uint64_t size, uint64_t *entry);
 
@@ -279,6 +289,7 @@ struct task {
     struct task *proc;
     uint64_t fs_base;          /* thread-local storage (%fs) */
     uint64_t clear_tid;        /* when the thread ends: *(u32 *)clear_tid = 0, futex woken */
+    struct lxproc *lx;         /* a Linux program (linux.c): its files etc., shared by its threads */
     struct mm *futex_mm; uint64_t futex_addr; bool futex_woken;   /* waiting in SYS_FUTEX */
 };
 struct frame {
@@ -294,6 +305,8 @@ struct tss64 { uint32_t r0; uint64_t rsp0, rsp1, rsp2, r1; uint64_t ist[7]; uint
 struct cpu {
     struct cpu *self;                  /* %gs:0 */
     struct task *cur;                  /* %gs:8 */
+    uint64_t sc_rsp;                   /* %gs:16 the app's stack pointer during a Linux syscall's entry */
+    uint64_t sc_kstack;                /* %gs:24 the running task's kernel stack top (as in the TSS) */
     struct task *idle;
     int id; uint32_t apic_id;
     volatile bool bkl_held, started;

@@ -131,6 +131,50 @@ long task_thread(uint64_t rip, uint64_t rsp, uint64_t fs, uint64_t clear_tid) {
     return t->pid;
 }
 
+/* a new user task in mm (proc: its program's first thread, 0: it is one) starting at rip with stack rsp */
+struct task *task_new_user(const char *name, struct mm *mm, struct task *proc, uint64_t rip, uint64_t rsp) {
+    struct task *t = alloc_task(name);
+    if (!t) return 0;
+    t->user = true;
+    memcpy(t->fx, fx_init, sizeof t->fx);
+    t->mm = mm; mm->refs++;
+    t->pml4 = mm->pml4;
+    t->proc = proc ? proc : t;
+    if (proc) { strncpy0(t->appid, proc->appid, sizeof t->appid); t->app = t->appid; t->lx = proc->lx; }
+    uint64_t *s = (uint64_t *)t->kstack_top;
+    *--s = 0x1B; *--s = rsp; *--s = 0x202; *--s = 0x23; *--s = rip;
+    *--s = (uint64_t)user_entry;
+    for (int i = 0; i < 6; i++) *--s = 0;
+    t->rsp = (uint64_t)s;
+    t->state = PS_READY;
+    return t;
+}
+void frame_entry(void);
+long task_clone(const struct frame *f, uint64_t rsp, uint64_t fs, uint64_t clear_tid) {
+    struct task *p = current->proc;
+    char nm[32]; ksnprintf(nm, sizeof nm, "%s thread", p->name);
+    struct task *t = alloc_task(nm);
+    if (!t) return -DERR_AGAIN;
+    t->user = true;
+    __asm__ volatile("fxsave64 %0" : "=m"(t->fx) :: "memory");     /* (its parent's floating-point state) */
+    t->mm = current->mm; t->mm->refs++;
+    t->pml4 = t->mm->pml4; t->proc = p; t->lx = current->lx;
+    strncpy0(t->appid, p->appid, sizeof t->appid); t->app = t->appid;
+    t->fs_base = fs; t->clear_tid = clear_tid;
+    struct frame *nf = (struct frame *)(t->kstack_top - sizeof *nf);
+    *nf = *f; nf->rax = 0; nf->rsp = rsp;
+    uint64_t *s = (uint64_t *)nf;
+    *--s = (uint64_t)frame_entry;
+    for (int i = 0; i < 6; i++) *--s = 0;
+    t->rsp = (uint64_t)s;
+    t->state = PS_READY;
+    return t->pid;
+}
+bool task_alive(int pid) {
+    for (int i = 0; i < MAX_TASKS; i++) if (tasks[i].state && tasks[i].state != PS_ZOMBIE && tasks[i].pid == pid) return true;
+    return false;
+}
+
 /* ---- futexes: threads waiting for a word of their program's memory to change ---- */
 long futex_wait(uint64_t addr, uint32_t val, int64_t timeout_ms) {
     struct task *t = current;
@@ -353,6 +397,7 @@ void task_reap(void) {
         bool threads_left = false;                        /* a program's first thread goes last (the others point to it) */
         for (int j = 0; j < MAX_TASKS && t->user && t->proc == t; j++) if (&tasks[j] != t && tasks[j].state && tasks[j].proc == t) threads_left = true;
         if (threads_left) continue;
+        if (t->user && t->proc == t && t->lx) linux_task_exit(t);
         if (t->user && t->mm) mm_put(t->mm);             /* the memory goes with its last thread */
         t->mm = 0;
         for (int k = 0; k < KSTACK_PAGES; k++) page_free(t->kstack + k * 4096);

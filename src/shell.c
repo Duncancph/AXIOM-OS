@@ -123,6 +123,16 @@ void shell_execute(char *line) {
     }
     else if (!strcmp(c, "echo")) { for (int i = 1; i < argc; i++) kprintf("%s%s", argv[i], i + 1 < argc ? " " : ""); kprintf("\n"); }
     else if (!strcmp(c, "uptime")) cmd_uptime();
+    else if (!strcmp(c, "run")) {                         /* a Linux program: runs, and its output shows here when it ends */
+        if (argc < 2) { kprintf("usage: run <program> [arguments]   (Linux x86-64 programs, static or position-independent)\n"); return; }
+        char full[200];
+        if (argv[1][0] == '/') strncpy0(full, argv[1], sizeof full); else ksnprintf(full, sizeof full, "/home/%s", argv[1]);
+        int pid = linux_spawn(full, argc - 1, argv + 1, current && current->user ? current : 0);
+        if (pid > 0 && current && current->user) {
+            uint64_t t0 = uptime_ms();
+            while (task_alive(pid) && !current->killed && uptime_ms() - t0 < 600000) task_sleep(10);
+        }
+    }
     else if (!strcmp(c, "clan")) clan_command(argc, argv);
     else if (!strcmp(c, "log") || !strcmp(c, "dmesg")) {
         char *b = page_alloc(8);
