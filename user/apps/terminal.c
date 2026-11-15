@@ -311,7 +311,7 @@ static void cmd_help(void) {
     for (unsigned i = 0; i < sizeof h / sizeof h[0]; i++) { puts_c("  ", C_TEXT); print("%-20s", h[i][0]); puts_c(h[i][1], C_DIM); putch('\n'); }
     puts_c("Kernel commands\n", C_GOLD);
     static const char *k[][2] = {
-        {"sysinfo", "CPU, memory, display"}, {"gfx", "graphics chip and monitor details"}, {"pci", "hardware on the PCI bus"}, {"usb", "USB devices"},
+        {"sysinfo", "CPU, memory, display"}, {"gfx", "graphics chip and monitor details"}, {"pci", "hardware on the PCI bus"}, {"usb", "USB devices"}, {"devices", "every device and its driver"},
         {"bt", "Bluetooth adapter"}, {"bt scan [secs]", "find nearby Bluetooth devices"}, {"log", "kernel messages"},
         {"uptime", "time since boot"}, {"clan", "package manager (clan list / clan install)"},
         {"reboot / poweroff", "restart or shut down"} };
@@ -340,6 +340,26 @@ static void run(char *line) {
     else if (!strcmp(line, "exit")) sys_exit(0);
     else if (!strcmp(line, "ps")) cmd_ps();
     else if (!strcmp(line, "gfx")) { static char rep[3000]; sys_setting_get("display.report", rep, sizeof rep); print("%s", rep[0] ? rep : "No Intel graphics found.\n"); }
+    else if (!strcmp(line, "devices")) {
+        static char rep[8192]; sys_setting_get("devices.list", rep, sizeof rep);
+        char last[24] = "";
+        for (char *l = rep; *l; ) {
+            char *e = l; while (*e && *e != '\n') e++; if (*e) *e = 0; else e = 0;
+            char *f[7] = { 0 }; int nf = 0; f[nf++] = l;
+            for (char *p = l; *p && nf < 7; p++) if (*p == '\t') { *p = 0; f[nf++] = p + 1; }
+            if (nf == 7) {
+                if (strcmp(last, f[0])) { strncpy0(last, f[0], sizeof last); puts_c(f[0], C_GOLD); putch('\n'); }
+                int st = !strcmp(f[3], "ok") ? C_GREEN : !strcmp(f[3], "failed") ? C_RED : C_DIM;
+                print("  "); puts_c(!strcmp(f[3], "ok") ? "ok      " : !strcmp(f[3], "failed") ? "FAILED  " : !strcmp(f[3], "system") ? "system  " : !strcmp(f[3], "off") ? "off     " : "none    ", st);
+                print("%-40s ", f[1]); puts_c(f[2][0] ? f[2] : "-", C_CYAN);
+                if (f[4][0]) { print("  "); puts_c(f[4], C_DIM); }
+                putch('\n');
+                if (f[6][0] && strcmp(f[3], "ok")) { print("          "); puts_c(f[6], C_DIM); putch('\n'); }
+            }
+            if (!e) break;
+            l = e + 1;
+        }
+    }
     else if (!strcmp(line, "apps")) {
         struct dunc_app ap[24]; int n = sys_apps(ap, 24);
         for (int i = 0; i < n; i++) { print("  %-10s ", ap[i].id); puts_c(ap[i].name, C_DIM); if (ap[i].installed) puts_c("  (clan)", C_GOLD); putch('\n'); }

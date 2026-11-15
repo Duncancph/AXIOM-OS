@@ -6,8 +6,8 @@
 #define WH 580
 #define SIDE 190
 static struct app a;
-enum { S_KEYB, S_MOUSE, S_TIME, S_DISPLAY, S_PERSONAL, S_SOUND, S_LOCK, S_POWER, S_UPDATES, S_STORAGE, S_ABOUT, NSECT };
-static const char *sect_names[NSECT] = { "Keyboard", "Mouse", "Date & time", "Display", "Personalise", "Sound", "Lock screen", "Power", "Updates", "Storage", "About" };
+enum { S_KEYB, S_MOUSE, S_TIME, S_DISPLAY, S_PERSONAL, S_SOUND, S_LOCK, S_POWER, S_UPDATES, S_STORAGE, S_DEVICES, S_ABOUT, NSECT };
+static const char *sect_names[NSECT] = { "Keyboard", "Mouse", "Date & time", "Display", "Personalise", "Sound", "Lock screen", "Power", "Updates", "Storage", "Devices", "About" };
 static int sect, hover = -1;
 
 /* ---- clickable regions, rebuilt on every draw ---- */
@@ -527,6 +527,113 @@ static void draw_storage(void) {
     }
 }
 
+/* ---- Devices: everything AXIOM found and which driver looks after it ---- */
+enum { H_DEV = 700 };                              /* + row index */
+struct devrow { char *f[7]; };
+static char devbuf[8192]; static struct devrow devs[96]; static int ndevs, dev_scroll, dev_sel = -1;
+static void load_devices(void) {
+    ndevs = 0; dev_scroll = 0; dev_sel = -1;
+    if (sys_setting_get("devices.list", devbuf, sizeof devbuf) <= 0) return;
+    for (char *l = devbuf; *l && ndevs < 96; ) {
+        char *e = l; while (*e && *e != '\n') e++; if (*e) *e = 0; else e = 0;
+        struct devrow *d = &devs[ndevs]; int nf = 0; d->f[nf++] = l;
+        for (char *q = l; *q && nf < 7; q++) if (*q == '\t') { *q = 0; d->f[nf++] = q + 1; }
+        if (nf == 7) ndevs++;
+        if (!e) break;
+        l = e + 1;
+    }
+}
+static uint32_t dev_col(const char *st) {
+    return !strcmp(st, "ok") ? UI_GREEN : !strcmp(st, "failed") ? UI_RED : !strcmp(st, "nodriver") ? UI_GOLD : UI_MUTED;
+}
+static const char *dev_status_text(const char *st) {
+    return !strcmp(st, "ok") ? "Working" : !strcmp(st, "failed") ? "Didn't start" : !strcmp(st, "nodriver") ? "No driver" :
+           !strcmp(st, "system") ? "Built in" : !strcmp(st, "off") ? "Turned off" : st;
+}
+/* one line of the list = a group heading or a device; returns how many lines there are */
+static int dev_lines(int *idx, bool *head, int max) {
+    int n = 0;
+    for (int i = 0; i < ndevs && n < max; i++) {
+        if (!i || strcmp(devs[i].f[0], devs[i - 1].f[0])) { idx[n] = i; head[n] = true; n++; if (n >= max) break; }
+        idx[n] = i; head[n] = false; n++;
+    }
+    return n;
+}
+static void fit_text(char *out, int cap, const char *in, int maxw, const struct font *f) {
+    strncpy0(out, in, cap);
+    int len = strlen(out);
+    while (len > 3 && gfx_text_width(f, out) > maxw) { len--; out[len] = 0; out[len - 1] = out[len - 2] = '.'; }
+}
+static void draw_dev_details(void) {
+    struct devrow *d = &devs[dev_sel];
+    heading(d->f[1], d->f[0]);
+    int x = SIDE + 32, y = 100, w = WW - SIDE - 64;
+    ui_card(&a.c, x, y, w, 250);
+    gfx_circle(&a.c, x + 26, y + 30, 7, dev_col(d->f[3]), 255);
+    gfx_text(&a.c, &font_ui_bold, x + 42, y + 35, UI_TEXT, dev_status_text(d->f[3]));
+    const char *lab[4] = { "Driver", "Connected to", "Hardware ID", "" };
+    const char *val[4] = { d->f[2][0] ? d->f[2] : (!strcmp(d->f[3], "system") ? "none needed" : "none"), d->f[4], d->f[5], 0 };
+    int yy = y + 70;
+    for (int i = 0; i < 3; i++) {
+        if (!val[i] || !val[i][0]) continue;
+        label(x + 20, yy, UI_MUTED, lab[i]); label(x + 160, yy, UI_TEXT, val[i]); yy += 26;
+    }
+    if (!strcmp(d->f[2], "built in") || !d->f[2][0]) {}
+    else { label(x + 20, yy, UI_MUTED, "Where"); label(x + 160, yy, UI_TEXT, "Built into the Axiom Core kernel"); yy += 26; }
+    /* the details, wrapped */
+    yy += 8;
+    const char *p = d->f[6]; int maxw = w - 40;
+    while (*p && yy < y + 240) {
+        char line[160]; int n = 0, cut = 0;
+        while (p[n] && n < 159) {
+            line[n] = p[n]; line[n + 1] = 0;
+            if (gfx_text_width(&font_ui, line) > maxw) break;
+            if (p[n] == ' ') cut = n;
+            n++;
+        }
+        if (p[n] && cut) n = cut;
+        memcpy(line, p, n); line[n] = 0;
+        label(x + 20, yy, UI_TEXT, line); yy += 22;
+        p += n; while (*p == ' ') p++;
+    }
+    button(SIDE + 32, WH - 64, 120, "Back", BTN_NORMAL, H_BTN + 70, false);
+}
+#define DEV_ROWS 15
+static void draw_devices(void) {
+    if (dev_sel >= 0 && dev_sel < ndevs) { draw_dev_details(); return; }
+    int nok = 0, nbad = 0, nnone = 0;
+    for (int i = 0; i < ndevs; i++) { const char *st = devs[i].f[3]; if (!strcmp(st, "ok")) nok++; else if (!strcmp(st, "failed")) nbad++; else if (!strcmp(st, "nodriver")) nnone++; }
+    char sub[128];
+    if (nbad) ksnprintf(sub, sizeof sub, "%d working, %d didn't start, %d without a driver. Click one for details.", nok, nbad, nnone);
+    else ksnprintf(sub, sizeof sub, "%d working, %d without a driver. All drivers are built into the kernel.", nok, nnone);
+    heading("Devices", sub);
+    static int idx[200]; static bool head[200];
+    int n = dev_lines(idx, head, 200);
+    if (dev_scroll > n - DEV_ROWS) dev_scroll = n > DEV_ROWS ? n - DEV_ROWS : 0;
+    if (dev_scroll < 0) dev_scroll = 0;
+    int x = SIDE + 24, w = WW - SIDE - 48, y = 92;
+    for (int k = dev_scroll; k < n && k < dev_scroll + DEV_ROWS; k++, y += 28) {
+        struct devrow *d = &devs[idx[k]];
+        if (head[k]) { gfx_text(&a.c, &font_ui_bold, x + 8, y + 20, UI_GOLD, d->f[0]); continue; }
+        int id = H_DEV + idx[k];
+        if (hover == id) gfx_rrect(&a.c, x, y + 1, w, 26, 7, UI_PANEL2, 255);
+        gfx_circle(&a.c, x + 20, y + 14, 5, dev_col(d->f[3]), 255);
+        char t[96]; fit_text(t, sizeof t, d->f[1], 330, &font_ui);
+        label(x + 34, y + 19, UI_TEXT, t);
+        fit_text(t, sizeof t, d->f[2][0] ? d->f[2] : "-", 110, &font_ui);
+        label(x + 380, y + 19, UI_MUTED, t);
+        label(x + 500, y + 19, dev_col(d->f[3]), dev_status_text(d->f[3]));
+        add_hit(x, y + 1, w, 26, id);
+    }
+    if (!ndevs) label(SIDE + 32, 110, UI_MUTED, "Couldn't read the device list.");
+    if (n > DEV_ROWS) {
+        char m[64];
+        ksnprintf(m, sizeof m, "Lines %d-%d of %d. Scroll for more.", dev_scroll + 1, dev_scroll + DEV_ROWS < n ? dev_scroll + DEV_ROWS : n, n);
+        label(SIDE + 32, WH - 40, UI_MUTED, m);
+    }
+    label(SIDE + 360, WH - 40, UI_MUTED, "Also in CMD: devices");
+}
+
 static void draw_about(void) {
     struct sysinfo s; sys_sysinfo(&s);
     heading("About AXIOM", "Made by Bryan Duncan. Running on the Axiom Core kernel.");
@@ -571,7 +678,7 @@ void draw(void) {
     switch (sect) {
     case S_KEYB: draw_keyboard(); break; case S_MOUSE: draw_mouse(); break; case S_TIME: draw_time(); break; case S_DISPLAY: draw_display(); break; case S_PERSONAL: draw_personal(); break;
     case S_SOUND: if (show_snd) draw_report("Sound details", "The sound chips AXIOM found and how each was set up.", "sound.report", H_BTN + 12, "Nothing found.", 0); else draw_sound(); break; case S_LOCK: draw_lock(); break; case S_POWER: draw_power(); break;
-    case S_UPDATES: draw_updates(); break; case S_STORAGE: draw_storage(); break; case S_ABOUT: draw_about(); break;
+    case S_UPDATES: draw_updates(); break; case S_STORAGE: draw_storage(); break; case S_DEVICES: draw_devices(); break; case S_ABOUT: draw_about(); break;
     }
     if (msg[0]) label(SIDE + 32, WH - 24, msg_col, msg);
     if (confirm_disk >= 0) {                                 /* "erase this disk?" */
@@ -612,6 +719,7 @@ static void open_section(int s) {
         if (list_scroll > nlist - 9) list_scroll = nlist > 9 ? nlist - 9 : 0;
     }
     if (s == S_STORAGE) ndisks = sys_disks(disks, 8);
+    if (s == S_DEVICES) load_devices();
     if (s == S_PERSONAL) { find_pictures(); char un[64] = ""; sys_setting_get("user.name", un, sizeof un); strncpy0(fields[3].s, un, sizeof fields[3].s); fields[3].len = strlen(fields[3].s); }
 }
 
@@ -668,6 +776,8 @@ static void click(int id, int mx) {
     if (id == H_BTN + 62) { set("display.native", "off"); sys_power(1); }
     if (id == H_BTN + 63) { set("display.native", "try"); set("display.native_check", "0"); sys_power(1); }
     if (id == H_BTN + 61) { show_gfx = false; }
+    if (id >= H_DEV && id < H_DEV + 96) { dev_sel = id - H_DEV; }
+    if (id == H_BTN + 70) { dev_sel = -1; }
     if (id == H_BTN + 11) { show_snd = true; }
     if (id == H_BTN + 12) { show_snd = false; }
     if (id == H_TOGGLE + 40) set("system.cores", !strcmp(get("system.cores"), "all") ? "one" : "all");
@@ -696,6 +806,11 @@ static void key(int k) {
         list_scroll += k == KEY_DOWN ? 1 : k == KEY_UP ? -1 : k == KEY_PGDN ? 9 : -9;
         if (list_scroll > nlist - 9) list_scroll = nlist - 9;
         if (list_scroll < 0) list_scroll = 0;
+        return;
+    }
+    if (sect == S_DEVICES) {
+        if (k == 27 || k == '\b') dev_sel = -1;
+        else if (k == KEY_DOWN || k == KEY_UP || k == KEY_PGDN || k == KEY_PGUP) dev_scroll += k == KEY_DOWN ? 1 : k == KEY_UP ? -1 : k == KEY_PGDN ? 12 : -12;
         return;
     }
     if (focus < 0) return;
@@ -742,6 +857,7 @@ int main(void) {
             continue;
         }
         if (e.type == EV_MOUSE_DOWN && e.button == 1) { int h = hit_at(e.x, e.y); if (h >= 0) click(h, e.x); else if (confirm_disk < 0) focus = sect == S_KEYB ? 2 : -1; }
+        if (e.type == EV_WHEEL && sect == S_DEVICES && dev_sel < 0) dev_scroll += e.key * 3;
         if (e.type == EV_WHEEL && sect == S_TIME) { list_scroll += e.key * 2; if (list_scroll > nlist - 9) list_scroll = nlist - 9; if (list_scroll < 0) list_scroll = 0; }
         if (e.type == EV_KEY) key(e.key);
         draw();

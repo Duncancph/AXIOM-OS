@@ -149,6 +149,7 @@ void intelgfx_probe(void) {
     gdev = g->device;
     uint64_t sz, bar0 = pci_bar(g, 0, &sz), sz2, bar2 = pci_bar(g, 2, &sz2);
     ksnprintf(summary, sizeof summary, "Intel graphics, device %04x", g->device);
+    dev_claim(g, "intelgfx", DEV_OK, "Intel HD Graphics", "Screen as the firmware set it up; AXIOM reads the monitor's details and sends HDMI sound");
     add("Intel graphics %04x rev %02x at %02x:%02x.%x; registers %lx (%lu KB), memory window %lx (%lu MB)",
         g->device, g->rev, g->bus, g->dev, g->fn, bar0, sz >> 10, bar2, sz2 >> 20);
     add("screen from firmware: %ux%u, pitch %u, at %lx", bootinfo.fb_w, bootinfo.fb_h, bootinfo.fb_pitch, bootinfo.fb_addr);

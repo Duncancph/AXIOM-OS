@@ -147,6 +147,7 @@ int settings_syscall_get(const char *key, char *out, int n) {
     if (!strcmp(key, "display.report")) return ksnprintf(out, n, "%s", intelgfx_report());
     if (!strcmp(key, "display.offer")) return ksnprintf(out, n, "%s", intelgfx_offer());
     if (!strcmp(key, "sound.outputs")) return hda_outputs(out, n);
+    if (!strcmp(key, "devices.list")) return devices_report(out, n);
     if (!strcmp(key, "sound.report")) return ksnprintf(out, n, "%s", hda_report());
     if (!strcmp(key, "sound.current")) return ksnprintf(out, n, "%s", hda_current());
     if (!strcmp(key, "lock.password")) return ksnprintf(out, n, "%s", settings_get(key)[0] ? "set" : "");

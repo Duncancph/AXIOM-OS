@@ -168,7 +168,7 @@ static void port_init(volatile uint8_t *hba, int num) {
 
 static void ahci_init(struct pci_dev *pd) {
     uint64_t sz, phys = pci_bar(pd, 5, &sz);
-    if (!phys) return;
+    if (!phys) { dev_claim(pd, "ahci", DEV_FAILED, 0, "Its registers aren't set up (no memory window), so it can't be used."); return; }
     uint16_t cmd = pci_read16(pd->bus, pd->dev, pd->fn, 4);
     pci_write16(pd->bus, pd->dev, pd->fn, 4, cmd | 6);    /* memory space + bus master */
     volatile uint8_t *hba = map_mmio(phys, sz ? sz : 0x1100);
@@ -179,7 +179,10 @@ static void ahci_init(struct pci_dev *pd) {
     wr(hba, GHC, rd(hba, GHC) | (1u << 31));             /* AHCI mode */
     wr(hba, GHC, rd(hba, GHC) & ~2u);                    /* no interrupts: polled */
     uint32_t pi = rd(hba, PI);
-    for (int i = 0; i < 32; i++) if (pi & (1u << i)) port_init(hba, i);
+    int np = 0;
+    for (int i = 0; i < 32; i++) if (pi & (1u << i)) { port_init(hba, i); np++; }
+    char note[80]; ksnprintf(note, sizeof note, "SATA controller (AHCI), %d port%s", np, np == 1 ? "" : "s");
+    dev_claim(pd, "ahci", DEV_OK, 0, note);
 }
 
 void ahci_init_all(void) {

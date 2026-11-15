@@ -1113,6 +1113,8 @@ void net_init(void) {
         struct netif *n = e1000_probe(p);
         if (!n) n = rtl8168_probe(p);
         if (!n) continue;
+        { char note[96]; ksnprintf(note, sizeof note, "Wired network, MAC %02x:%02x:%02x:%02x:%02x:%02x", n->mac[0], n->mac[1], n->mac[2], n->mac[3], n->mac[4], n->mac[5]);
+          dev_claim(p, n->driver, DEV_OK, n->adapter, note); }
         LOG_OK("Network: %s (%s), MAC %02x:%02x:%02x:%02x:%02x:%02x\n", n->adapter, n->driver,
                n->mac[0], n->mac[1], n->mac[2], n->mac[3], n->mac[4], n->mac[5]);
         net_add_netif(n);

@@ -170,6 +170,15 @@ uint16_t pci_read16(uint8_t b, uint8_t d, uint8_t f, uint8_t off);
 void pci_write16(uint8_t b, uint8_t d, uint8_t f, uint8_t off, uint16_t v);
 uint64_t pci_bar(struct pci_dev *p, int bar, uint64_t *size);
 const char *pci_class_name(uint8_t cls, uint8_t sub, uint8_t pif);
+/* the Device Manager (devices.c) */
+enum { DEV_OK = 1, DEV_FAILED, DEV_OFF };
+void dev_claim(const struct pci_dev *pd, const char *driver, int status, const char *name, const char *note);
+void dev_line(const char *kind, const char *name, const char *driver, const char *status, const char *where, const char *ids, const char *detail);
+int devices_report(char *out, int cap);
+void usb_devices(void);       /* xhci.c: a dev_line for each USB device */
+void disk_devices(void);      /* disk.c: a dev_line for each drive */
+extern bool mouse_present;
+extern int ncpus_on, ncpus_found;
 
 /* ---- acpi.c ---- */
 void acpi_init(void);

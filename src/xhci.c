@@ -721,13 +721,39 @@ static bool xhci_start(struct pci_dev *p) {
 void xhci_init_all(void) {
     for (int i = 0; i < pci_count && nctrl < 4; i++) {
         struct pci_dev *p = &pci_devs[i];
-        if (p->class_code == 0x0C && p->subclass == 0x03 && p->prog_if == 0x30) xhci_start(p);
+        if (p->class_code == 0x0C && p->subclass == 0x03 && p->prog_if == 0x30) {
+            if (xhci_start(p)) {
+                char note[80]; ksnprintf(note, sizeof note, "USB 3 controller (xHCI), %u ports", ctrls[nctrl - 1].max_ports);
+                dev_claim(p, "xhci", DEV_OK, 0, note);
+            } else dev_claim(p, "xhci", DEV_FAILED, 0, "The USB controller didn't start (see the boot log), so its ports won't work.");
+        }
     }
     if (!nctrl) { LOG_WARN("No USB 3 (xHCI) controller found\n"); return; }
     sleep_ms(300);   /* let devices connect / USB3 links train after the reset */
     for (int c = 0; c < nctrl; c++) {
         struct xhci *x = &ctrls[c];
         for (uint32_t port = 1; port <= x->max_ports; port++) enumerate_port(x, port);
+    }
+}
+
+void usb_devices(void) {
+    for (int i = 0; i < USB_MAX_DEVS; i++) {
+        struct usb_dev *d = &usb_devs[i];
+        if (!d->used || !d->vid) continue;
+        char name[110], where[32], ids[16], det[120];
+        if (d->manufacturer[0] && d->product[0] && strncmp(d->product, d->manufacturer, strlen(d->manufacturer))) ksnprintf(name, sizeof name, "%s %s", d->manufacturer, d->product);
+        else ksnprintf(name, sizeof name, "%s", d->product[0] ? d->product : d->dclass == 9 ? "USB hub" : "USB device");
+        if (d->parent) ksnprintf(where, sizeof where, "USB port %d.%d", d->root_port, d->parent_port); else ksnprintf(where, sizeof where, "USB port %d", d->root_port);
+        ksnprintf(ids, sizeof ids, "%04x:%04x", d->vid, d->pid);
+        const char *dr = d->driver, *kind = "USB";
+        if (dr) {
+            if (!strcmp(dr, "keyboard") || !strcmp(dr, "mouse") || !strcmp(dr, "hid")) kind = "Input";
+            else if (!strcmp(dr, "storage")) kind = "Storage";
+            else if (!strcmp(dr, "bluetooth")) kind = "Bluetooth";
+            else if (!strcmp(dr, "cdc-ecm") || !strcmp(dr, "cdc-ncm") || !strcmp(dr, "rndis")) kind = "Network";
+        } else if (d->dclass == 9) kind = "USB";
+        ksnprintf(det, sizeof det, "%s%s", speed_name(d->speed), dr ? "" : " - AXIOM doesn't have a driver for this kind of USB device yet");
+        dev_line(kind, name, dr ? dr : "", dr ? "ok" : "nodriver", where, ids, det);
     }
 }
 

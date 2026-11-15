@@ -278,6 +278,11 @@ void hda_init_all(void) {
         if (pci_devs[i].class_code == 0x04 && pci_devs[i].subclass == 0x03) {
             C = &ctls[nctl];
             hda_init(&pci_devs[i]);
+            bool hd = is_hdmi_ctl(&pci_devs[i]);
+            if (ready) dev_claim(&pci_devs[i], "hda", DEV_OK, hd ? "Intel HDMI sound" : "Intel HD Audio",
+                                 hd ? "Sound over HDMI to the monitor's speakers" : "Headphone jack and speakers");
+            else dev_claim(&pci_devs[i], "hda", DEV_FAILED, hd ? "Intel HDMI sound" : "Intel HD Audio",
+                           hd ? "No HDMI sound: the monitor didn't offer speakers, or no codec answered" : "No usable speaker or headphone output was found");
             if (ready) nctl++; else memset(C, 0, sizeof *C);
         }
     C = &none;

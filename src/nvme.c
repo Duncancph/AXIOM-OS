@@ -97,6 +97,7 @@ static int bd_flush(void *ctx) {
 
 static void nvme_init(struct pci_dev *pd) {
     uint64_t sz, phys = pci_bar(pd, 0, &sz);
+    dev_claim(pd, "nvme", DEV_FAILED, 0, "The SSD didn't start (see the boot log).");
     if (!phys) return;
     uint16_t pcmd = pci_read16(pd->bus, pd->dev, pd->fn, 4);
     pci_write16(pd->bus, pd->dev, pd->fn, 4, (pcmd | 6) | (1 << 10));   /* memory + bus master, INTx off */
@@ -151,6 +152,8 @@ static void nvme_init(struct pci_dev *pd) {
     strncpy0(n->bd.name, model[0] ? model : "NVMe SSD", sizeof n->bd.name);
     LOG_OK("NVMe SSD: %s, %lu MB\n", n->bd.name, nsze * n->bd.bsize >> 20);
     disk_add(&n->bd, DISK_NVME);
+    char note[96]; ksnprintf(note, sizeof note, "NVMe SSD controller, %lu GB", nsze * n->bd.bsize >> 30);
+    dev_claim(pd, "nvme", DEV_OK, n->bd.name, note);
 }
 
 void nvme_init_all(void) {

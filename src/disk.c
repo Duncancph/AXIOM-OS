@@ -150,6 +150,18 @@ void disk_remove(struct blockdev *bd) {
     }
 }
 
+void disk_devices(void) {
+    for (int i = 0; i < MAXD; i++) {
+        struct disk *d = &disks[i];
+        if (!d->used) continue;
+        char det[120]; uint64_t mb = d->bd->blocks * d->bd->bsize >> 20;
+        if (mb >= 10240) ksnprintf(det, sizeof det, "%lu GB, %d partition%s%s", mb / 1024, d->nparts, d->nparts == 1 ? "" : "s", d == sysdisk ? ", AXIOM is installed here" : "");
+        else ksnprintf(det, sizeof det, "%lu MB, %d partition%s%s", mb, d->nparts, d->nparts == 1 ? "" : "s", d == sysdisk ? ", AXIOM is installed here" : "");
+        dev_line("Drives", d->bd->name, d->kind == DISK_NVME ? "nvme" : d->kind == DISK_USB ? "storage" : "ahci", "ok",
+                 d->kind == DISK_NVME ? "NVMe" : d->kind == DISK_USB ? "USB" : "SATA", "", det);
+    }
+}
+
 int disk_list(struct dunc_disk *out, int max) {
     int n = 0;
     for (int i = 0; i < MAXD && n < max; i++) {
