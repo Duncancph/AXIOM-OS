@@ -63,8 +63,8 @@ static uint64_t cycles_per_ms(void) {
     if (t - cal_ms0 < 200) return 3000000;               /* until measured: assume 3 GHz */
     return (cyc() - cal_tsc0) / (t - cal_ms0);
 }
-static bool busy_said;
-static void script_begin(void) { run_start = sys_time(); cyc_begin = cyc(); busy_said = false; }
+static bool busy_said; static uint64_t bar_wait;     /* bar_wait: when a click for Arc's bar arrived during this script */
+static void script_begin(void) { bar_wait = 0; run_start = sys_time(); cyc_begin = cyc(); busy_said = false; }
 static void script_end(void) { if (cyc_begin) page_cycles += cyc() - cyc_begin; cyc_begin = 0; }
 static uint64_t page_cpu_ms(void) { return (page_cycles + (cyc_begin ? cyc() - cyc_begin : 0)) / cycles_per_ms(); }
 static bool skip_said;
@@ -86,9 +86,13 @@ static _Bool h_interrupt(void *c) {
         while (sys_event(&e, 0) > 0) {
             if (e.type == EV_CLOSE) sys_exit(0);
             if (e.type == EV_KEY && e.key == 27) { scripts_off("stopped with Esc"); return true; }
-            if (e.type == EV_RESIZE) web_requeue_event(&e);
+            /* clicks and keys aren't lost while a script runs: they wait for it to finish. One meant for Arc's
+             * own bar doesn't wait long: a script still busy a second later is stopped for it. */
+            if (e.type == EV_RESIZE || e.type == EV_MOUSE_DOWN || e.type == EV_MOUSE_UP || e.type == EV_KEY) web_requeue_event(&e);
+            if (web_event_for_bar(&e) && !bar_wait) bar_wait = now;
         }
     }
+    if (bar_wait && now - bar_wait > 1000) { bar_wait = 0; scripts_off("stopped so that Arc's own bar could be used (the page's script was still busy)"); return true; }
     return false;
 }
 static void h_console(void *c, int level, const char *s) {

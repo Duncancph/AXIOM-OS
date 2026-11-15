@@ -162,6 +162,12 @@ static void on_stuck_alarm(void *frame) {
 }
 /* a script is running and making progress (called from the script engine's regular check): start the 8 s again,
  * so only Arc's own code going round in circles sets the alarm off, not a long script */
+/* is this event for Arc's own bar (back, reload, the address, Go) rather than the page? */
+bool web_event_for_bar(const struct dunc_event *e) {
+    if (e->type == EV_MOUSE_DOWN) return e->y < BAR_H;
+    if (e->type == EV_KEY) return e->key == 12 || e->key == 18 || e->key == KEY_F5;     /* Ctrl+L, Ctrl+R, F5 */
+    return false;
+}
 void web_still_alive(void) { if (!profiling) sys_alarm(8000 * web_time_scale, on_stuck_alarm); }
 static void recover_from_stuck(void) {
     stuck_count++;
@@ -1906,6 +1912,10 @@ int main(void) {
         if (dunc_setjmp(stuck_jb)) recover_from_stuck();
         if (!profiling) sys_alarm(8000 * web_time_scale, on_stuck_alarm);
         else if (sys_time() - prof_last > 60000) { prof_last = sys_time(); prof_dump(); }
+        if (nrequeued && !pend && !web_script_waiting) {   /* clicks and keys that arrived while a script was running */
+            struct dunc_event q = requeued[0]; for (int i = 1; i < nrequeued; i++) requeued[i - 1] = requeued[i];
+            nrequeued--; handle_event(&q); draw(); continue;
+        }
         if (pend) {
             pend = false; abort_fetch = false;
             char u[600]; strncpy0(u, pend_url, sizeof u);
