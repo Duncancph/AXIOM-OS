@@ -225,15 +225,17 @@ static int write_gpt(struct blockdev *bd, uint64_t *first, uint64_t *count) {
 
 static const char *GRUBCFG_FMT =
     "# AXIOM boot menu. Settings > Display changes the screen size here.\n"
+    "# (gfxpayload comes after multiboot2: loading the kernel resets it to the kernel's own preference)\n"
     "set timeout=2\nset default=0\ninsmod all_video\ninsmod gfxterm\n"
     "menuentry \"AXIOM\" {\n"
+    "    multiboot2 /duncos/thane.elf\n    module2 /duncos/initrd.tar initrd\n"
+    "    module2 /duncos/thane.elf kernel\n    module2 /EFI/BOOT/BOOTX64.EFI bootx64\n%s"
     "    set gfxpayload=%s1920x1200x32,1920x1080x32,1920x800x32,1680x1050x32,1600x900x32,1440x900x32,1366x768x32,1280x1024x32,1280x800x32,1280x720x32,1024x768x32,auto\n"
-    "    multiboot2 /duncos/thane.elf\n    module2 /duncos/initrd.tar initrd\n"
-    "    module2 /duncos/thane.elf kernel\n    module2 /EFI/BOOT/BOOTX64.EFI bootx64\n%s    boot\n}\n"
+    "    boot\n}\n"
     "menuentry \"AXIOM (safe graphics 1024x768)\" {\n"
-    "    set gfxpayload=1024x768x32,auto\n"
     "    multiboot2 /duncos/thane.elf\n    module2 /duncos/initrd.tar initrd\n"
-    "    module2 /duncos/thane.elf kernel\n    module2 /EFI/BOOT/BOOTX64.EFI bootx64\n%s    boot\n}\n";
+    "    module2 /duncos/thane.elf kernel\n    module2 /EFI/BOOT/BOOTX64.EFI bootx64\n%s"
+    "    set gfxpayload=1024x768x32,auto\n    boot\n}\n";
 
 static char gfx_pref[32];
 
@@ -245,22 +247,22 @@ static int write_grubcfg(const char *dir) {
     if (gfx_pref[0]) ksnprintf(first, sizeof first, "%s,", gfx_pref);
     struct dunc_stat st; char bp[64]; ksnprintf(bp, sizeof bp, "%s/biosboot.img", dir);
     const char *bios = vfs_stat(bp, &st) == FS_OK ? "    module2 /duncos/biosboot.img biosboot\n" : "";   /* only if it's there */
-    int n = ksnprintf(cfg, sizeof cfg, GRUBCFG_FMT, first, bios, bios);
+    int n = ksnprintf(cfg, sizeof cfg, GRUBCFG_FMT, bios, first, bios);
     if (n < (int)sizeof cfg - 300)                         /* what the graphics card offers (Settings > Display can only pick from these) */
         n += ksnprintf(cfg + n, sizeof cfg - n, "menuentry \"Show the screen sizes this computer offers\" {\n    videoinfo\n"
                        "    echo\n    echo \"AXIOM can use the sizes listed above. Press a key to go back.\"\n    sleep --interruptible 300\n}\n");
     char pk[64]; ksnprintf(pk, sizeof pk, "%s/thane-prev.elf", dir);
     if (vfs_stat(pk, &st) == FS_OK && n < (int)sizeof cfg - 400)       /* the version before the last update */
-        n += ksnprintf(cfg + n, sizeof cfg - n, "menuentry \"AXIOM (previous version)\" {\n    set gfxpayload=auto\n"
+        n += ksnprintf(cfg + n, sizeof cfg - n, "menuentry \"AXIOM (previous version)\" {\n"
                        "    multiboot2 /duncos/thane-prev.elf\n    module2 /duncos/initrd-prev.tar initrd\n"
-                       "    module2 /duncos/thane-prev.elf kernel\n    module2 /EFI/BOOT/BOOTX64.EFI bootx64\n    boot\n}\n");
+                       "    module2 /duncos/thane-prev.elf kernel\n    module2 /EFI/BOOT/BOOTX64.EFI bootx64\n    set gfxpayload=auto\n    boot\n}\n");
     ksnprintf(path, sizeof path, "%s/grub.cfg", dir);
     static char old[2400]; long on = vfs_read(path, old, 0, sizeof old);
     if (on == n && !memcmp(old, cfg, n)) return FS_OK;     /* unchanged: don't write */
     if (!strcmp(dir, "/system/boot") && on > 0) {           /* the screen sizes asked for changed: they apply from the next start */
         old[on < (long)sizeof old ? on : (long)sizeof old - 1] = 0;
         char *a = find(old, "set gfxpayload="), *b = find(cfg, "set gfxpayload=");
-        if (a && b) { char *ae = find_nl(a), *be = find_nl(b); if (ae && be && (ae - a != be - b || memcmp(a, b, be - b))) boot_sizes_changed = true; }
+        if (a && b) { char *ae = find_nl(a), *be = find_nl(b); if (ae && be && (ae - a != be - b || memcmp(a, b, be - b) || a - old != b - cfg)) boot_sizes_changed = true; }
     }
     long r = vfs_write(path, cfg, n);
     return r < 0 ? (int)r : FS_OK;
