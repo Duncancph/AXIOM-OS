@@ -55,10 +55,69 @@ int http_trusted_roots(void) { load_roots(); return x509_root_count(); }
 int http_trust_pem(const char *pem, long n) { load_roots(); return x509_add_roots_pem(pem, n); }
 
 /* a connection: plain TCP or TLS on top of it */
-struct conn { int h; bool tls; };
-static long c_write(struct conn *c, const void *b, uint32_t n) { return c->tls ? tls_write(&tls_conn, b, n) : tcp_write(c->h, b, n); }
-static long c_read(struct conn *c, void *b, uint32_t n, long to) { return c->tls ? tls_read(&tls_conn, b, n, to) : net_read(c->h, b, n, to); }
-static void c_close(struct conn *c) { if (c->tls) tls_close(&tls_conn); tcp_shut(c->h); }
+/* Connections are kept open after a request and used again for the next one to the same server (keep-alive):
+ * a page's many files then share a connection instead of each setting up its own (and, for https, its own
+ * TLS handshake). Idle ones are closed after 20 s or when their place is needed. */
+#define POOL 8
+#define IDLE_MS 20000
+struct pconn { int h; bool tls, busy, open, temp; struct tls *t; char host[128]; int port; uint64_t idle_since; struct http_security sec; };
+static struct pconn pool[POOL];
+struct conn { struct pconn *p; };
+static long c_write(struct conn *c, const void *b, uint32_t n) { return c->p->tls ? tls_write(c->p->t, b, n) : tcp_write(c->p->h, b, n); }
+static long c_read(struct conn *c, void *b, uint32_t n, long to) { return c->p->tls ? tls_read(c->p->t, b, n, to) : net_read(c->p->h, b, n, to); }
+static void p_close(struct pconn *p) {
+    if (p->open) { if (p->tls && p->t) tls_close(p->t); tcp_shut(p->h); }
+    free(p->t); p->t = 0; p->open = p->busy = false;
+    if (p->temp) free(p);
+}
+static void c_close(struct conn *c) { if (c->p) p_close(c->p); c->p = 0; }
+static void c_keep(struct conn *c) {                   /* done with it for now: leave it open for the next request */
+    if (!c->p) return;
+    if (c->p->temp) { p_close(c->p); c->p = 0; return; }
+    c->p->busy = false; c->p->idle_since = sys_time(); c->p = 0;
+}
+static int connect_any(const char *host, int port, long cap_ms);
+static void load_roots(void);
+static int64_t unix_now(void);
+/* a connection to host:port, an idle open one if there is one (*reused), else a new one; 0 and *err on failure */
+static struct pconn *conn_get(const char *host, int port, bool https, bool may_reuse, long cap_ms, bool *reused, long *err) {
+    uint64_t now = sys_time();
+    *reused = false;
+    for (int i = 0; i < POOL; i++) {
+        struct pconn *p = &pool[i];
+        if (!p->open || p->busy) continue;
+        if (now - p->idle_since > IDLE_MS) { p_close(p); continue; }
+        if (!may_reuse || p->tls != https || p->port != port || strcmp(p->host, host)) continue;
+        char tmp; long r = p->tls ? tls_read(p->t, &tmp, 1, 0) : tcp_read(p->h, &tmp, 1, 0);
+        if (r != NET_EAGAIN) { p_close(p); continue; }      /* the server has closed it (or sent something unasked) */
+        p->busy = true; *reused = true; http_sec = p->sec;
+        return p;
+    }
+    struct pconn *p = 0;
+    for (int i = 0; i < POOL && !p; i++) if (!pool[i].open && !pool[i].busy) p = &pool[i];
+    if (!p) {                                              /* full: the longest idle one makes room */
+        for (int i = 0; i < POOL; i++) if (pool[i].open && !pool[i].busy && (!p || pool[i].idle_since < p->idle_since)) p = &pool[i];
+        if (p) p_close(p);
+    }
+    if (!p) { p = calloc(1, sizeof *p); if (!p) { *err = NET_ERESET; return 0; } p->temp = true; }   /* all in use at once */
+    bool temp = p->temp; memset(p, 0, sizeof *p); p->temp = temp;
+    p->h = connect_any(host, port, cap_ms);
+    if (p->h < 0) { *err = p->h; if (temp) free(p); return 0; }
+    p->open = true; p->busy = true; p->tls = https; p->port = port; strncpy0(p->host, host, sizeof p->host);
+    if (https) {
+        load_roots();
+        p->t = calloc(1, sizeof *p->t);
+        struct tls_io io = { &p->h, t_send, t_recv, t_rand, unix_now() };
+        int tr = p->t ? tls_connect(p->t, &io, host) : NET_ERESET;
+        if (tr) { if (p->t) tls_conn.alert = p->t->alert; tcp_shut(p->h); p->open = false; p_close(p); *err = tr; return 0; }
+        http_sec.secure = 1;
+        strncpy0(http_sec.cipher, p->t->cipher, sizeof http_sec.cipher);
+        strncpy0(http_sec.subject, p->t->peer, sizeof http_sec.subject);
+        strncpy0(http_sec.issuer, p->t->issuer, sizeof http_sec.issuer);
+    }
+    p->sec = http_sec;
+    return p;
+}
 
 const char *net_strerror(int e) {
     switch (e) {
@@ -486,37 +545,36 @@ long http_request(const char *url_in, const struct http_req *rq, http_sink sink,
         hostport(&u, hp, sizeof hp, !default_port); hostport(&u, hpp, sizeof hpp, true);
         if (final_url) ksnprintf(final_url, fulen, "%s://%s%s", scheme, hp, u.path);
         memset(&http_sec, 0, sizeof http_sec);
-        struct conn c = { connect_any(u.host, u.port, rq ? rq->timeout_ms : 0), u.https };
-        if (c.h < 0) return c.h;
-        if (u.https) {
-            load_roots();
-            struct tls_io io = { &c.h, t_send, t_recv, t_rand, unix_now() };
-            int tr = tls_connect(&tls_conn, &io, u.host);
-            if (tr) { tcp_shut(c.h); return tr; }
-            http_sec.secure = 1;
-            strncpy0(http_sec.cipher, tls_conn.cipher, sizeof http_sec.cipher);
-            strncpy0(http_sec.subject, tls_conn.peer, sizeof http_sec.subject);
-            strncpy0(http_sec.issuer, tls_conn.issuer, sizeof http_sec.issuer);
-        }
+        bool reused = false; long cerr = NET_ERESET;
+        bool keepalive = (http_options & HTTP_OPT_KEEPALIVE) != 0;
+        struct conn c = { conn_get(u.host, u.port, u.https, keepalive && !retried, rq ? rq->timeout_ms : 0, &reused, &cerr) };
+        if (!c.p) return cerr;
         char target[1600]; encode_target(u.path, target, sizeof target);
         bool browser = http_options != 0;
-        int rl = ksnprintf(req, sizeof req, "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: AXIOM/0.1 (Axiom Core)%s\r\nAccept: %s\r\n%sConnection: close\r\n",
+        int rl = ksnprintf(req, sizeof req, "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: AXIOM/0.1 (Axiom Core)%s\r\nAccept: %s\r\n%sConnection: %s\r\n",
                            method, target, hp, browser ? " Web/0.3" : "",
                            browser ? "text/html,application/xhtml+xml,text/css,image/png,image/jpeg,image/gif,*/*;q=0.5" : "*/*",
-                           want_gz ? "Accept-Encoding: gzip\r\n" : "");
+                           want_gz ? "Accept-Encoding: gzip\r\n" : "", (http_options & HTTP_OPT_KEEPALIVE) ? "keep-alive" : "close");
         if (rq && rq->referer && rq->referer[0]) rl += ksnprintf(req + rl, sizeof req - rl, "Referer: %s\r\n", rq->referer);
         if (rq && rq->extra_headers) rl += ksnprintf(req + rl, sizeof req - rl, "%s", rq->extra_headers);
         if (cookies) rl += cookie_header(req + rl, sizeof req - rl - 200, u.host, u.path, u.https);
         if (body) rl += ksnprintf(req + rl, sizeof req - rl, "Content-Type: %s\r\nContent-Length: %ld\r\n",
                                   rq->content_type ? rq->content_type : "application/x-www-form-urlencoded", body_len);
         rl += ksnprintf(req + rl, sizeof req - rl, "\r\n");
-        if (c_write(&c, req, rl) < 0 || (body_len && c_write(&c, body, body_len) < 0)) { c_close(&c); return NET_ERESET; }
+        if (c_write(&c, req, rl) < 0 || (body_len && c_write(&c, body, body_len) < 0)) {
+            c_close(&c);
+            if (reused && !retried) { retried = 2; hop--; continue; }       /* a kept connection had gone: a fresh one */
+            return NET_ERESET;
+        }
         long hl = 0, hend = -1;
         while (hend < 0 && hl < (long)sizeof hdr - 1) {
             long n = c_read(&c, hdr + hl, sizeof hdr - 1 - hl, rq && rq->timeout_ms > 0 ? rq->timeout_ms : 15000);
-            if (n == 0 && hl == 0 && !retried && !body_len) { retried = 1; c_close(&c); hop--; break; }   /* closed straight away: try once more */
+            if ((n == 0 || (reused && n < 0 && n != NET_EAGAIN)) && hl == 0 && !retried && (!body_len || reused)) { retried = 1; c_close(&c); hop--; break; }   /* closed straight away: try once more */
             if (n <= 0) { c_close(&c); return n == 0 ? (hl ? HTTP_EBAD : HTTP_ECLOSED) : n; }
-            hl += n; hdr[hl] = 0;
+            hl += n;
+            { long sk = 0; while (sk < hl && (hdr[sk] == '\r' || hdr[sk] == '\n')) sk++;       /* line ends left over from the answer before */
+              if (sk) { memmove(hdr, hdr + sk, hl - sk); hl -= sk; } }
+            hdr[hl] = 0;
             for (long i = 3; i < hl; i++) if (hdr[i - 3] == '\r' && hdr[i - 2] == '\n' && hdr[i - 1] == '\r' && hdr[i] == '\n') { hend = i + 1; break; }
         }
         if (hend < 0 && hl == 0 && retried == 1) { retried = 2; continue; }           /* the retry above */
@@ -524,6 +582,7 @@ long http_request(const char *url_in, const struct http_req *rq, http_sink sink,
         if (!starts_ci(hdr, "HTTP/1.")) { c_close(&c); return HTTP_ENOTHTTP; }
         int code = 0; { const char *s = hdr + 8; while (*s == ' ') s++; while (*s >= '0' && *s <= '9') code = code * 10 + (*s++ - '0'); }
         long clen = -1; bool chunked = false, gz = false; static char loc[URL_MAX]; loc[0] = 0;
+        bool srv_close = hdr[7] == '0';                    /* HTTP/1.0, or "Connection: close": not kept */
         if (ctype && ctlen) ctype[0] = 0;
         for (char *line = hdr; line < hdr + hend;) {
             char *nl = line; while (nl < hdr + hend && *nl != '\n') nl++;
@@ -533,6 +592,7 @@ long http_request(const char *url_in, const struct http_req *rq, http_sink sink,
             if (starts_ci(line, "content-length:")) clen = katoi(v);
             else if (starts_ci(line, "transfer-encoding:") && starts_ci(v, "chunked")) chunked = true;
             else if (starts_ci(line, "location:")) strncpy0(loc, v, sizeof loc);
+            else if (starts_ci(line, "connection:") && starts_ci(v, "close")) srv_close = true;
             else if (starts_ci(line, "content-type:") && ctype) strncpy0(ctype, v, ctlen);
             else if (starts_ci(line, "content-encoding:") && (starts_ci(v, "gzip") || starts_ci(v, "x-gzip"))) gz = want_gz;
             else if (starts_ci(line, "set-cookie:") && cookies) set_cookie(v, u.host, u.path, u.https, false);
@@ -573,7 +633,8 @@ long http_request(const char *url_in, const struct http_req *rq, http_sink sink,
             if (chunked) got += dechunk_feed(&dc, buf, n, out, octx, &stop);
             else { if (clen >= 0 && got + n > clen) n = clen - got; if (!out(buf, n, octx)) stop = true; got += n; }
         }
-        c_close(&c);
+        /* all of the answer read and the server keeps the connection: it can serve the next request */
+        if (keepalive && !stop && !srv_close && (chunked ? dc.state == 3 : (clen >= 0 && got >= clen))) c_keep(&c); else c_close(&c);
         if (!gz) return got;
         /* decode the gzip body and pass it on */
         long r = HTTP_EGZIP;

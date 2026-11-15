@@ -74,6 +74,7 @@ long http_request(const char *url, const struct http_req *rq, http_sink sink, vo
  * /home/.web/cookies); HTTP_OPT_GZIP asks for gzip-compressed responses and decodes them. */
 #define HTTP_OPT_COOKIES 1
 #define HTTP_OPT_GZIP 2
+#define HTTP_OPT_KEEPALIVE 4      /* keep connections open and use them again (a browser loading many files) */
 extern int http_options;
 int http_cookie_count(void);
 void http_cookies_clear(void);

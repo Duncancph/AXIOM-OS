@@ -1874,7 +1874,7 @@ static void handle_event(struct dunc_event *e) {
 
 int main(void) {
     char arg[256];
-    http_options = HTTP_OPT_COOKIES | HTTP_OPT_GZIP;
+    http_options = HTTP_OPT_COOKIES | HTTP_OPT_GZIP | HTTP_OPT_KEEPALIVE;
     { char ts[8] = ""; sys_setting_get("web.test_slow", ts, sizeof ts); if (ts[0] == '1') web_time_scale = 40; }   /* emulator testing only */
     { char ts[8] = ""; sys_setting_get("web.profile", ts, sizeof ts); if (ts[0] == '1') { profiling = true; prof_last = sys_time(); sys_alarm(10, on_prof_alarm); } }
     css_init();
