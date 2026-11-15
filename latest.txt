@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 74
-notes Settings > Display can switch to the monitor's full size (1920x1080)
-file kernel b74/thane.elf.gz 14702360 70a1cae003f2c46ba058ba54ee33f3f6deb6f24af8eeb1455f2961f7b3aab46f
-file initrd b74/initrd.tar.gz 1280000 d88e6ecc5103c031c06e5c26cdc0037ffc04d5d72d3d69d99350ba7082e3526e
-file bootx64 b74/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b74/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022100951d35fbd051e8b4933e936823061636520eca71ae66750b20b55ea19c4357f7022073a65a71fc18b1c90c0f904baa1539d0aa2d4ff891f84ac175546cb8dcb91351
+build 77
+notes Web: pages whose scripts measure the page in a loop (YouTube) no longer get stuck
+file kernel b77/thane.elf.gz 14702360 92113e6e52997d1dc5f5b85b7664038abbaa31ff9abc9a164564bf29faa0a833
+file initrd b77/initrd.tar.gz 1280000 d88e6ecc5103c031c06e5c26cdc0037ffc04d5d72d3d69d99350ba7082e3526e
+file bootx64 b77/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b77/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3046022100f91fef8b1d2ae07ec628819dc24f551560c5db2ba7e773e4564f3d67ccb9094d022100cb16e95076e991dbee728dfae1bbef50fa98260fa398e6cd89f22673e11a728c
