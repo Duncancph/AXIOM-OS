@@ -1602,6 +1602,7 @@ void web_message(const char *title, const char *msg) {
 }
 bool web_node_rect(struct node *n, int *x, int *y, int *w, int *h) {
     layout_for_script();
+    if (n->bgen == layout_pass && n->bgen) { *x = n->bx; *y = n->by; *w = n->bw; *h = n->bh; return true; }   /* a block's box */
     int x0 = 1 << 30, y0 = 1 << 30, x1 = -(1 << 30), y1 = -(1 << 30);
     for (int i = 0; i < lay.nit; i++) {
         struct node *s = lay.it[i].src; int k = 0;

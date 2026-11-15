@@ -48,6 +48,7 @@ struct node {
     struct imgent *img;               /* <img> */
     int link;                         /* index into the page's links, or -1 */
     int y;                            /* layout position (for #fragment scrolling) */
+    int bx, by, bw, bh, bgen;         /* its border box from the last layout (bgen == layout_pass), for scripts */
     int minw, maxw, iw_gen;           /* intrinsic widths, cached per layout */
     struct node *form;                /* the form a control belongs to */
     int jsw;                          /* scripts: index+1 of this node's JavaScript object (0: none yet) */
@@ -155,7 +156,8 @@ struct layout {
     uint32_t canvas_bg;
 };
 void layout_doc(struct doc *d, struct layout *L, int width);
-extern int layout_viewport_h;                          /* the visible height: fixed boxes are placed against it */
+extern int layout_viewport_h;
+extern int layout_pass;                                /* counts layouts: a node's box is current if bgen == layout_pass */                          /* the visible height: fixed boxes are placed against it */
 void layout_free(struct layout *L);
 
 /* ---------------- links, images, forms (owned by web.c) ---------------- */

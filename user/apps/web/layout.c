@@ -1067,6 +1067,7 @@ __attribute__((noinline)) static void replaced_block(struct fctx *cc, struct nod
  * They are left out of the flow where they appear (defer_abs, remembering where they would have been), and
  * placed once their containing block - the nearest positioned ancestor, or the window - has its size. */
 int layout_viewport_h = 700;
+int layout_pass;
 struct apend { struct node *n; struct ictx ic; int sx, sy; uint8_t fixed; };
 static struct apend *apend; static int napend, capend, abs_bottom;
 static void defer_abs(struct fctx *c, struct node *n, struct ictx ic) {
@@ -1120,7 +1121,7 @@ static void place_abs(const struct apend *p, int cx, int cy, int cw, int ch, int
     cur_src = saved;
     ms->h = oh; ms->bsizing = obs;
     int i1 = L->nit, h = t.y - y0;
-    if (!has[0] && has[2]) { int ny = cy + ch - ins[2] - h; shift_xy(i0, i1, 0, ny - y0); n->y += ny - y0; y0 = ny; }
+    if (!has[0] && has[2]) { int ny = cy + ch - ins[2] - h; shift_xy(i0, i1, 0, ny - y0); n->y += ny - y0; n->by += ny - y0; y0 = ny; }
     if (st->z < 0) move_items_before(first_item, i0, i1);    /* behind its containing block's content */
     if (!p->fixed && y0 + h > abs_bottom) abs_bottom = y0 + h;
 }
@@ -1216,12 +1217,13 @@ static void layout_block_(struct fctx *c, struct node *n, struct ictx ic, int fo
     if (bgi >= 0) { struct ditem *b = IT(bgi); b->x = x0; b->y = top; b->w = w + frame; b->h = bottom - top; b->col = st->bg & 0xFFFFFF; }
     if (bgimg >= 0) { struct ditem *b = IT(bgimg); b->x = x0; b->y = top; b->w = w + frame; b->h = bottom - top; }
     borders(st, x0, top, w + frame, bottom - top);
+    n->bx = x0; n->by = top; n->bw = w + frame; n->bh = bottom - top; n->bgen = layout_pass;
     if (st->pos >= 1 && st->pos <= 3)                        /* a containing block for absolute boxes inside */
         place_pending(p0, x0 + bl, top + bt, w + pl + pr, bottom - top - bt - bb, first_item, false);
     if (st->pos == 3) {                                       /* relative: shifted, without moving anything else */
         int dx = st->inset[3].t != L_AUTO ? rlen(st->inset[3], cbw) : st->inset[1].t != L_AUTO ? -rlen(st->inset[1], cbw) : 0;
         int dy = st->inset[0].t == L_PX ? st->inset[0].v : st->inset[2].t == L_PX ? -st->inset[2].v : 0;
-        if (dx || dy) shift_xy(first_item, L->nit, dx, dy);
+        if (dx || dy) { shift_xy(first_item, L->nit, dx, dy); n->bx += dx; n->by += dy; }
     }
     c->y = bottom; c->pm = mb;
 }
@@ -1251,7 +1253,7 @@ void layout_doc(struct doc *d, struct layout *Lo, int width) {
     static struct style rootst; rootst.fsize = 16; rootst.vis = 1;
     c.left = 0; c.width = width; c.y = 0; c.x = 0; c.bst = &rootst; c.line_first = 0; c.fl = new_flist();
     struct ictx ic = { &rootst, 0, -1, 0, false };
-    apend = 0; napend = capend = 0; abs_bottom = 0;
+    apend = 0; napend = capend = 0; abs_bottom = 0; layout_pass++;
     L->doc_w = width;
     if (d->root->st && d->root->st->display != D_NONE) layout_block(&c, d->root, ic, -1);
     place_pending(0, 0, 0, width, layout_viewport_h, 0, true);   /* the rest: against the window */

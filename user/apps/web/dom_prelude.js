@@ -1238,5 +1238,153 @@
   function SVGElement() { throw new TypeError('Illegal constructor'); }
   SVGElement.prototype = Object.create(P); g.SVGElement = SVGElement; g.SVGSVGElement = SVGElement; g.SVGGraphicsElement = SVGElement;
   if (!g.Window) { g.Window = function Window() { throw new TypeError('Illegal constructor'); }; g.Window.prototype = g; }
+
+  // ---- MutationObserver: records from every change to the tree, delivered in a microtask ----
+  (function () {
+    var regs = [], pending = [], queued = false;
+    function deliver() {
+      queued = false;
+      var list = pending; pending = [];
+      for (var i = 0; i < list.length; i++) {
+        var o = list[i]; o._queued = false;
+        var recs = o._records; o._records = [];
+        if (recs.length) { try { o._cb.call(o, recs, o); } catch (e) { reportError(e); } }
+      }
+    }
+    function enqueue(o, rec) {
+      o._records.push(rec);
+      if (!o._queued) { o._queued = true; pending.push(o); }
+      if (!queued) { queued = true; Promise.resolve().then(deliver); }
+    }
+    function notify(target, type, fill) {
+      if (!regs.length || !target) return;
+      var seen = [];
+      for (var p = target, d = 0; p && d < 400; p = D.parent(p), d++) {
+        for (var i = 0; i < regs.length; i++) {
+          var r = regs[i]; if (r.node !== p || (p !== target && !r.opts.subtree)) continue;
+          var o = r.opts;
+          if (type === 'childList' && !o.childList) continue;
+          if (type === 'attributes' && (!o.attributes || (o.attributeFilter && o.attributeFilter.indexOf(fill.attributeName) < 0))) continue;
+          if (type === 'characterData' && !o.characterData) continue;
+          if (seen.indexOf(r.obs) >= 0) continue;
+          seen.push(r.obs);
+          var rec = { type: type, target: target, addedNodes: fill.added || [], removedNodes: fill.removed || [], previousSibling: fill.prev || null,
+                      nextSibling: fill.next || null, attributeName: fill.attributeName || null, attributeNamespace: null, oldValue: null };
+          if ((type === 'attributes' && o.attributeOldValue) || (type === 'characterData' && o.characterDataOldValue)) rec.oldValue = fill.old;
+          enqueue(r.obs, rec);
+        }
+      }
+    }
+    var ins = D.insert, rem = D.remove, setHtml = D.setHtml, setText = D.setTextContent, setAttr = D.setAttr, remAttr = D.removeAttr, setData = D.setData;
+    D.insert = function (p, n, ref) {
+      if (!regs.length) return ins(p, n, ref);
+      var old = D.parent(n), added = D.type(n) === 11 ? kids(n) : [n];
+      if (old && D.type(n) !== 11) notify(old, 'childList', { removed: [n], prev: D.prev(n), next: D.next(n) });
+      var r = ins(p, n, ref);
+      if (added.length) notify(p, 'childList', { added: added, prev: D.prev(added[0]), next: D.next(added[added.length - 1]) });
+      return r;
+    };
+    D.remove = function (n) {
+      if (!regs.length) return rem(n);
+      var p = D.parent(n), prev = p ? D.prev(n) : null, next = p ? D.next(n) : null;
+      var r = rem(n);
+      if (p) notify(p, 'childList', { removed: [n], prev: prev, next: next });
+      return r;
+    };
+    D.setHtml = function (el, h, outer) {
+      if (!regs.length) return setHtml(el, h, outer);
+      var target = outer ? D.parent(el) : el;
+      var before = target ? kids(target) : [];
+      var r = setHtml(el, h, outer);
+      if (target) {
+        var after = kids(target);
+        var removed = before.filter(function (k) { return after.indexOf(k) < 0; }), added = after.filter(function (k) { return before.indexOf(k) < 0; });
+        if (removed.length || added.length) notify(target, 'childList', { removed: removed, added: added });
+      }
+      return r;
+    };
+    D.setTextContent = function (el, t) {
+      if (!regs.length) return setText(el, t);
+      if (D.type(el) !== 1 && D.type(el) !== 11) { var o0 = D.data(el); var r0 = setText(el, t); notify(el, 'characterData', { old: o0 }); return r0; }
+      var before = kids(el), r = setText(el, t), after = kids(el);
+      if (before.length || after.length) notify(el, 'childList', { removed: before, added: after });
+      return r;
+    };
+    D.setAttr = function (el, k, v) {
+      if (!regs.length) return setAttr(el, k, v);
+      var name = String(k).toLowerCase(), old = D.attr(el, name), r = setAttr(el, k, v);
+      notify(el, 'attributes', { attributeName: name, old: old });
+      return r;
+    };
+    D.removeAttr = function (el, k) {
+      if (!regs.length) return remAttr(el, k);
+      var name = String(k).toLowerCase(), old = D.attr(el, name);
+      var r = remAttr(el, k);
+      if (old !== null) notify(el, 'attributes', { attributeName: name, old: old });
+      return r;
+    };
+    if (setData) D.setData = function (n, v) {
+      if (!regs.length) return setData(n, v);
+      var old = D.data(n), r = setData(n, v); notify(n, 'characterData', { old: old }); return r;
+    };
+    function MutationObserver(cb) {
+      if (typeof cb !== 'function') throw new TypeError("Failed to construct 'MutationObserver': parameter 1 is not a function");
+      hidden(this, '_cb', cb); hidden(this, '_records', []); hidden(this, '_queued', false);
+    }
+    MutationObserver.prototype.observe = function (node, opts) {
+      opts = opts || {};
+      var o = { childList: !!opts.childList, subtree: !!opts.subtree, attributeOldValue: !!opts.attributeOldValue, characterDataOldValue: !!opts.characterDataOldValue,
+                attributeFilter: opts.attributeFilter ? Array.prototype.slice.call(opts.attributeFilter).map(function (x) { return String(x).toLowerCase(); }) : null };
+      o.attributes = opts.attributes !== undefined ? !!opts.attributes : !!(o.attributeOldValue || o.attributeFilter);
+      o.characterData = opts.characterData !== undefined ? !!opts.characterData : o.characterDataOldValue;
+      if (!o.childList && !o.attributes && !o.characterData) throw new TypeError("Failed to execute 'observe' on 'MutationObserver': The options object must set at least one of 'attributes', 'characterData', or 'childList' to true.");
+      for (var i = 0; i < regs.length; i++) if (regs[i].obs === this && regs[i].node === node) { regs[i].opts = o; return; }
+      regs.push({ obs: this, node: node, opts: o });
+    };
+    MutationObserver.prototype.disconnect = function () {
+      var self = this; regs = regs.filter(function (r) { return r.obs !== self; }); this._records = [];
+    };
+    MutationObserver.prototype.takeRecords = function () { var r = this._records; this._records = []; return r; };
+    g.MutationObserver = MutationObserver; g.WebKitMutationObserver = MutationObserver;
+    g.MutationRecord = function () { throw new TypeError('Illegal constructor'); };
+  })();
+
+  // ---- ResizeObserver: element sizes checked after layouts (on a short timer while anything is observed) ----
+  (function () {
+    var all = [], timer = 0;
+    function size(el) { var r = D.rect(el); return [r[2], r[3]]; }
+    function check() {
+      timer = 0;
+      var byObs = [];
+      for (var i = 0; i < all.length; i++) {
+        var e = all[i];
+        if (!D.parent(e.el) && e.el !== doc.documentElement) continue;
+        var s = size(e.el);
+        if (s[0] === e.w && s[1] === e.h) continue;
+        e.w = s[0]; e.h = s[1];
+        var box = { inlineSize: s[0], blockSize: s[1] };
+        var ent = { target: e.el, contentRect: new g.DOMRect(0, 0, s[0], s[1]), borderBoxSize: [box], contentBoxSize: [box], devicePixelContentBoxSize: [box] };
+        var k = byObs.indexOf(e.obs); if (k < 0) { byObs.push(e.obs); byObs.push([]); k = byObs.length - 2; }
+        byObs[k + 1].push(ent);
+      }
+      for (var j = 0; j < byObs.length; j += 2) { try { byObs[j]._cb.call(byObs[j], byObs[j + 1], byObs[j]); } catch (err) { reportError(err); } }
+      schedule(500);
+    }
+    function schedule(ms) { if (!timer && all.length) timer = D.setTimer(check, ms, false) || 1; }
+    function ResizeObserver(cb) {
+      if (typeof cb !== 'function') throw new TypeError("Failed to construct 'ResizeObserver': parameter 1 is not a function");
+      hidden(this, '_cb', cb);
+    }
+    ResizeObserver.prototype.observe = function (el) {
+      for (var i = 0; i < all.length; i++) if (all[i].obs === this && all[i].el === el) return;
+      all.push({ obs: this, el: el, w: -1, h: -1 });
+      if (timer) { D.clearTimer(timer); timer = 0; }
+      schedule(0);
+    };
+    ResizeObserver.prototype.unobserve = function (el) { var self = this; all = all.filter(function (e) { return !(e.obs === self && e.el === el); }); };
+    ResizeObserver.prototype.disconnect = function () { var self = this; all = all.filter(function (e) { return e.obs !== self; }); };
+    g.ResizeObserver = ResizeObserver;
+    g.ResizeObserverEntry = function () { throw new TypeError('Illegal constructor'); };
+  })();
   D.setProtos(P, TP, TP, g.__axiom, MP, SRP);
 })(this);

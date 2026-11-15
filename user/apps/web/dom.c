@@ -17,7 +17,7 @@ static bool page_on;
 /* ---------------- console (about:console) ---------------- */
 static char conlog[16384]; static long conlen;
 static void con_add(const char *pre, const char *s) {
-    if (pre[0] == '[' && pre[1] == 'e') {               /* errors also go to the log: long addresses shortened, in pieces */
+    if (pre[0] == '[' && (pre[1] == 'e' || pre[1] == 's')) {   /* errors (and scripts stopped or skipped) also go to the log: long addresses shortened, in pieces */
         static char l[2000]; long k = 0;
         for (const char *p = pre; *p && k < 1990; p++) l[k++] = *p;
         for (const char *p = s; *p && k < 1990;) {
