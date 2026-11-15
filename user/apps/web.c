@@ -147,7 +147,7 @@ static void recover_from_stuck(void) {
     js_abandon(stuck_rip);
     loading = false; fetch_depth = 0; abort_fetch = false; web_fetch_deadline = 0; web_fetch_timeout = 0; pend = false;
     need_cascade = false; need_layout = stuck_count < 2;     /* if laying the page out is what got stuck, don't try again */
-    ksnprintf(status_text, sizeof status_text, "This page made Web get stuck (at %lx), so its scripts were turned off. Details: about:console", stuck_rip);
+    ksnprintf(status_text, sizeof status_text, "This page made Arc get stuck (at %lx), so its scripts were turned off. Details: about:console", stuck_rip);
     strncpy0(page_status, status_text, sizeof page_status);
     need_draw = true;
 }
@@ -752,8 +752,8 @@ static void set_title(void) {
     char tbuf[160]; title_ascii(doc && doc->title[0] ? doc->title : url, tbuf, sizeof tbuf);
     const char *tt = tbuf;
     int n = strlen(tt);
-    if (n > 50) { char s[48]; memcpy(s, tt, 47); s[47] = 0; ksnprintf(t, sizeof t, "%s... - Web", s); }
-    else ksnprintf(t, sizeof t, "%s - Web", tt);
+    if (n > 50) { char s[48]; memcpy(s, tt, 47); s[47] = 0; ksnprintf(t, sizeof t, "%s... - Arc", s); }
+    else ksnprintf(t, sizeof t, "%s - Arc", tt);
     app_title(&a, t);
 }
 
@@ -899,7 +899,7 @@ static void message_doc(const char *head, const char *body) {
 static void about_page(const char *u) {
     static char h[16384];
     if (pre_ci(u, "about:unsupported")) {
-        message_doc("Not supported", "That kind of link (email, telephone or script) doesn't work in Web.");
+        message_doc("Not supported", "That kind of link (email, telephone or script) doesn't work in Arc.");
         strncpy0(status_text, "Not supported", sizeof status_text);
         return;
     }
@@ -907,7 +907,7 @@ static void about_page(const char *u) {
         bool clear = false; for (const char *q = u; *q; q++) if (pre_ci(q, "?clear")) clear = true;
         if (clear) http_cookies_clear();
         static char list[8192]; int n = http_cookie_list(list, sizeof list);
-        int o = ksnprintf(h, sizeof h, "<title>Cookies</title>%s<h1>Cookies</h1><p>Web keeps %d cookie%s. Cookies that don't end when Web closes are saved in "
+        int o = ksnprintf(h, sizeof h, "<title>Cookies</title>%s<h1>Cookies</h1><p>Arc keeps %d cookie%s. Cookies that don't end when Arc closes are saved in "
                           "<code>/home/.web/cookies</code>.</p><div class=card><pre>", PAGE_CSS, n, n == 1 ? "" : "s");
         for (char *q = list; *q && o < (int)sizeof h - 400; q++) {
             if (*q == '<') o += ksnprintf(h + o, sizeof h - o, "&lt;"); else if (*q == '&') o += ksnprintf(h + o, sizeof h - o, "&amp;"); else h[o++] = *q;
@@ -927,7 +927,7 @@ static void about_page(const char *u) {
         status_text[0] = 0;
     } else {
         ksnprintf(h, sizeof h, "<title>Start page</title>%s"
-            "<h1>Web <span class=dim style=\"font-size:22px\">0.4</span></h1>"
+            "<h1>Arc <span class=dim style=\"font-size:22px\">0.4</span></h1>"
             "<p>A browser for <b>AXIOM</b>, running on the Axiom Core kernel's own TCP/IP stack. Secure <b>https://</b> sites use TLS 1.3, "
             "and every site's certificate is checked against the trusted authorities.</p>"
             "<div class=card><h2>Try</h2><ul>"
@@ -936,7 +936,7 @@ static void about_page(const char *u) {
             "<li><a href=\"https://news.ycombinator.com/\">news.ycombinator.com</a> - Hacker News</li>"
             "<li><a href=\"https://en.wikipedia.org/wiki/Operating_system\">Wikipedia: Operating system</a></li>"
             "<li><a href=\"http://info.cern.ch/\">info.cern.ch</a> - the world's first website (1991)</li></ul></div>"
-            "<h2>What Web can show</h2><p>Text with style sheets (CSS), pictures (PNG, JPEG, GIF and BMP), tables, lists, forms, and video and sound (MP4, MP3, WAV). "
+            "<h2>What Arc can show</h2><p>Text with style sheets (CSS), pictures (PNG, JPEG, GIF and BMP), tables, lists, forms, and video and sound (MP4, MP3, WAV). "
             "Sites can keep you signed in with cookies (<a href=\"about:cookies\">see cookies</a>). "
             "Open files on this computer with addresses like <code>file:///home/page.html</code>.</p>"
             "<h2>Not shown</h2><p class=dim>Web fonts, WebP pictures, streamed video (YouTube) and floating layouts; JavaScript runs, but big web apps need more than Web has (see <a href=\"about:console\">the console</a> for script errors). Sites that only allow TLS 1.2 or older can't be opened yet.</p>"
@@ -1063,7 +1063,7 @@ static void navigate(const char *target, bool post, const char *body, long blen,
                 free(b);
             } else {
                 free(b);
-                message_doc("Can't show this file", "This address leads to a file Web can't show (it might be a download). Use <b>wget</b> in the terminal to save it.");
+                message_doc("Can't show this file", "This address leads to a file Arc can't show (it might be a download). Use <b>wget</b> in the terminal to save it.");
             }
             if (sec.secure) ksnprintf(status_text, sizeof status_text, "Secure: %s - certificate for %s, from %s", sec.cipher, sec.subject, sec.issuer);
             else if (web) ksnprintf(status_text, sizeof status_text, "Not secure (http) - HTTP %d - %ld bytes", status, n);
@@ -1755,7 +1755,7 @@ int main(void) {
     http_options = HTTP_OPT_COOKIES | HTTP_OPT_GZIP;
     { char ts[8] = ""; sys_setting_get("web.test_slow", ts, sizeof ts); if (ts[0] == '1') web_time_scale = 40; }   /* emulator testing only */
     css_init();
-    if (!app_open_ex(&a, WW, WH, "Web", WIN_RESIZABLE)) return 1;
+    if (!app_open_ex(&a, WW, WH, "Arc", WIN_RESIZABLE)) return 1;
     http_wait_hook = web_wait;
     WW = a.wi.w; WH = a.wi.h;
     if (sys_getarg(arg, sizeof arg) > 0 && arg[0]) open_typed(arg); else navigate("about:home", false, 0, 0, 0, 0);

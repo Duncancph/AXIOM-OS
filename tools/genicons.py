@@ -119,6 +119,17 @@ def g_axiom(d, S, u):
     ox, oy = (1 - mw * k) / 2, (1 - L["h"] * k) / 2 + .01
     for sh in mk: d.polygon([(u(ox + x * k), u(oy + y * k)) for x, y in sh["pts"]], fill=W)
 
+def g_arc(d, S, u):
+    """Arc, the AXIOM browser: the AXIOM mark inside a ring"""
+    import json
+    w = max(2, u(.035))
+    d.ellipse([u(.15), u(.15), u(.85), u(.85)], outline=W, width=w)
+    L = json.load(open("tools/axiom_logo_raw.json"))
+    mk = [sh for sh in L["shapes"] if max(p[0] for p in sh["pts"]) < 130]
+    mw = max(p[0] for sh in mk for p in sh["pts"]); k = 0.40 / max(mw, L["h"])
+    ox, oy = (1 - mw * k) / 2, (1 - L["h"] * k) / 2 + .015
+    for sh in mk: d.polygon([(u(ox + x * k), u(oy + y * k)) for x, y in sh["pts"]], fill=W)
+
 def g_crown(d, S, u):
     gold = (251, 191, 36, 255)
     pts = [(.20, .70), (.20, .34), (.36, .50), (.50, .26), (.64, .50), (.80, .34), (.80, .70)]
@@ -197,6 +208,7 @@ ICONS = [   # name, gradient top, bottom, glyph
     ("code", "#2C2C2C", "#141414", g_code),
     ("clock", "#2C2C2C", "#141414", g_clock),
     ("globe", "#2C2C2C", "#141414", g_globe),
+    ("arc", "#2C2C2C", "#141414", g_arc),
     ("note", "#2C2C2C", "#141414", g_note),
     ("calendar", "#2C2C2C", "#141414", g_calendar),
     ("music", "#2C2C2C", "#141414", g_music),

@@ -900,7 +900,7 @@ bool js_page_step(char *status, int n) {
 }
 
 void js_abandon(uint64_t where) {
-    char m[160]; ksnprintf(m, sizeof m, "Web got stuck in its own code (at %lx) while running this page's scripts; they were turned off", where);
+    char m[160]; ksnprintf(m, sizeof m, "Arc got stuck in its own code (at %lx) while running this page's scripts; they were turned off", where);
     con_add("[stuck] ", m);
     page_on = false; sq_active = false; nsq = sqpos = 0; nsev = 0;
     for (int i = 0; i < MAXT; i++) timers[i].used = false;

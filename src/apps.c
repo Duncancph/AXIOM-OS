@@ -9,7 +9,7 @@ static int napps, nhidden;
 
 static const char *builtin_icon(const char *id) {
     static const char *map[][2] = { {"files", "folder"}, {"terminal", "terminal"}, {"monitor", "monitor"}, {"bluetooth", "bluetooth"},
-                                    {"calc", "calc"}, {"sandbox", "shield"}, {"about", "crown"}, {"network", "network"}, {"settings", "gear"}, {"viewer", "photo"}, {"web", "globe"}, {"notes", "note"}, {"calendar", "calendar"}, {"music", "music"}, {"video", "video"} };
+                                    {"calc", "calc"}, {"sandbox", "shield"}, {"about", "crown"}, {"network", "network"}, {"settings", "gear"}, {"viewer", "photo"}, {"web", "arc"}, {"notes", "note"}, {"calendar", "calendar"}, {"music", "music"}, {"video", "video"} };
     for (unsigned i = 0; i < sizeof map / sizeof map[0]; i++) if (!strcmp(map[i][0], id)) return map[i][1];
     return "gear";
 }
@@ -64,6 +64,7 @@ int apps_count(void) { return napps; }
 int apps_visible(void) { return napps - nhidden; }
 const struct app_entry *apps_get(int i) { return i >= 0 && i < napps ? &apps[i] : 0; }
 const struct app_entry *apps_find(const char *id) {
+    if (id && !strcmp(id, "arc")) id = "web";             /* Arc is the Web app's name now */
     for (int i = 0; i < napps; i++) if (!strcmp(apps[i].id, id)) return &apps[i];
     return 0;
 }

@@ -98,6 +98,7 @@ static const struct named_icon ICONS[] = {
     { "code",      ICON_CODE,      0x232321u, 0xD8D3B8u },
     { "clock",     ICON_CLOCK,     0x232321u, 0xF4F1DEu },
     { "globe",     ICON_GLOBE,     0x232321u, 0xF4F1DEu },
+    { "arc",       ICON_GLOBE,     0x232321u, 0xF4F1DEu },
     { "network",   ICON_NETWORK,   0x123326u, HL_GREEN  },
     { "photo",     ICON_PHOTO,     0x2A2620u, HL_GOLD   },
     { "chat",      ICON_CODE,      0x3A2016u, 0xF0A07Eu },
