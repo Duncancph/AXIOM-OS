@@ -17,7 +17,7 @@ static void draw(void) {
     gfx_vgrad(c, 0, 0, WW, WH, 0x0A0A0A, 0x050505);
     gfx_vgrad(c, 0, 0, WW, 250, 0x000000, 0x0A0A0A);
     draw_logo(c, (WW - logo_splash.w) / 2, 96, &logo_splash, HL_CREAM);
-    gfx_text_center(c, &font_ui, 0, WW, 206, UI_MUTED, "Thane kernel 0.2   -   Created by Bryan Duncan");
+    gfx_text_center(c, &font_ui, 0, WW, 206, UI_MUTED, "Axiom Core 0.2   -   Created by Bryan Duncan");
 
     struct sysinfo s; sys_sysinfo(&s);
     ui_card(c, 24, 266, WW - 48, 150);

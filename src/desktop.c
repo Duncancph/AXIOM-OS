@@ -364,7 +364,7 @@ static void draw_menu(void) {
     gfx_rrect(&cv, m.x, m.y, m.w, m.h, HL_WIN_RADIUS, HL_WIN_BG, HL_WIN_ALPHA);
     gfx_rrect_outline(&cv, m.x, m.y, m.w, m.h, HL_WIN_RADIUS, HL_ACCENT, 90);
     ax_logo(&full, m.x + 20, m.y + 14, ax_logo_img(0), HL_CREAM, 255);
-    gfx_mono_text(&cv, m.x + 20, m.y + 40, OS_NAME " " OS_VERSION " - Thane kernel", HL_TEXT_FAINT);
+    gfx_mono_text(&cv, m.x + 20, m.y + 40, OS_NAME " " OS_VERSION " - Axiom Core", HL_TEXT_FAINT);
     gfx_blend(&cv, m.x + 1, m.y + 66, m.w - 2, 1, 0xFFFFFF, 16);
     for (int k = 0; k < nsec; k++) gfx_mono_text(&cv, m.x + 22, sec_y[k] + 4, sec_name[k], HL_ACCENT);
     for (int i = 0; i < mn; i++) {

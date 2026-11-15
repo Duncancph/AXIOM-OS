@@ -467,7 +467,7 @@ long http_request(const char *url_in, const struct http_req *rq, http_sink sink,
         }
         char target[1600]; encode_target(u.path, target, sizeof target);
         bool browser = http_options != 0;
-        int rl = ksnprintf(req, sizeof req, "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: AXIOM/0.1 (Thane kernel)%s\r\nAccept: %s\r\n%sConnection: close\r\n",
+        int rl = ksnprintf(req, sizeof req, "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: AXIOM/0.1 (Axiom Core)%s\r\nAccept: %s\r\n%sConnection: close\r\n",
                            method, target, hp, browser ? " Web/0.3" : "",
                            browser ? "text/html,application/xhtml+xml,text/css,image/png,image/jpeg,image/gif,*/*;q=0.5" : "*/*",
                            want_gz ? "Accept-Encoding: gzip\r\n" : "");

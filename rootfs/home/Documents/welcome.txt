@@ -1,12 +1,12 @@
 Welcome to AXIOM
 =================
 
-AXIOM runs on the Thane kernel and was created by Bryan Duncan.
+AXIOM runs on the Axiom Core kernel and was created by Bryan Duncan.
 
 Things to try
 - Open Files from the dock and look around ~/Projects/thane:
   it holds the real source code of this operating system.
-- In the terminal (castle), type 'help', then try 'ls', 'cd Documents', 'cat welcome.txt'.
+- In the terminal (CMD), type 'help', then try 'ls', 'cd Documents', 'cat welcome.txt'.
 - Install an app: clan install editor
   Then open this file with: edit ~/Documents/welcome.txt
 - Plug in a USB flash drive formatted as FAT32: it appears in Files as a drive.

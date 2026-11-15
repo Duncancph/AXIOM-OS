@@ -240,13 +240,13 @@ void hl_draw_desktop_demo(const struct framebuffer *fb) {
     }
 
     /* Terminal window (focused, in front) */
-    struct hl_window term = { 80, 110, 580, 400, "castle - ~", HL_TERM_BG, 1 };
+    struct hl_window term = { 80, 110, 580, 400, "CMD - ~", HL_TERM_BG, 1 };
     int ty = hl_draw_window(fb, &term) + 18;
     int tx = term.x + 22;
     draw_icon(fb, ICON_CROWN, 12, tx, ty, 4, HL_GOLD);
     int kx = tx + 90;
     static const char *keys[] = { "OS", "Kernel", "Shell", "Pkgs", "Font" };
-    static const char *vals[] = { "DuncOS 0.1", "Thane 0.1", "castle", "clan", "font8x16" };
+    static const char *vals[] = { "DuncOS 0.1", "Axiom Core 0.1", "CMD", "clan", "font8x16" };
     int lx = draw_text(fb, "bryan", kx, ty, 1, HL_ACCENT);
     lx = draw_text(fb, "@", lx, ty, 1, HL_TEXT);
     draw_text(fb, "duncos", lx, ty, 1, HL_ACCENT);

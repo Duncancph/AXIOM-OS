@@ -455,7 +455,7 @@ out:
 static void draw_updates(void) {
     char b[200];
     struct sysinfo si; sys_sysinfo(&si);
-    ksnprintf(b, sizeof b, "This is AXIOM %s, build %ld. Updates are signed; AXIOM checks them before installing.", strncmp(si.kernel, "Thane ", 6) ? si.kernel : si.kernel + 6, ubuild_now);
+    ksnprintf(b, sizeof b, "This is AXIOM %s, build %ld. Updates are signed; AXIOM checks them before installing.", strncmp(si.kernel, "Axiom Core ", 11) ? si.kernel : si.kernel + 11, ubuild_now);
     heading("Updates", b);
     int y = 100, x = SIDE + 32, w = WW - SIDE - 64;
     ui_card(&a.c, x, y, w, 150);
@@ -529,7 +529,7 @@ static void draw_storage(void) {
 
 static void draw_about(void) {
     struct sysinfo s; sys_sysinfo(&s);
-    heading("About AXIOM", "Made by Bryan Duncan. Running on the Thane kernel.");
+    heading("About AXIOM", "Made by Bryan Duncan. Running on the Axiom Core kernel.");
     char b[128];
     int y = 110;
     ksnprintf(b, sizeof b, "Kernel: %s", s.kernel); label(SIDE + 32, y, UI_TEXT, b); y += 26;

@@ -351,7 +351,7 @@ static void installer(void *arg) {
             vfs_rename("/install/duncos/initrd.tar", "/install/duncos/initrd-prev.tar");
         }
     }
-    progress(25, "Copying the Thane kernel");
+    progress(25, "Copying the Axiom Core kernel");
     if ((r = put("/install/duncos/thane.elf", "kernel"))) { strncpy0(why, "the kernel image isn't available", sizeof why); goto unmount; }
     kyield();
     progress(40, "Copying the system files");

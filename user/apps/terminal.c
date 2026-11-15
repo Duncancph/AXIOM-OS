@@ -1,5 +1,5 @@
 /* Terminal: a command line in a window. Built-in commands manage apps and
- * processes; everything else is passed to the Thane kernel's command shell. */
+ * processes; everything else is passed to the Axiom Core kernel's command shell. */
 #include "../lib/dunc.h"
 #include "../lib/logo_draw.h"
 
@@ -55,9 +55,9 @@ static int prompt_len;
 static void fetch(void) {
     struct sysinfo s; sys_sysinfo(&s);
     char v[6][48];
-    ksnprintf(v[0], 48, "AXIOM %s, build %ld", strncmp(s.kernel, "Thane ", 6) ? s.kernel : s.kernel + 6, sys_call(SYS_UPDATE, UPDATE_BUILD, 0, 0, 0, 0));
+    ksnprintf(v[0], 48, "AXIOM %s, build %ld", strncmp(s.kernel, "Axiom Core ", 11) ? s.kernel : s.kernel + 11, sys_call(SYS_UPDATE, UPDATE_BUILD, 0, 0, 0, 0));
     ksnprintf(v[1], 48, "%s", s.kernel);
-    ksnprintf(v[2], 48, "castle");
+    ksnprintf(v[2], 48, "CMD");
     ksnprintf(v[3], 48, "%lu min", s.uptime_ms / 60000);
     ksnprintf(v[4], 48, "%lu / %lu MiB", s.mem_used >> 20, s.mem_total >> 20);
     ksnprintf(v[5], 48, "font8x16");
@@ -560,7 +560,7 @@ static void paste(void) {
 }
 
 int main(void) {
-    if (!app_open_ex(&a, WW, WH, "castle - ~", WIN_RESIZABLE)) return 1;
+    if (!app_open_ex(&a, WW, WH, "CMD - ~", WIN_RESIZABLE)) return 1;
     pal[1] = HL_ACCENT;                                  /* the accent colour from Settings > Personalise */
     fetch();
     puts_c("Type 'help' to see the available commands.\n", C_DIM);

@@ -1,5 +1,5 @@
 /*
- * fb_boot_logo.c - AXIOM graphical boot splash (Thane kernel)
+ * fb_boot_logo.c - AXIOM graphical boot splash (Axiom Core)
  * Created by Bryan Duncan
  *
  * Draws to a linear 32-bpp framebuffer (e.g. from Multiboot2 / Limine / UEFI GOP).
@@ -155,7 +155,7 @@ void boot_logo_show(const struct framebuffer *fb) {
     y += logo_h + 2 * lh;
     g_bar_y = y;
     boot_logo_progress(fb, 0);
-    draw_text_centered(fb, "Thane kernel", y + lh, 1, COL_DIM);
+    draw_text_centered(fb, "Axiom Core", y + lh, 1, COL_DIM);
 }
 
 /* Progress bar under the logo. Call with 0-100 as the kernel boots. */

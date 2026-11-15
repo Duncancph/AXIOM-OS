@@ -726,7 +726,7 @@ long net_ping(const struct ipaddr *ip, uint32_t timeout_ms) {
     uint8_t p[40]; memset(p, 0, sizeof p);
     ping_id = 0xD0C5; ping_seq++; ping_got = false;
     p[0] = ip->v6 ? 128 : 8; p16(p + 4, ping_id); p16(p + 6, ping_seq);
-    memcpy(p + 8, "AXIOM ping, Thane kernel.....", 32);
+    memcpy(p + 8, "AXIOM ping, Axiom Core.........", 32);
     if (ip->v6) {
         uint8_t src[16];
         if (!src6_for(ip->b, src)) return a6[0].state == V6_PREFERRED ? NET_EUNREACH : NET_ENOTCONN;

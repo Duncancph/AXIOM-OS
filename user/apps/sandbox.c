@@ -9,7 +9,7 @@ static int hover = -1;
 
 struct test { const char *name, *desc; int style; };
 static const struct test tests[] = {
-    { "Read kernel memory", "Peek at the Thane kernel's code at 0x100000.", BTN_DANGER },
+    { "Read kernel memory", "Peek at the Axiom Core kernel's code at 0x100000.", BTN_DANGER },
     { "Use a null pointer", "Write to address 0, a classic crash.", BTN_DANGER },
     { "Privileged instruction", "Try to switch off interrupts with 'cli'.", BTN_DANGER },
     { "Freeze forever", "Spin in an endless loop. Everything else keeps running.", BTN_NORMAL },

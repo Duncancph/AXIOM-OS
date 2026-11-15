@@ -1,4 +1,4 @@
-/* AXIOM kernel <-> application interface (shared by the Thane kernel and user programs). */
+/* AXIOM kernel <-> application interface (shared by the Axiom Core kernel and user programs). */
 #pragma once
 #include <stdint.h>
 

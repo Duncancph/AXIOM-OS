@@ -1,6 +1,6 @@
 # AXIOM
 
-A 64-bit operating system built from scratch, running on its own kernel, **Thane**.
+A 64-bit operating system built from scratch, running on its own kernel, **Axiom Core**.
 Created by Bryan Duncan.
 
 It boots on real PCs (modern UEFI and older BIOS) from a USB stick into a modern desktop,
@@ -8,7 +8,7 @@ with true multitasking and memory protection between apps.
 
 ## Features (v0.1)
 
-**Thane kernel**
+**Axiom Core kernel**
 - 64-bit x86 kernel in C and assembly, booted by GRUB (Multiboot2)
 - **Preemptive multitasking**: the local APIC timer switches between programs 250 times a second,
   so a frozen or busy app can't lock up the computer
@@ -58,13 +58,13 @@ with true multitasking and memory protection between apps.
   its traffic, and "packet too big" / "unreachable" handling for TCP. The global address uses a random
   interface ID that is new each start-up, so it doesn't reveal the network card's hardware address.
   Names that have both kinds of address are tried over IPv6 first; if that doesn't connect within a
-  few seconds, AXIOM falls back to IPv4. `http://[2001:db8::1]:8080/` style addresses work in Web and castle
+  few seconds, AXIOM falls back to IPv4. `http://[2001:db8::1]:8080/` style addresses work in Web and CMD
 - **HTTPS / TLS 1.3**, written from scratch (no OpenSSL): AES-128-GCM and ChaCha20-Poly1305,
   X25519 and P-256 key exchange, RSA (PKCS#1 v1.5 and PSS) and ECDSA (P-256, P-384) signatures,
   SHA-256/384/512. Every site's certificate chain is checked against the Mozilla root list
   (`/system/certs/ca-bundle.crt`): signatures, host name (including wildcards and IP addresses),
   expiry dates, CA rules, and that the certificate is meant for web servers.
-  If a check fails, the connection is refused and you're told why. `trust <file.pem>` in castle adds
+  If a check fails, the connection is refused and you're told why. `trust <file.pem>` in CMD adds
   your own authority (for example a home server's), saved in `/system/certs/user`
 - Kernel random number generator for encryption keys: the CPU's RDSEED/RDRAND where available,
   mixed with timing jitter and keyboard, mouse and network events, feeding a ChaCha20 generator
@@ -91,7 +91,7 @@ with true multitasking and memory protection between apps.
 | App | What it does |
 |---|---|
 | Files | Your Highland mockup made real: places sidebar, USB drives, folder grid; open (pictures in Viewer, web pages in Web, text in Editor, installing the app if needed), new folder, rename, copy/paste (also to and from USB drives), delete to Trash, empty Trash |
-| Terminal (castle shell) | `ls`, `cd`, `cat`, `mkdir`, `rm`, `mv`, `cp`, `touch`, `echo ... > file`, `edit`, `df`, `disks`, `install`, `settings`, `set`, `ip`, `ping` (`-4`/`-6`, `ping6`), `host`, `wget`, `curl` (http and https), `dns`, `trust`, `fetch`, `apps`, `open <app or file>`, `ps`, `kill`, `date`, `clan`, plus `sysinfo`, `pci`, `usb`, `bt`, `bt scan`, `log`, `reboot`, `poweroff`. Scroll back with the mouse wheel or PgUp/PgDn; select with the mouse to copy (Ctrl+C or Ctrl+Shift+C), paste with Ctrl+V or a right click |
+| Terminal (CMD shell) | `ls`, `cd`, `cat`, `mkdir`, `rm`, `mv`, `cp`, `touch`, `echo ... > file`, `edit`, `df`, `disks`, `install`, `settings`, `set`, `ip`, `ping` (`-4`/`-6`, `ping6`), `host`, `wget`, `curl` (http and https), `dns`, `trust`, `fetch`, `apps`, `open <app or file>`, `ps`, `kill`, `date`, `clan`, plus `sysinfo`, `pci`, `usb`, `bt`, `bt scan`, `log`, `reboot`, `poweroff`. Scroll back with the mouse wheel or PgUp/PgDn; select with the mouse to copy (Ctrl+C or Ctrl+Shift+C), paste with Ctrl+V or a right click |
 | Settings | Keyboard layout, mouse (pointer speed, natural scrolling, left-handed), date & time (time zone, 24-hour clock), display size, sound volume, lock screen password, screen-off time, restart / shut down, updates over the internet (signed; see below), storage (install or update AXIOM on a disk), about |
 | Web 0.4 | Web browser for `https://`, `http://` and `file://` pages: style sheets (CSS selectors, cascade, `@media`, the box model, colours, borders, lists, tables, simple flex rows), pictures (PNG, JPEG, GIF, BMP, loaded after the text), forms (GET and POST), cookies that survive restarts, gzip, UTF-8 pages, back and forward, a resizable window. A padlock and the status bar show the encryption and who the certificate belongs to; sites that fail the security checks are blocked with an explanation. **JavaScript** (AXIOM's own engine, `user/apps/web/js`: modern JavaScript with classes, async/await, Promises, generators, regular expressions, JSON, Map/Set and more) with the page objects scripts expect: `document`, elements, events, timers, `fetch`, `XMLHttpRequest`, `localStorage`, `URL`. Script errors are listed at `about:console`. Big web apps (Gmail, YouTube...) need more than Web has |
 | Notes | Quick notes that save themselves as you type (in `/home/Notes`); the first line is the title |
@@ -109,7 +109,7 @@ with true multitasking and memory protection between apps.
 **clan packages** (`clan list`, `clan install <name>`, `clan remove <name>`)
 | Package | What it does |
 |---|---|
-| editor 0.4 | Text editor: line numbers, selection (Shift+arrows, mouse), copy/cut/paste, select all, save / save as, UTF-8 files, unsaved-changes prompt (`edit <file>` in castle, or double-click a file in Files) |
+| editor 0.4 | Text editor: line numbers, selection (Shift+arrows, mouse), copy/cut/paste, select all, save / save as, UTF-8 files, unsaved-changes prompt (`edit <file>` in CMD, or double-click a file in Files) |
 | clock 1.0 | Analog and digital clock |
 
 ## Updates over the internet
@@ -128,7 +128,7 @@ To publish an update: commit, `make`, then
 `python3 tools/make-release.py <signing key .pem> "what's new"`, and upload the `release/` folder
 (`latest.txt` and `b<build>/`) to where `UPDATE_URL` in `src/kernel.h` points: the `updates` branch of
 the AXIOM-OS repository on GitHub, which must be public (or the `update.url`
-setting: `set update.url <url>` in castle). `tools/update-keygen.py` makes a new key pair; the
+setting: `set update.url <url>` in CMD). `tools/update-keygen.py` makes a new key pair; the
 private key must stay private, because whoever has it can make updates that AXIOM installs.
 
 ## Put it on a PC
@@ -224,7 +224,7 @@ The Mozilla root certificates are copied from the build machine's `/etc/ssl/cert
 ## Layout
 
 ```
-src/             Thane kernel
+src/             Axiom Core kernel
   boot.asm         Multiboot2 entry, switch to 64-bit mode
   cpu.c            GDT/TSS (privilege levels), local APIC timer, write-combining video memory
   isr.asm idt.c    interrupt entry, context switch, exception handling (stops faulting apps)

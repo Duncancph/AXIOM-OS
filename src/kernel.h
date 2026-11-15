@@ -6,7 +6,7 @@
 #include "../common/abi.h"
 
 #define OS_NAME "AXIOM"
-#define KERNEL_NAME "Thane"
+#define KERNEL_NAME "Axiom Core"
 #define OS_VERSION "0.2"
 #ifndef OS_BUILD
 #define OS_BUILD 0                       /* set by the Makefile: the number of commits */
