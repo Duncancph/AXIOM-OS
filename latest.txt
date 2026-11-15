@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 99
-notes Web is now called Arc, with a new icon; long custom element names work
-file kernel b99/thane.elf.gz 18013008 14b297decb1666e73a7ed04e326944aa6cfa8a392419c38b2b452ce6c31ca501
-file initrd b99/initrd.tar.gz 1280000 42ad685dbf2a09e828a0881acb1e144de9307ddde9c3b4422d93103f1b8d0dcf
-file bootx64 b99/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b99/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 304502200b4691638d24d84b5bb41b090839d2a6727de8d85af005ad120d80b8f5c479be022100cc99daa0755c9200e14a943c3b6e6da678a3877e397198d179667e8e0e6c5c6b
+build 100
+notes Device Manager: Settings > Devices lists every device and its driver (also 'devices' in CMD)
+file kernel b100/thane.elf.gz 18062712 9760cef902eaa4b651b4c43a6db5ef537b2ee683a045c21da99b8fa5d16413e9
+file initrd b100/initrd.tar.gz 1280000 0913756856836a255b5a362c54cbbbd71e19a74a53e7206939d0498a242ea7e1
+file bootx64 b100/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b100/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304502201ef42f7e6541b72cb32ca9abec00e864940dc15d6cb17fa89e6291f1d1f821fd0221008204fe769fc78e41d6eda260af49d97faf338fac7fd123072e00a4879427c9ad
