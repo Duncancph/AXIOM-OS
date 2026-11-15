@@ -47,6 +47,8 @@ bool js_is_number(jsval v);
 bool js_is_string(jsval v);
 bool js_is_object(jsval v);                               /* includes functions and arrays */
 bool js_is_function(jsval v);
+const uint8_t *js_bytes(js_rt *rt, jsval v, long *len);
+jsval js_new_arraybuffer(js_rt *rt, const void *p, long n);   /* a copy of the bytes (undefined if out of memory) */   /* ArrayBuffer / typed array / DataView contents, 0 if not one */
 bool js_is_array(jsval v);
 bool js_truthy(jsval v);
 double js_to_number(js_rt *rt, jsval v);                  /* ToNumber (may call valueOf) */

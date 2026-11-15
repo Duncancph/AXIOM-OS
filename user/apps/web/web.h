@@ -233,7 +233,16 @@ void web_requeue_event(const struct dunc_event *e);   /* an event seen while a s
 struct canvas;
 void media_attach(struct doc *d, struct node *n);  /* give a <video>/<audio> its player (as an FC_MEDIA control) */
 void media_page_end(void);                         /* stop and forget them all */
-void media_box(struct node *n, int *w, int *h);    /* its size before styles */
+void media_box(struct node *n, int *w, int *h);
+/* Media Source Extensions (media.c) */
+int media_mse_new(void);
+int media_mse_supported(const char *mime);
+int media_mse_add(int id, const char *mime);
+int media_mse_append(int id, int bi, const uint8_t *p, long n);
+void media_mse_buffered(int id, int bi, double *start, double *end);
+void media_mse_duration(int id, double d);
+void media_mse_end(int id);
+void media_mse_attach(struct node *n, int id);    /* its size before styles */
 void media_draw(struct canvas *c, struct node *n, int x, int y, int w, int h);
 void media_click(struct node *n, int x, int y, int w, int h);   /* x, y inside the box */
 void media_toggle(struct node *n);                 /* play / pause */

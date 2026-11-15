@@ -7,7 +7,13 @@
  *
  * Downloads and decoding happen from the main loop (media_tick), never inside a script, and events
  * for scripts (play, pause, ended, timeupdate...) are queued and sent from the main loop too.
- * Compiled with floating point (the decoders and the colour tables use it). */
+ * Compiled with floating point (the decoders and the colour tables use it).
+ *
+ * Media Source Extensions (what YouTube's player uses): a page makes a MediaSource, gives it to a
+ * <video> through URL.createObjectURL, and appends fragmented MP4 (an init segment, then media
+ * segments) to one SourceBuffer for the video and one for the sound. Each SourceBuffer's bytes are kept
+ * here and read with the same MP4 reader as a file (re-indexed after each append); the player waits
+ * when it reaches the end of what has arrived, until the page calls endOfStream(). */
 #include "web.h"
 #include "../../lib/video/h264.h"
 #include "../../lib/media/mp4.h"
@@ -25,6 +31,8 @@ struct wmedia {
     uint8_t *file; long flen;
     int fmt;
     mp4 *mv; h264dec *vd; aacdec *ad; mp3dec *md; struct mp3_info mi; int vt, at;
+    mp4 *ma; const uint8_t *afile; long aflen;  /* where the sound comes from (the same file, or its own SourceBuffer) */
+    struct mse *mse;                            /* fed by a MediaSource (blob: URL), 0 for a plain file */
     long vs, as_;                          /* next video / audio sample */
     long wav_data, wav_len, wav_pos; int wav_rate, wav_ch, wav_bits;
     int vw, vh;                            /* the video's picture size */
@@ -35,6 +43,25 @@ struct wmedia {
     struct wmedia *next;
 };
 static struct wmedia *all, *active, *loading_m;
+
+/* ---------------- MediaSource / SourceBuffer storage ---------------- */
+#define MSE_MAX_BYTES (300l << 20)
+struct msebuf { uint8_t *d; long len, cap; bool dirty, video; mp4 *m; int track; };
+struct mse { int id; struct msebuf b[4]; int nb; bool ended; double duration; struct wmedia *el; struct mse *next; };
+static struct mse *mses; static int mse_ids;
+static void mse_free_all(void);
+static struct mse *mse_get(int id) { for (struct mse *s = mses; s; s = s->next) if (s->id == id) return s; return 0; }
+static void mse_refresh(struct msebuf *b) {           /* re-index after appends */
+    if (!b->dirty) return;
+    b->dirty = false;
+    if (b->m) mp4_close(b->m);
+    b->m = b->len ? mp4_open(b->d, b->len) : 0;
+    b->track = b->m ? mp4_find(b->m, b->video ? MP4_VIDEO : MP4_AUDIO) : -1;
+}
+static struct msebuf *mse_buf(struct mse *s, bool video) {
+    for (int i = 0; i < s->nb; i++) if (s->b[i].video == video) { mse_refresh(&s->b[i]); return &s->b[i]; }
+    return 0;
+}
 static long snd(int op, long x, long y) { return sys_call(SYS_SOUND, op, x, y, 0, 0); }
 
 /* ---------------- events for scripts, sent from the main loop ---------------- */
@@ -66,9 +93,12 @@ static void close_decoders(struct wmedia *m) {
     if (m->vd) h264_close(m->vd);
     if (m->ad) aac_close(m->ad);
     if (m->md) mp3_close(m->md);
-    if (m->mv) mp4_close(m->mv);
-    m->vd = 0; m->ad = 0; m->md = 0; m->mv = 0; m->vt = m->at = -1;
-    free(m->file); m->file = 0; m->flen = 0; m->fmt = F_NONE;
+    if (!m->mse && m->mv) mp4_close(m->mv);              /* an MSE source's indexes belong to its buffers */
+    m->vd = 0; m->ad = 0; m->md = 0; m->mv = 0; m->ma = 0; m->afile = 0; m->aflen = 0; m->vt = m->at = -1;
+    if (!m->mse) free(m->file);
+    else if (m->mse->el == m) m->mse->el = 0;
+    m->mse = 0;
+    m->file = 0; m->flen = 0; m->fmt = F_NONE;
 }
 static void media_free(struct wmedia *m) { close_decoders(m); free(m->pic); free(m); }
 /* the page goes away: stop and forget everything (the one being downloaded is freed when that ends) */
@@ -79,6 +109,7 @@ void media_page_end(void) {
         media_free(m);
     }
     all = 0; active = 0; nev = 0;
+    mse_free_all();
 }
 
 /* ---------------- the box size (layout) ---------------- */
@@ -122,10 +153,10 @@ static int out_rate; static int64_t audio_base_ms, audio_frames_out;
 static uint64_t wall_start; static int64_t wall_base_ms;
 static int16_t pcm[4096 * 2], pend_pcm[4096 * 2 * 7 + 64];
 static int npend, ppos, src_rate; static uint32_t rs_pos; static int16_t rs_last[2];
-static bool audio_done;
+static bool audio_done, audio_ok = true;          /* audio_ok: there is a sound output to play to (else the system clock leads) */
 static bool has_audio(struct wmedia *m) { return m->at >= 0 || m->md || m->fmt == F_WAV; }
 static int64_t clock_ms(struct wmedia *m) {
-    if (has_audio(m) && out_rate) {
+    if (has_audio(m) && out_rate && audio_ok) {
         long q = snd(SOUND_STREAM_STATUS, 0, 0); if (q < 0) q = 0;
         int64_t played = audio_frames_out * 1000 / out_rate - q;
         if (played < 0) played = 0;
@@ -137,7 +168,7 @@ static int64_t clock_ms(struct wmedia *m) {
 static void restart_audio(struct wmedia *m, int64_t from_ms) {
     npend = ppos = 0; rs_pos = 0; rs_last[0] = rs_last[1] = 0; src_rate = 0; audio_done = false;
     audio_base_ms = from_ms; audio_frames_out = 0;
-    if (has_audio(m)) { snd(SOUND_STREAM_START, out_rate, 0); if (m->state != MS_PLAYING) snd(SOUND_STREAM_PAUSE, 1, 0); }
+    if (has_audio(m)) { audio_ok = snd(SOUND_STREAM_START, out_rate, 0) >= 0; if (audio_ok && m->state != MS_PLAYING) snd(SOUND_STREAM_PAUSE, 1, 0); }
 }
 /* n frames of ch channels at rate -> pend_pcm (stereo, out_rate), with the volume applied */
 static void take(struct wmedia *m, const int16_t *in, int n, int ch, int rate) {
@@ -188,10 +219,12 @@ static bool audio_more(struct wmedia *m) {           /* false: the sound is over
             return true;
         }
         struct mp4_sample s;
-        if (!mp4_sample(m->mv, m->at, m->as_, &s)) return false;
+        if (m->mse) { struct msebuf *b = mse_buf(m->mse, false); if (b) { m->ma = b->m; m->afile = b->d; m->aflen = b->len; } }
+        if (!m->ma || !mp4_sample(m->ma, m->at, m->as_, &s)) return m->mse && !m->mse->ended;   /* MSE: wait for more */
+        if (m->mse && s.offset + s.size > m->aflen) return !m->mse->ended;                      /* not all here yet */
         m->as_++;
-        if (s.offset < 0 || s.offset + s.size > m->flen) continue;
-        int n = aac_decode(m->ad, m->file + s.offset, (int)s.size, pcm);
+        if (s.offset < 0 || s.offset + s.size > m->aflen) continue;
+        int n = aac_decode(m->ad, m->afile + s.offset, (int)s.size, pcm);
         if (n <= 0) continue;
         take(m, pcm, n, aac_channels(m->ad) == 1 ? 1 : 2, aac_sample_rate(m->ad));
         return true;
@@ -199,7 +232,7 @@ static bool audio_more(struct wmedia *m) {           /* false: the sound is over
     return true;
 }
 static void feed_audio(struct wmedia *m) {
-    if (!has_audio(m) || m->state != MS_PLAYING || audio_done) return;
+    if (!has_audio(m) || m->state != MS_PLAYING || audio_done || !audio_ok) return;
     for (int guard = 0; guard < 64; guard++) {
         if (ppos >= npend && !audio_more(m)) { audio_done = true; return; }
         if (ppos >= npend) continue;
@@ -278,10 +311,13 @@ static int next_picture(struct wmedia *m) {            /* 1 got one, 0 not yet, 
             have_held = true; return 1;
         }
         struct mp4_sample s;
-        if (!mp4_sample(m->mv, m->vt, m->vs, &s)) {
+        if (m->mse) { struct msebuf *b = mse_buf(m->mse, true); if (b) { m->mv = b->m; m->file = b->d; m->flen = b->len; } }
+        if (!m->mv || !mp4_sample(m->mv, m->vt, m->vs, &s)) {
+            if (m->mse && !m->mse->ended) return 0;            /* MSE: wait for the next segment */
             if (!flushed) { h264_flush(m->vd); flushed = true; continue; }
             return -1;
         }
+        if (m->mse && s.offset + s.size > m->flen && !m->mse->ended) return 0;
         m->vs++;
         if (s.offset < 0 || s.offset + s.size > m->flen) continue;
         h264_decode(m->vd, m->file + s.offset, (int)s.size, mp4_ms(m->mv, m->vt, s.pts));
@@ -418,6 +454,7 @@ static void load(struct wmedia *m) {
     if (m->fmt == F_MP4) {
         m->mv = mp4_open(m->file, m->flen);
         if (!m->mv) { set_error(m, "This MP4 file can't be read"); redraw(m); return; }
+        m->ma = m->mv; m->afile = m->file; m->aflen = m->flen;
         m->vt = m->video ? mp4_find(m->mv, MP4_VIDEO) : -1; m->at = mp4_find(m->mv, MP4_AUDIO);
         const struct mp4_track *v = m->vt >= 0 ? mp4_track(m->mv, m->vt) : 0, *s = m->at >= 0 ? mp4_track(m->mv, m->at) : 0;
         if (v && strcmp(v->codec, "avc1") && strcmp(v->codec, "avc3")) { char e[140]; ksnprintf(e, sizeof e, "The video is %s, which Arc can't play yet (it plays H.264)", v->codec); strncpy0(m->msg, e, sizeof m->msg); m->vt = -1; }
@@ -440,6 +477,121 @@ static void load(struct wmedia *m) {
     m->state = MS_READY; m->vs = m->as_ = 0; m->shown_ms = 0; m->wav_pos = 0;
     fire(m, "durationchange"); fire(m, "loadedmetadata"); fire(m, "loadeddata"); fire(m, "canplay"); fire(m, "canplaythrough");
     web_media_resized();                         /* the video's own size may change the layout */
+}
+
+/* ---------------- MediaSource: the element side ---------------- */
+/* decoders are made once the init segments are in (video and sound, whichever SourceBuffers there are) */
+static bool mse_try_ready(struct wmedia *m) {
+    struct mse *s = m->mse;
+    if (!s) return false;
+    if (m->state >= MS_READY && m->state != MS_ERROR) return true;
+    if (m->state == MS_ERROR) return false;
+    struct msebuf *vb = m->video ? mse_buf(s, true) : 0, *ab = mse_buf(s, false);
+    if (!vb && !ab) return false;
+    if ((vb && vb->track < 0) || (ab && ab->track < 0)) return false;     /* an init segment still to come */
+    m->fmt = F_MP4; m->msg[0] = 0;
+    if (vb) {
+        const struct mp4_track *v = mp4_track(vb->m, vb->track);
+        if (strcmp(v->codec, "avc1") && strcmp(v->codec, "avc3")) { char e[140]; ksnprintf(e, sizeof e, "The video is %s, which Arc can't play yet (it plays H.264)", v->codec); set_error(m, e); redraw(m); return false; }
+        m->vd = h264_open(v->config, v->config_len);
+        if (!m->vd) { set_error(m, "This video can't be decoded"); redraw(m); return false; }
+        m->mv = vb->m; m->file = vb->d; m->flen = vb->len; m->vt = vb->track;
+        m->vw = v->disp_w > 0 ? v->disp_w : v->width; m->vh = v->disp_h > 0 ? v->disp_h : v->height;
+    }
+    out_rate = 48000;
+    if (ab) {
+        const struct mp4_track *a = mp4_track(ab->m, ab->track);
+        if (!strcmp(a->codec, "mp4a") && (!a->object_type || a->object_type == 0x40) && (m->ad = aac_open(a->config, a->config_len))) {
+            m->ma = ab->m; m->afile = ab->d; m->aflen = ab->len; m->at = ab->track;
+            int r = a->sample_rate; out_rate = r == 44100 || r == 22050 || r == 11025 ? 44100 : 48000;
+        }
+    }
+    m->dur_ms = s->duration > 0 && s->duration < 1e8 ? (long)(s->duration * 1000) : 0;
+    m->state = MS_READY; m->vs = m->as_ = 0; m->shown_ms = 0;
+    fire(m, "durationchange"); fire(m, "loadedmetadata"); fire(m, "loadeddata"); fire(m, "canplay"); fire(m, "canplaythrough");
+    web_media_resized();
+    return true;
+}
+int media_mse_new(void) {
+    struct mse *s = calloc(1, sizeof *s);
+    if (!s) return -1;
+    s->id = ++mse_ids; s->duration = -1; s->next = mses; mses = s;
+    return s->id;
+}
+static bool mime_ok(const char *t, bool *video) {
+    char l[160]; int k = 0; for (; t[k] && k < 159; k++) l[k] = (char)(t[k] >= 'A' && t[k] <= 'Z' ? t[k] + 32 : t[k]); l[k] = 0;
+    if (!has(l, "mp4") || !type_ok(l)) return false;
+    *video = has(l, "video/");
+    if (*video && has(l, "codecs") && !has(l, "avc1") && !has(l, "avc3")) return false;
+    if (!*video && has(l, "codecs") && !has(l, "mp4a")) return false;
+    return true;
+}
+int media_mse_supported(const char *mime) { bool v; return mime_ok(mime, &v); }
+int media_mse_add(int id, const char *mime) {             /* addSourceBuffer: its index, -1 unsupported, -2 full */
+    struct mse *s = mse_get(id); bool video;
+    if (!s || !mime_ok(mime, &video)) return -1;
+    if (s->nb >= 4) return -2;
+    struct msebuf *b = &s->b[s->nb]; memset(b, 0, sizeof *b); b->video = video; b->track = -1;
+    return s->nb++;
+}
+int media_mse_append(int id, int bi, const uint8_t *p, long n) {   /* 0 ok, -1 no such buffer, -2 over the limit */
+    struct mse *s = mse_get(id);
+    if (!s || bi < 0 || bi >= s->nb) return -1;
+    struct msebuf *b = &s->b[bi];
+    if (b->len + n > MSE_MAX_BYTES) return -2;
+    if (b->len + n > b->cap) {
+        long nc = b->cap ? b->cap : 1 << 20; while (nc < b->len + n) nc *= 2;
+        uint8_t *nd = realloc(b->d, nc);
+        if (!nd) return -2;
+        b->d = nd; b->cap = nc;
+    }
+    memcpy(b->d + b->len, p, n); b->len += n; b->dirty = true;
+    if (s->el) { mse_refresh(b); mse_try_ready(s->el); }
+    return 0;
+}
+/* the time range a SourceBuffer holds, in seconds (start > end: nothing) */
+void media_mse_buffered(int id, int bi, double *start, double *end) {
+    *start = 0; *end = 0;
+    struct mse *s = mse_get(id);
+    if (!s || bi < 0 || bi >= s->nb) return;
+    struct msebuf *b = &s->b[bi]; mse_refresh(b);
+    if (!b->m || b->track < 0) return;
+    long ns = mp4_track(b->m, b->track)->nsamples;
+    struct mp4_sample a, z;
+    if (ns <= 0 || !mp4_sample(b->m, b->track, 0, &a) || !mp4_sample(b->m, b->track, ns - 1, &z)) return;
+    if (z.offset + z.size > b->len) { if (ns < 2 || !mp4_sample(b->m, b->track, ns - 2, &z)) return; }
+    int64_t d = mp4_sample_duration(b->m, b->track, ns - 1);
+    *start = mp4_ms(b->m, b->track, a.pts) / 1000.0;
+    *end = mp4_ms(b->m, b->track, z.pts + d) / 1000.0;
+}
+void media_mse_duration(int id, double d) {
+    struct mse *s = mse_get(id);
+    if (!s) return;
+    s->duration = d;
+    if (s->el && s->el->state >= MS_READY && s->el->state != MS_ERROR) { s->el->dur_ms = d > 0 && d < 1e8 ? (long)(d * 1000) : 0; fire(s->el, "durationchange"); }
+}
+void media_mse_end(int id) { struct mse *s = mse_get(id); if (s) s->ended = true; }
+/* el.src = URL.createObjectURL(mediaSource) (id), or something else (-1) */
+void media_mse_attach(struct node *n, int id) {
+    struct wmedia *m = M(n);
+    if (!m) return;
+    struct mse *s = id > 0 ? mse_get(id) : 0;
+    if (m == active) { snd(SOUND_STREAM_STOP, 0, 0); active = 0; }
+    close_decoders(m);
+    m->state = MS_IDLE; m->shown_ms = 0; m->msg[0] = 0;
+    if (!s) return;
+    if (s->el && s->el != m) { struct wmedia *o = s->el; if (o == active) { snd(SOUND_STREAM_STOP, 0, 0); active = 0; } close_decoders(o); o->state = MS_IDLE; }
+    m->mse = s; s->el = m;
+    ksnprintf(m->url, sizeof m->url, "blob:arc-mediasource-%d", id);
+    fire(m, "loadstart");
+    mse_try_ready(m);
+}
+static void mse_free_all(void) {
+    while (mses) {
+        struct mse *s = mses; mses = s->next;
+        for (int i = 0; i < s->nb; i++) { if (s->b[i].m) mp4_close(s->b[i].m); free(s->b[i].d); }
+        free(s);
+    }
 }
 
 /* ---------------- playing ---------------- */
@@ -476,12 +628,17 @@ static void seek(struct wmedia *m, int64_t ms) {
     if (ms < 0) ms = 0;
     if (m->dur_ms > 0 && ms > m->dur_ms) ms = m->dur_ms;
     if (m->fmt == F_MP4) {
+        if (m->mse) {
+            struct msebuf *vb = mse_buf(m->mse, true), *ab = mse_buf(m->mse, false);
+            if (vb && m->vt >= 0) { m->mv = vb->m; m->file = vb->d; m->flen = vb->len; }
+            if (ab && m->at >= 0) { m->ma = ab->m; m->afile = ab->d; m->aflen = ab->len; }
+        }
         if (m->vt >= 0) {
-            m->vs = mp4_sample_at(m->mv, m->vt, ms, 1); if (m->vs < 0) m->vs = 0;
+            m->vs = m->mv ? mp4_sample_at(m->mv, m->vt, ms, 1) : 0; if (m->vs < 0) m->vs = 0;
             h264_reset(m->vd); if (m == active) { have_held = false; flushed = false; }
         }
         if (m->at >= 0) {
-            m->as_ = mp4_sample_at(m->mv, m->at, ms, 0); if (m->as_ < 0) m->as_ = 0;
+            m->as_ = m->ma ? mp4_sample_at(m->ma, m->at, ms, 0) : 0; if (m->as_ < 0) m->as_ = 0;
             aac_reset(m->ad);
         }
     } else if (m->fmt == F_MP3) ms = mp3_seek(m->md, ms);
@@ -516,7 +673,7 @@ static long play_step(struct wmedia *m) {
     if (sys_time() - last_tu > 250) { last_tu = sys_time(); fire(m, "timeupdate"); }
     if (m->vt < 0) {                                    /* sound only */
         m->shown_ms = now;
-        if (audio_done && snd(SOUND_STREAM_STATUS, 0, 0) <= 20) { finished(m); return -1; }
+        if ((audio_done && snd(SOUND_STREAM_STATUS, 0, 0) <= 20) || (!audio_ok && m->dur_ms > 0 && now >= m->dur_ms)) { finished(m); return -1; }
         static uint64_t last; if (sys_time() - last > 250) { last = sys_time(); redraw(m); }
         return 20;
     }
@@ -524,7 +681,7 @@ static long play_step(struct wmedia *m) {
         int np = next_picture(m);
         if (np == 0) return 0;
         if (np < 0) {
-            if (!has_audio(m) || audio_done) { finished(m); return -1; }
+            if (!has_audio(m) || audio_done || !audio_ok) { finished(m); return -1; }
             m->shown_ms = now; return 20;
         }
     }
@@ -550,18 +707,21 @@ long media_tick(void) {
         nev--;
         if (n) js_event(n, t, 0, 0, 0);
     }
+    bool waiting = false;
     for (struct wmedia *m = all; m; m = m->next)
         if (m->want_play) {
+            if (m->mse && !mse_try_ready(m)) { waiting = true; continue; }   /* play() before the data: wait */
             m->want_play = false;
-            if (m->state == MS_IDLE || m->state == MS_ERROR) load(m);
+            if (!m->mse && (m->state == MS_IDLE || m->state == MS_ERROR)) load(m);
             if (m->state >= MS_READY && m->state != MS_ERROR) {
                 if (m->pend_seek >= 0) { m->shown_ms = m->pend_seek; m->pend_seek = -1; }
                 start(m);
             }
             return 0;
         }
-    if (!active || active->state != MS_PLAYING) return nev ? 0 : -1;
-    return play_step(active);
+    if (!active || active->state != MS_PLAYING) return nev ? 0 : waiting ? 50 : -1;
+    long w = play_step(active);
+    return waiting && (w < 0 || w > 50) ? 50 : w;
 }
 
 /* ---------------- clicks and keys ---------------- */
@@ -593,7 +753,7 @@ double media_js(struct node *n, const char *op, const char *name, double v) {
     if (!m) return 0;
     if (!strcmp(op, "play")) { if (m->state != MS_PLAYING) m->want_play = true; return 0; }
     if (!strcmp(op, "pause")) { if (m->state == MS_PLAYING) pause_m(m); else if (m->want_play) m->want_play = false; return 0; }
-    if (!strcmp(op, "load")) { if (m == active) { snd(SOUND_STREAM_STOP, 0, 0); active = 0; } close_decoders(m); m->state = MS_IDLE; m->shown_ms = 0; m->msg[0] = 0; m->vw = m->vh = 0; free(m->pic); m->pic = 0; m->pw = m->ph = 0; fire(m, "emptied"); return 0; }
+    if (!strcmp(op, "load")) { struct mse *keep = m->mse; if (m == active) { snd(SOUND_STREAM_STOP, 0, 0); active = 0; } close_decoders(m); if (keep) { m->mse = keep; keep->el = m; } m->state = MS_IDLE; m->shown_ms = 0; m->msg[0] = 0; m->vw = m->vh = 0; free(m->pic); m->pic = 0; m->pw = m->ph = 0; fire(m, "emptied"); return 0; }
     if (!strcmp(op, "set")) {
         if (!strcmp(name, "currentTime")) { if (v != v || v < 0) v = 0; seek(m, (int64_t)(v * 1000)); redraw(m); }
         else if (!strcmp(name, "volume")) { if (v >= 0 && v <= 1) { m->volume = v; fire(m, "volumechange"); } }

@@ -732,19 +732,36 @@
   Headers.prototype.keys = function () { return Object.keys(this._h)[Symbol.iterator](); };
   function Response(body, init) {
     init = init || {};
-    hidden(this, '_body', body == null ? '' : String(body));
+    var isBin = body && typeof body === 'object' && body.byteLength !== undefined;
+    hidden(this, '_buf', isBin ? (body.buffer ? body.buffer.slice(body.byteOffset || 0, (body.byteOffset || 0) + body.byteLength) : body) : (init._buf || null));
+    hidden(this, '_body', body == null ? '' : isBin ? '' : String(body));
     this.status = init.status === undefined ? 200 : init.status; this.statusText = init.statusText || '';
     this.ok = this.status >= 200 && this.status < 300; this.headers = new Headers(init.headers); this.url = init.url || ''; this.redirected = false; this.type = 'basic'; this.bodyUsed = false;
   }
   Response.prototype.text = function () { this.bodyUsed = true; return Promise.resolve(this._body); };
   Response.prototype.json = function () { var b = this._body; this.bodyUsed = true; return new Promise(function (ok) { ok(JSON.parse(b)); }); };
-  Response.prototype.clone = function () { return new Response(this._body, { status: this.status, headers: this.headers, url: this.url }); };
-  Response.prototype.blob = function () { return Promise.resolve({ size: this._body.length, type: this.headers.get('content-type') || '', text: function () { return Promise.resolve(this._b); }, _b: this._body }); };
-  Response.prototype.arrayBuffer = function () { return Promise.reject(new TypeError('arrayBuffer() is not supported')); };
+  Response.prototype.clone = function () { return new Response(this._body, { status: this.status, headers: this.headers, url: this.url, _buf: this._buf }); };
+  function resBytes(r) {                               // the body as bytes (from the network as sent, else the text as UTF-8)
+    if (r._buf) return r._buf;
+    return new g.TextEncoder().encode(r._body).buffer;
+  }
+  Response.prototype.blob = function () { var b = new Uint8Array(resBytes(this)); this.bodyUsed = true; return Promise.resolve(new g.Blob([b], { type: this.headers.get('content-type') || '' })); };
+  Response.prototype.arrayBuffer = function () { this.bodyUsed = true; return Promise.resolve(resBytes(this).slice(0)); };
+  Response.prototype.bytes = function () { this.bodyUsed = true; return Promise.resolve(new Uint8Array(resBytes(this).slice(0))); };
+  Object.defineProperty(Response.prototype, 'body', { get: function () {   // a stream that gives the whole body as one chunk
+    var r = this, done = false;
+    return { locked: false, getReader: function () { return { read: function () { if (done) return Promise.resolve({ value: undefined, done: true }); done = true; r.bodyUsed = true; return Promise.resolve({ value: new Uint8Array(resBytes(r).slice(0)), done: false }); }, releaseLock: function () {}, cancel: function () { done = true; return Promise.resolve(); }, closed: Promise.resolve() }; },
+             cancel: function () { return Promise.resolve(); }, pipeTo: function () { return Promise.reject(new TypeError('pipeTo is not supported')); } };
+  }, configurable: true });
   Response.json = function (d, i) { return new Response(JSON.stringify(d), i); };
   function Request(u, i) { i = i || {}; this.url = typeof u === 'string' ? D.resolve(u) : u.url; this.method = (i.method || (u && u.method) || 'GET').toUpperCase(); this.headers = new Headers(i.headers || (u && u.headers)); this.body = i.body || (u && u.body) || null; }
   function headerText(h) { var s = ''; if (h) new Headers(h).forEach(function (v, k) { s += k + ': ' + v + '\r\n'; }); return s; }
-  function bodyText(b) { return b == null ? null : b instanceof URLSearchParams ? b.toString() : typeof b === 'object' && b._fd ? b.toString() : String(b); }
+  function bodyText(b) {                               // binary bodies (ArrayBuffer, typed arrays) go as they are
+    if (b == null) return null;
+    if (typeof b === 'object' && b.byteLength !== undefined) return b;
+    if (typeof g.Blob === 'function' && b instanceof g.Blob) return b._t;
+    return b instanceof URLSearchParams ? b.toString() : typeof b === 'object' && b._fd ? b.toString() : String(b);
+  }
   g.fetch = function (input, init) {
     init = init || {};
     var req = input instanceof Request ? input : new Request(input, init);
@@ -753,7 +770,7 @@
       D.setTimer(function () {
         var r = D.http(method, req.url, body, headerText(init.headers || req.headers));
         if (!r[0]) { reject(new TypeError('Failed to fetch: ' + (r[4] || 'network error'))); return; }
-        var res = new Response(r[1], { status: r[0], headers: { 'content-type': r[2] }, url: r[3] });
+        var res = new Response(r[1], { status: r[0], headers: { 'content-type': r[2] }, url: r[3], _buf: r[5] });
         resolve(res);
       }, 0, false);
     });
@@ -781,7 +798,8 @@
       if (x._aborted) return;
       var r = D.http(x._m, x._u, bodyText(body), headerText(x._h));
       x.status = r[0]; x.statusText = r[0] === 200 ? 'OK' : ''; x.responseText = r[1]; x._ct = r[2]; x.responseURL = r[3]; x.readyState = 4;
-      x.response = x.responseType === 'json' ? (function () { try { return JSON.parse(r[1]); } catch (e) { return null; } })() : r[1];
+      x.response = x.responseType === 'json' ? (function () { try { return JSON.parse(r[1]); } catch (e) { return null; } })() :
+        x.responseType === 'arraybuffer' ? r[5] : x.responseType === 'blob' ? new g.Blob([new Uint8Array(r[5])], { type: r[2] || '' }) : r[1];
       var fire = function (t) { var ev = new ProgressEvent(t); x.dispatchEvent(ev); var h = x['on' + t]; if (typeof h === 'function') h.call(x, ev); };
       fire('readystatechange'); fire(r[0] ? 'load' : 'error'); fire('loadend');
     };
@@ -1033,6 +1051,97 @@
   Object.defineProperty(MP, 'textTracks', { get: function () { return []; }, configurable: true });
   ['NETWORK_EMPTY', 'NETWORK_IDLE', 'NETWORK_LOADING', 'NETWORK_NO_SOURCE'].forEach(function (k, i) { MP[k] = i; HTMLMediaElement[k] = i; });
   ['HAVE_NOTHING', 'HAVE_METADATA', 'HAVE_CURRENT_DATA', 'HAVE_FUTURE_DATA', 'HAVE_ENOUGH_DATA'].forEach(function (k, i) { MP[k] = i; HTMLMediaElement[k] = i; });
+
+  // ---------------- Media Source Extensions (the bytes go to web/media.c) ----------------
+  var blobMS = {}, blobSeq = 0;
+  function msEvent(o, type) { var e = new g.Event(type); o.dispatchEvent(e); }
+  function TimeRanges(list) { hidden(this, '_l', list); }
+  Object.defineProperty(TimeRanges.prototype, 'length', { get: function () { return this._l.length; } });
+  TimeRanges.prototype.start = function (i) { if (!(i < this._l.length)) throw new DOMException('Index out of range', 'IndexSizeError'); return this._l[i][0]; };
+  TimeRanges.prototype.end = function (i) { if (!(i < this._l.length)) throw new DOMException('Index out of range', 'IndexSizeError'); return this._l[i][1]; };
+  g.TimeRanges = TimeRanges;
+  function SourceBuffer(ms, idx, mime) {
+    hidden(this, '_ms', ms); hidden(this, '_i', idx); hidden(this, '_q', []);
+    this.mimeType = mime; this.updating = false; this.mode = 'segments'; this.timestampOffset = 0;
+    this.appendWindowStart = 0; this.appendWindowEnd = Infinity;
+    this.onupdatestart = this.onupdate = this.onupdateend = this.onerror = this.onabort = null;
+  }
+  SourceBuffer.prototype = Object.create(EventTarget.prototype); SourceBuffer.prototype.constructor = SourceBuffer;
+  function sbRun(sb, work) {                         // like browsers: updating now, the work and its events a moment later
+    if (sb._ms.readyState !== 'open') { if (sb._ms.readyState === 'ended') { sb._ms.readyState = 'open'; msEvent(sb._ms, 'sourceopen'); } else throw new DOMException('The MediaSource is closed', 'InvalidStateError'); }
+    if (sb.updating) throw new DOMException('This SourceBuffer is still processing an append', 'InvalidStateError');
+    sb.updating = true; msEvent(sb, 'updatestart');
+    g.setTimeout(function () {
+      var err = null; try { work(); } catch (e) { err = e; }
+      sb.updating = false;
+      if (err) { msEvent(sb, 'error'); msEvent(sb, 'updateend'); }
+      else { msEvent(sb, 'update'); msEvent(sb, 'updateend'); }
+    }, 0);
+  }
+  SourceBuffer.prototype.appendBuffer = function (data) {
+    var sb = this;
+    if (!data || data.byteLength === undefined) throw new TypeError("Failed to execute 'appendBuffer' on 'SourceBuffer': not an ArrayBuffer or view");
+    var copy = new Uint8Array(data.buffer ? data.buffer.slice(data.byteOffset || 0, (data.byteOffset || 0) + data.byteLength) : data.slice(0));
+    if (copy.byteLength > 0 && D.mseAppend(sb._ms._id, sb._i, copy) === -2) throw new DOMException('The SourceBuffer is full', 'QuotaExceededError');
+    sbRun(sb, function () {});
+  };
+  SourceBuffer.prototype.remove = function (a, b) { sbRun(this, function () {}); };   // kept (memory is plenty for now)
+  SourceBuffer.prototype.abort = function () { if (this.updating) { this.updating = false; msEvent(this, 'abort'); msEvent(this, 'updateend'); } };
+  SourceBuffer.prototype.changeType = function (t) { if (!D.mseSupported(String(t))) throw new DOMException('Unsupported type', 'NotSupportedError'); this.mimeType = String(t); };
+  Object.defineProperty(SourceBuffer.prototype, 'buffered', { get: function () {
+    var r = D.mseBuffered(this._ms._id, this._i); return new TimeRanges(r[1] > r[0] ? [[r[0], r[1]]] : []);
+  } });
+  g.SourceBuffer = SourceBuffer;
+  function SourceBufferList(arr) { var l = arr.slice(); l.onaddsourcebuffer = l.onremovesourcebuffer = null; l.addEventListener = function () {}; l.removeEventListener = function () {}; return l; }
+  function MediaSource() {
+    if (!(this instanceof MediaSource)) throw new TypeError("Failed to construct 'MediaSource': Please use the 'new' operator");
+    hidden(this, '_id', D.mseNew()); hidden(this, '_sb', []);
+    this.readyState = 'closed'; this.onsourceopen = this.onsourceended = this.onsourceclose = null;
+    hidden(this, '_dur', NaN);
+  }
+  MediaSource.prototype = Object.create(EventTarget.prototype); MediaSource.prototype.constructor = MediaSource;
+  MediaSource.isTypeSupported = function (t) { return !!D.mseSupported(String(t)); };
+  MediaSource.canConstructInDedicatedWorker = false;
+  Object.defineProperty(MediaSource.prototype, 'sourceBuffers', { get: function () { return SourceBufferList(this._sb); } });
+  Object.defineProperty(MediaSource.prototype, 'activeSourceBuffers', { get: function () { return SourceBufferList(this._sb); } });
+  Object.defineProperty(MediaSource.prototype, 'duration', {
+    get: function () { return this.readyState === 'closed' ? NaN : this._dur; },
+    set: function (v) { v = +v; if (v !== v || v < 0) throw new TypeError('Invalid duration'); this._dur = v; D.mseDuration(this._id, v === Infinity ? -1 : v); }
+  });
+  MediaSource.prototype.addSourceBuffer = function (t) {
+    t = String(t);
+    if (this.readyState !== 'open') throw new DOMException('The MediaSource is not open', 'InvalidStateError');
+    var i = D.mseAdd(this._id, t);
+    if (i === -1) throw new DOMException("The type provided ('" + t + "') is unsupported.", 'NotSupportedError');
+    if (i < 0) throw new DOMException('Too many SourceBuffers', 'QuotaExceededError');
+    var sb = new SourceBuffer(this, i, t); this._sb.push(sb); return sb;
+  };
+  MediaSource.prototype.removeSourceBuffer = function (sb) { var i = this._sb.indexOf(sb); if (i >= 0) this._sb.splice(i, 1); };
+  MediaSource.prototype.endOfStream = function (err) {
+    if (this.readyState !== 'open') throw new DOMException('The MediaSource is not open', 'InvalidStateError');
+    this.readyState = 'ended'; if (!err) D.mseEnd(this._id); msEvent(this, 'sourceended');
+  };
+  MediaSource.prototype.setLiveSeekableRange = MediaSource.prototype.clearLiveSeekableRange = function () {};
+  g.MediaSource = MediaSource; g.WebKitMediaSource = MediaSource; g.ManagedMediaSource = undefined;
+  var oldCreate = URL.createObjectURL;
+  URL.createObjectURL = function (o) {
+    if (o instanceof MediaSource) { var u = 'blob:' + (g.location && g.location.origin || 'null') + '/arc-mediasource-' + (++blobSeq); blobMS[u] = o; return u; }
+    return oldCreate.apply(URL, arguments);
+  };
+  URL.revokeObjectURL = function (u) { delete blobMS[String(u)]; };
+  function attachSrc(el, v) {
+    var ms = blobMS[v];
+    if (ms) {
+      if (el._msrc !== ms) {
+        hidden(el, '_msrc', ms); D.mseAttach(el, ms._id);
+        g.setTimeout(function () { if (ms.readyState === 'closed') { ms.readyState = 'open'; msEvent(ms, 'sourceopen'); } }, 0);
+      }
+    } else if (el._msrc) { var o = el._msrc; hidden(el, '_msrc', null); D.mseAttach(el, -1); o.readyState = 'closed'; msEvent(o, 'sourceclose'); }
+  }
+  Object.defineProperty(MP, 'src', { get: function () { var a = this.getAttribute('src'); return a === null ? '' : blobMS[a] ? a : new URL(a, doc.baseURI || g.location.href).href; },
+    set: function (v) { v = String(v); this.setAttribute('src', v); attachSrc(this, v); }, configurable: true });
+  Object.defineProperty(MP, 'srcObject', { get: function () { return this._msrc || null; },
+    set: function (v) { if (v instanceof MediaSource) { var u = URL.createObjectURL(v); this.setAttribute('src', u); attachSrc(this, u); } else if (!v) attachSrc(this, ''); }, configurable: true });
   g.HTMLMediaElement = HTMLMediaElement; g.HTMLVideoElement = HTMLMediaElement; g.HTMLAudioElement = HTMLMediaElement;
   g.Audio = function (src) { var a = doc.createElement('audio'); if (src !== undefined) a.setAttribute('src', src); return a; };
   // ShadowRoot: a document fragment with a host

@@ -666,7 +666,10 @@ void js_run_timers(void) {
 /* ---------------- natives: network and storage ---------------- */
 NATIVE(n_http) {
     char *method = js_to_cstring(rt, A(argc, argv, 0)), *u = js_to_cstring(rt, A(argc, argv, 1));
-    char *body = js_is_undefined(A(argc, argv, 2)) || js_is_null(A(argc, argv, 2)) ? 0 : js_to_cstring(rt, A(argc, argv, 2));
+    long raw_len = 0; const uint8_t *raw = js_bytes(rt, A(argc, argv, 2), &raw_len);   /* a binary body is sent as it is */
+    char *body = 0; long body_len = 0;
+    if (raw) { body = malloc(raw_len + 1); if (body) { memcpy(body, raw, raw_len); body[raw_len] = 0; body_len = raw_len; } }
+    else if (!js_is_undefined(A(argc, argv, 2)) && !js_is_null(A(argc, argv, 2))) { body = js_to_cstring(rt, A(argc, argv, 2)); body_len = body ? (long)strlen(body) : 0; }
     char *hdr = js_is_string(A(argc, argv, 3)) ? js_to_cstring(rt, A(argc, argv, 3)) : 0;
     static char abs[8192], final[8192]; final[0] = 0; resolve_url(D->base, u ? u : "", abs, sizeof abs);
     char *out = 0, ctype[128] = ""; int status = 0;
@@ -679,7 +682,7 @@ NATIVE(n_http) {
         uint64_t t0 = sys_time(), c0 = cyc(); (void)c0;
         web_fetch_timeout = 15000; web_fetch_deadline = sys_time() + 30000;
         web_script_waiting++;
-        n = web_http(method ? method : "GET", abs, body, body ? strlen(body) : 0, hdr, &out, &status, ctype, sizeof ctype, final, sizeof final);
+        n = web_http(method ? method : "GET", abs, body, body_len, hdr, &out, &status, ctype, sizeof ctype, final, sizeof final);
         web_script_waiting--;
         web_fetch_timeout = 0; web_fetch_deadline = 0;
         uint64_t waited = sys_time() - t0;
@@ -695,6 +698,7 @@ NATIVE(n_http) {
     set_held(a, 2, js_str(rt, ctype, -1));
     set_held(a, 3, js_str(rt, final[0] ? final : abs, -1));
     set_held(a, 4, js_str(rt, n < 0 ? http_strerror(n) : "", -1));
+    set_held(a, 5, js_new_arraybuffer(rt, out && n > 0 ? out : "", n > 0 ? n : 0));   /* the same body as bytes */
     free(out);
     DROP(a);
     return a;
@@ -737,6 +741,30 @@ NATIVE(n_test_spin) { volatile unsigned long x = 0; for (;;) x++; return js_unde
 NATIVE(n_set_protos) {
     proto_elem = A(argc, argv, 0); proto_text = A(argc, argv, 1); proto_comment = A(argc, argv, 2); api = A(argc, argv, 3);
     proto_media = A(argc, argv, 4); proto_shadow = A(argc, argv, 5);
+    return js_undefined();
+}
+/* Media Source Extensions: D.mseNew(), D.mseSupported(type), D.mseAdd(id, type), D.mseAppend(id, i, bytes),
+ * D.mseBuffered(id, i) -> [start, end], D.mseDuration(id, s), D.mseEnd(id), D.mseAttach(el, id) */
+NATIVE(n_mse_new) { return js_int(media_mse_new()); }
+NATIVE(n_mse_supported) { char *t = T(A(argc, argv, 0), 0); int ok = t ? media_mse_supported(t) : 0; free(t); return js_bool(ok); }
+NATIVE(n_mse_add) { char *t = T(A(argc, argv, 1), 0); int r = t ? media_mse_add((int)js_to_number(rt, A(argc, argv, 0)), t) : -1; free(t); return js_int(r); }
+NATIVE(n_mse_append) {
+    long n; const uint8_t *p = js_bytes(rt, A(argc, argv, 2), &n);
+    if (!p) return js_int(-1);
+    return js_int(media_mse_append((int)js_to_number(rt, A(argc, argv, 0)), (int)js_to_number(rt, A(argc, argv, 1)), p, n));
+}
+NATIVE(n_mse_buffered) {
+    double a, b; media_mse_buffered((int)js_to_number(rt, A(argc, argv, 0)), (int)js_to_number(rt, A(argc, argv, 1)), &a, &b);
+    jsval r = js_array(rt); HOLD(r); js_set_index(rt, r, 0, js_num(a)); js_set_index(rt, r, 1, js_num(b)); DROP(r);
+    return r;
+}
+NATIVE(n_mse_duration) { media_mse_duration((int)js_to_number(rt, A(argc, argv, 0)), js_to_number(rt, A(argc, argv, 1))); return js_undefined(); }
+NATIVE(n_mse_end) { media_mse_end((int)js_to_number(rt, A(argc, argv, 0))); return js_undefined(); }
+NATIVE(n_mse_attach) {
+    struct node *n = N(A(argc, argv, 0));
+    if (!n || n->type != N_ELEM || (n->tag != T_VIDEO && n->tag != T_AUDIO)) return js_undefined();
+    if (!n->fc) media_attach(D, n);
+    media_mse_attach(n, (int)js_to_number(rt, A(argc, argv, 1)));
     return js_undefined();
 }
 /* D.media(el, op, name, value): <video>/<audio> for scripts (web/media.c) */
@@ -839,7 +867,8 @@ static const struct { const char *name; js_native fn; int n; } natives[] = {
 #ifdef WEB_TEST_SPIN
     { "testSpin", n_test_spin, 0 },
 #endif
-    { "storageLoad", n_storage_load, 0 }, { "storageSave", n_storage_save, 1 }, { "compile", n_compile, 1 }, { "setProtos", n_set_protos, 6 }, { "computed", n_computed, 1 }, { "customIn", n_custom_in, 1 }, { "attachShadow", n_attach_shadow, 1 }, { "shadow", n_shadow, 1 }, { "host", n_host, 1 }, { "media", n_media, 4 },
+    { "storageLoad", n_storage_load, 0 }, { "storageSave", n_storage_save, 1 }, { "compile", n_compile, 1 }, { "setProtos", n_set_protos, 6 }, { "computed", n_computed, 1 }, { "customIn", n_custom_in, 1 }, { "attachShadow", n_attach_shadow, 1 }, { "shadow", n_shadow, 1 }, { "host", n_host, 1 }, { "media", n_media, 4 }, { "mseNew", n_mse_new, 0 }, { "mseSupported", n_mse_supported, 1 }, { "mseAdd", n_mse_add, 2 },
+    { "mseAppend", n_mse_append, 3 }, { "mseBuffered", n_mse_buffered, 2 }, { "mseDuration", n_mse_duration, 2 }, { "mseEnd", n_mse_end, 1 }, { "mseAttach", n_mse_attach, 2 },
 };
 
 bool js_page_active(void) { return page_on; }

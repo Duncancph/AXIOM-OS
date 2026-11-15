@@ -875,6 +875,29 @@ NATIVE(ta_getter) {
     default: return JS_UNDEF;
     }
 }
+/* a new ArrayBuffer holding a copy of p[0..n) (for the host) */
+jsval js_new_arraybuffer(js_rt *rt, const void *p, long n) {
+    JSObject *o = new_abuf(rt, n < 0 ? 0 : (uint64_t)n, 0);
+    if (!o) { rt->has_exc = false; return JS_UNDEF; }
+    if (n > 0) memcpy(abuf(o)->data, p, (size_t)n);
+    return mkobj(o);
+}
+/* the bytes of an ArrayBuffer, typed array or DataView, for the host (0 if it isn't one or is detached) */
+const uint8_t *js_bytes(js_rt *rt, jsval v, long *len) {
+    (void)rt;
+    *len = 0;
+    if (is_cls(v, CLS_ARRAYBUFFER)) { ABuf *b = abuf(vobj(v)); if (!b || b->detached) return 0; *len = b->len; return b->data; }
+    if (is_cls(v, CLS_TYPEDARRAY) || is_cls(v, CLS_DATAVIEW)) {
+        JSObject *o = vobj(v); TA *t = tad(o);
+        if (!t || !t->buf) return 0;
+        ABuf *b = abuf(t->buf); if (!b || b->detached) return 0;
+        long n = is_cls(v, CLS_TYPEDARRAY) ? (long)ta_length(o) * ta_size[t->kind] : (long)t->len;
+        if (t->off > b->len) return 0;
+        if (t->off + n > b->len) n = b->len - t->off;
+        *len = n; return b->data + t->off;
+    }
+    return 0;
+}
 NATIVE(ta_to_string_tag) {
     if (!is_cls(this_, CLS_TYPEDARRAY)) return JS_UNDEF;
     return mkstr(str_cstr(rt, ta_names[tad(vobj(this_))->kind]));

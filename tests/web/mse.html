@@ -1,0 +1,34 @@
+<!doctype html><html><body style="background:#222;color:#eee;font-family:sans-serif">
+<h3>MediaSource test</h3>
+<video id=v width=640 height=360 controls></video>
+<p id=log>starting</p>
+<script>
+var L = [];
+function log(s) { L.push(s); document.getElementById('log').textContent = L.slice(-6).join(' | '); console.error('MSETEST ' + s); }
+log('isTypeSupported avc1=' + MediaSource.isTypeSupported('video/mp4; codecs="avc1.4d401f"') + ' mp4a=' + MediaSource.isTypeSupported('audio/mp4; codecs="mp4a.40.2"') + ' vp9=' + MediaSource.isTypeSupported('video/webm; codecs="vp9"'));
+var v = document.getElementById('v'), ms = new MediaSource();
+['loadedmetadata', 'canplay', 'playing', 'ended', 'error'].forEach(function (t) { v.addEventListener(t, function () { log('video ' + t + ' t=' + v.currentTime.toFixed(2) + ' dur=' + v.duration); }); });
+ms.addEventListener('sourceopen', function () {
+  log('sourceopen');
+  ms.duration = 12;
+  var vb = ms.addSourceBuffer('video/mp4; codecs="avc1.4d401f"'), ab = ms.addSourceBuffer('audio/mp4; codecs="mp4a.40.2"');
+  Promise.all([fetch('mse_v.mp4').then(function (r) { return r.arrayBuffer(); }), fetch('mse_a.mp4').then(function (r) { return r.arrayBuffer(); })]).then(function (bufs) {
+    log('got ' + bufs[0].byteLength + ' + ' + bufs[1].byteLength + ' bytes');
+    var left = 2;
+    function feed(sb, buf, name) {
+      var pos = 0;
+      function next() {
+        if (pos >= buf.byteLength) { if (--left === 0) { ms.endOfStream(); log('endOfStream, buffered ' + vb.buffered.start(0).toFixed(2) + '-' + vb.buffered.end(0).toFixed(2) + ' / ' + ab.buffered.end(0).toFixed(2)); } return; }
+        var n = Math.min(65536, buf.byteLength - pos);
+        sb.appendBuffer(new Uint8Array(buf, pos, n)); pos += n;
+      }
+      sb.addEventListener('updateend', next); next();
+    }
+    feed(vb, bufs[0], 'video'); feed(ab, bufs[1], 'audio');
+    v.play();
+  }).catch(function (e) { log('fetch failed ' + e); });
+});
+v.src = URL.createObjectURL(ms);
+log('src ' + v.src.slice(0, 40));
+setTimeout(function () { log('after 8s t=' + v.currentTime.toFixed(2) + ' paused=' + v.paused + ' ready=' + v.readyState + ' size=' + v.videoWidth + 'x' + v.videoHeight); }, 8000);
+</script></body></html>
