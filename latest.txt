@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 136
-notes Bluetooth speakers and headphones: in the Bluetooth app, press 'Play sound here' next to a paired speaker and all of AXIOM's sound plays on it (or switch the speaker on and it connects by itself).
-file kernel b136/thane.elf.gz 18889912 492d9417840d4d825e42a293ed0589a3f5d405135999bde2a0b26ed1879cad79
-file initrd b136/initrd.tar.gz 1331200 942aa7ae76b63a534f3d3344abacb3455d8b8a2976a4f491eccc61ab816c3aad
-file bootx64 b136/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b136/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 30460221009657f570d5b58947c7008c9eb10633f16cc1a0eae18842df118bc77316afbdec022100b74f81964db8faa53fddd51c47e40600372c1739a725b5eb4c86f479bea4338a
+build 137
+notes Vertex draws shadows under cards, buttons and menus (CSS box-shadow).
+file kernel b137/thane.elf.gz 18898104 e4c5aa44e8243bd41fdabb5f6c770daad533a9752673a4c65e09ec7b4b71a5d9
+file initrd b137/initrd.tar.gz 1331200 942aa7ae76b63a534f3d3344abacb3455d8b8a2976a4f491eccc61ab816c3aad
+file bootx64 b137/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b137/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022058bd92e0ff80b41b0094d6320d7ccdf0141342c881f58556db135322a5134ca6022100e372dcc3cf3902b5eae3156d404c429e979684eef8d2b5f93640d78db45cd1d9
