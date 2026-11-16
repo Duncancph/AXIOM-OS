@@ -407,6 +407,7 @@ void task_reap(void) {
 
 void event_push(struct task *t, const struct dunc_event *ev) {
     if (!t || !t->state || t->state == PS_ZOMBIE) return;
+    if (t->lx && linux_window_event(t, ev)) return;           /* a Linux program's window: its file has the events */
     if (ev->type == EV_MOUSE_MOVE && t->evh != t->evt) {   /* coalesce mouse motion */
         struct dunc_event *last = &t->evq[(t->evh + EVQ_SIZE - 1) % EVQ_SIZE];
         if (last->type == EV_MOUSE_MOVE && last->win == ev->win) { *last = *ev; return; }

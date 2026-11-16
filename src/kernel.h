@@ -398,6 +398,9 @@ bool wm_flush(struct task *t, int id, int x, int y, int w, int h);
 bool wm_set_title(struct task *t, int id, const char *title);
 bool wm_close(struct task *t, int id);
 void wm_task_exit(struct task *t);
+uint32_t *wm_buffer(struct task *t, int id, int *pages, int *w, int *h);
+void wm_screen(int *w, int *h);
+bool linux_window_event(struct task *t, const struct dunc_event *ev);   /* linux.c: true if it went to a Linux window */
 int wm_count(struct task *t);
 void desktop_notify(const char *title, const char *msg);
 void boot_progress(int percent);

@@ -1,0 +1,60 @@
+/* AXIOM windows for Linux programs (the Linux compatibility layer, src/linux.c).
+ *
+ * A Linux program running on AXIOM opens a window as a file:
+ *
+ *     int fd = open("/dev/axiom/window", O_RDWR | O_CLOEXEC);
+ *     struct axwin_create c = { .w = 800, .h = 600, .flags = AXWIN_RESIZABLE, .title = "Hello" };
+ *     ioctl(fd, AXWIN_CREATE, &c);                              // the window appears
+ *     struct axwin_info i; ioctl(fd, AXWIN_INFO, &i);
+ *     uint32_t *px = mmap(0, i.stride * i.h, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+ *     ... draw: px[y * i.stride / 4 + x] = 0x00RRGGBB (XRGB8888; in memory B, G, R, X: Skia's BGRA) ...
+ *     struct axwin_rect r = { 0, 0, i.w, i.h }; ioctl(fd, AXWIN_FLUSH, &r);   // show that part
+ *
+ * Input: read(fd) gives whole struct axwin_event records (poll/epoll: readable when some are waiting).
+ * Resizing (only with AXWIN_RESIZABLE): an AXWIN_EV_RESIZE event asks for a new size; the program
+ * munmaps its pixels, calls AXWIN_RESIZE (fails with EBUSY while they're still mapped), then
+ * AXWIN_INFO and mmap again. The window goes away when the fd and every mapping of it are gone.
+ *
+ * This header is plain C with no AXIOM dependencies: copy it into ported programs as it is. */
+#ifndef AXIOM_WINDOW_H
+#define AXIOM_WINDOW_H
+#include <stdint.h>
+
+#define AXWIN_RESIZABLE 1u
+
+struct axwin_create { int32_t w, h; uint32_t flags; char title[64]; };
+struct axwin_info { int32_t id, w, h, stride; int32_t screen_w, screen_h; };   /* stride in bytes */
+struct axwin_rect { int32_t x, y, w, h; };
+
+/* ioctl requests ('A' 'X' then a number) */
+#define AXWIN_CREATE 0x41580001u   /* struct axwin_create *: make the window (once per fd) */
+#define AXWIN_INFO   0x41580002u   /* struct axwin_info *: its size and the screen's (before AXWIN_CREATE: id, w, h 0) */
+#define AXWIN_FLUSH  0x41580003u   /* struct axwin_rect *: show what was drawn there */
+#define AXWIN_TITLE  0x41580004u   /* char[64]: a new title */
+#define AXWIN_RESIZE 0x41580005u   /* (no argument): take the size the last AXWIN_EV_RESIZE asked for */
+
+/* events: the same layout as AXIOM's own (struct dunc_event) */
+struct axwin_event { int32_t type, win, x, y, key, button; };
+enum {
+    AXWIN_EV_KEY = 1,          /* key: a character 1..255 (Windows-1252; Ctrl+A..Z = 1..26) or AXWIN_KEY_*,
+                                  plus AXWIN_MOD_* bits for modifiers held with special keys */
+    AXWIN_EV_MOUSE_DOWN,       /* x, y in the window's pixels; button: 1 left, 2 right */
+    AXWIN_EV_MOUSE_UP,
+    AXWIN_EV_MOUSE_MOVE,
+    AXWIN_EV_CLOSE,            /* the close button: the program decides */
+    AXWIN_EV_FOCUS,
+    AXWIN_EV_BLUR,
+    AXWIN_EV_MOUSE_LEAVE,
+    AXWIN_EV_WHEEL,            /* x, y: the pointer; key: steps, positive = down (reversed with natural scrolling) */
+    AXWIN_EV_RESIZE,           /* x, y: the size asked for (see above) */
+};
+enum { AXWIN_KEY_UP = 0x100, AXWIN_KEY_DOWN, AXWIN_KEY_LEFT, AXWIN_KEY_RIGHT, AXWIN_KEY_HOME, AXWIN_KEY_END,
+       AXWIN_KEY_DEL, AXWIN_KEY_PGUP, AXWIN_KEY_PGDN, AXWIN_KEY_INS, AXWIN_KEY_PRTSC,
+       AXWIN_KEY_F1, AXWIN_KEY_F2, AXWIN_KEY_F3, AXWIN_KEY_F4, AXWIN_KEY_F5, AXWIN_KEY_F6, AXWIN_KEY_F7,
+       AXWIN_KEY_F8, AXWIN_KEY_F9, AXWIN_KEY_F10, AXWIN_KEY_F11, AXWIN_KEY_F12, AXWIN_KEY_SUPER };
+#define AXWIN_MOD_SHIFT 0x1000
+#define AXWIN_MOD_CTRL  0x2000
+#define AXWIN_MOD_ALT   0x4000
+#define AXWIN_MOD_SUPER 0x8000
+
+#endif

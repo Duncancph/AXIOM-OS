@@ -740,9 +740,9 @@ bool wm_resize(struct task *t, int id, int *nw, int *nh) {
         for (int x = 0; x < cw; x++)
             nb[y * cw + x] = (x < w->w && y < w->h) ? w->buf[y * w->w + x] : HL_WIN_BG;
     damage_frame(w);
-    vm_unmap(t->pml4, w->uva, w->pages);
+    if (w->uva) vm_unmap(t->pml4, w->uva, w->pages);           /* (uva 0: a Linux program's window, mapped by linux.c) */
     for (int i = 0; i < w->pages; i++) page_free((uint8_t *)w->buf + i * 4096);
-    for (int i = 0; i < np; i++) vm_map(t->pml4, w->uva + i * 4096ULL, (uint64_t)nb + i * 4096ULL, true, false);
+    if (w->uva) for (int i = 0; i < np; i++) vm_map(t->pml4, w->uva + i * 4096ULL, (uint64_t)nb + i * 4096ULL, true, false);
     w->buf = nb; w->pages = np; w->w = cw; w->h = ch;
     damage_frame(w);
     *nw = cw; *nh = ch;
@@ -789,7 +789,7 @@ bool wm_set_title(struct task *t, int id, const char *title) {
 bool wm_close(struct task *t, int id) {
     struct window *win = find(t, id);
     if (!win) return false;
-    vm_unmap(t->pml4, win->uva, win->pages);
+    if (win->uva) vm_unmap(t->pml4, win->uva, win->pages);
     remove_window(win - wins);
     return true;
 }
@@ -1300,3 +1300,12 @@ void desktop_thread(void *arg) {
         task_sleep(n ? 4 : 8);                           /* while the screen is changing, look at the mouse more often */
     }
 }
+
+/* a window's pixels and size (Linux programs map them themselves) */
+uint32_t *wm_buffer(struct task *t, int id, int *pages, int *w, int *h) {
+    struct window *win = find(t, id);
+    if (!win) return 0;
+    *pages = win->pages; *w = win->w; *h = win->h;
+    return win->buf;
+}
+void wm_screen(int *w, int *h) { *w = W; *h = H; }

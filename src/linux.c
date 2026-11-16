@@ -4,6 +4,7 @@
  * output to the terminal that started them. */
 #include "kernel.h"
 #include "vfs.h"
+#include "axiom_window.h"
 
 /* ---------------- the syscall instruction ---------------- */
 extern void syscall_entry(void);
@@ -17,13 +18,14 @@ void linux_cpu_init(void) {
 }
 
 /* ---------------- a Linux program's state ---------------- */
-enum { FD_NONE, FD_TTY_IN, FD_TTY_OUT, FD_FILE, FD_DIR, FD_CHAN, FD_EVENT, FD_EPOLL, FD_SHM, FD_DEV };
+enum { FD_NONE, FD_TTY_IN, FD_TTY_OUT, FD_FILE, FD_DIR, FD_CHAN, FD_EVENT, FD_EPOLL, FD_SHM, FD_DEV, FD_WIN };
 struct chan;
 /* FD_CHAN: a pipe end or a socket-pair end. It reads from rx and writes to tx (either may be 0: a pipe's
  * other end, or after shutdown) and holds a reader count on rx and a writer count on tx. */
 struct lfd { int kind; int flags; uint64_t off; char path[200]; struct chan *rx, *tx; bool sock; uint8_t stype;
              uint8_t dev;    /* FD_DEV: which of devs[] */
-             void *obj; };   /* FD_EVENT: a struct evfd, FD_EPOLL: a struct epoll, FD_SHM: a struct shm (shared by duplicates) */
+             void *obj; };   /* FD_EVENT: a struct evfd, FD_EPOLL: a struct epoll, FD_SHM: a struct shm,
+                                FD_WIN: a struct axwin (shared by duplicates) */
 struct shmmap;
 #define NFD 128
 struct lxproc {
@@ -314,12 +316,22 @@ static void chan_drop(struct chan *c, bool reader) {
 struct evfd { int refs; uint64_t count; bool sem; };
 struct shm;
 static void shm_put(struct shm *o);
+#define AXQ 256
+struct axwin {
+    int refs;                         /* (first: fd_close/fd_copy count duplicates like the others) */
+    struct task *owner; int id; bool resizable;
+    struct shm *pix;                  /* the window holds one reference; each mapping one more */
+    struct axwin_event q[AXQ]; int qh, qt;
+    struct axwin *next;
+};
+static void axwin_put(struct axwin *x);
 struct epitem { int fd; uint32_t events; uint64_t data; const void *id; bool off; };
 struct epoll { int refs, n, next; struct epitem it[NFD]; };
 static void fd_close(struct lfd *f) {
     if (f->kind == FD_CHAN) { chan_drop(f->rx, true); chan_drop(f->tx, false); }
     if ((f->kind == FD_EVENT || f->kind == FD_EPOLL) && f->obj && --*(int *)f->obj <= 0) { kfree(f->obj); chan_wake(); }   /* (refs come first in both) */
     if (f->kind == FD_SHM) shm_put(f->obj);
+    if (f->kind == FD_WIN) axwin_put(f->obj);
     memset(f, 0, sizeof *f);
 }
 static void fd_copy(struct lfd *dst, const struct lfd *src) {      /* dup: one more reference to the same ends */
@@ -327,7 +339,7 @@ static void fd_copy(struct lfd *dst, const struct lfd *src) {      /* dup: one m
     fd_close(dst);
     *dst = *src;
     if (dst->kind == FD_CHAN) { if (dst->rx) dst->rx->readers++; if (dst->tx) dst->tx->writers++; }
-    if ((dst->kind == FD_EVENT || dst->kind == FD_EPOLL || dst->kind == FD_SHM) && dst->obj) (*(int *)dst->obj)++;
+    if ((dst->kind == FD_EVENT || dst->kind == FD_EPOLL || dst->kind == FD_SHM || dst->kind == FD_WIN) && dst->obj) (*(int *)dst->obj)++;
 }
 /* move bytes in or out of the ring (to / from a kernel buffer) */
 static void ring_put(struct chan *c, const uint8_t *s, uint32_t n) {
@@ -443,6 +455,7 @@ static int fd_ready(struct lxproc *lx, int fd) {
     }
     case FD_EVENT: { struct evfd *ev = f->obj; return (ev->count ? POLLIN_ : 0) | (ev->count < ~0ULL - 1 ? POLLOUT_ : 0); }
     case FD_EPOLL: return epoll_scan(lx, f->obj, 0, 1) ? POLLIN_ : 0;
+    case FD_WIN: { struct axwin *x = f->obj; return (x->qh != x->qt ? POLLIN_ : 0) | POLLOUT_; }
     default: return POLLIN_ | POLLOUT_;                          /* files are always ready */
     }
 }
@@ -475,7 +488,7 @@ static uint64_t do_poll(struct lxproc *lx, uint64_t ufds, uint64_t nfds, int64_t
 #define EPOLLET_      (1u << 31)
 static const void *fd_id(const struct lfd *f) {               /* which open file an fd number refers to */
     if (f->kind == FD_CHAN) return f->rx ? (const void *)f->rx : (const void *)f->tx;
-    if (f->kind == FD_EVENT || f->kind == FD_EPOLL || f->kind == FD_SHM) return f->obj;
+    if (f->kind == FD_EVENT || f->kind == FD_EPOLL || f->kind == FD_SHM || f->kind == FD_WIN) return f->obj;
     return f;
 }
 /* ready entries into out (12-byte struct epoll_event, packed), up to max; out 0: just count (no one-shot change) */
@@ -525,12 +538,15 @@ static uint64_t do_epoll_wait(struct lxproc *lx, uint64_t epfd, uint64_t uev, in
  * A memfd is a list of pages, given as they're first needed. Mapping it MAP_SHARED puts those same pages in
  * the program's page tables (as SHARED: page tables never free them). It lives while an fd or a mapping
  * holds it; each mapping is remembered (struct shmmap) so munmap, MAP_FIXED over it and exit let go. */
-struct shm { int refs; uint64_t size, npg; uint64_t *pg; int seals; };
+struct shm { int refs; uint64_t size, npg; uint64_t *pg; int seals;   /* pg: physical addresses (0: not made yet) */
+             struct task *win_owner; int win_id; };   /* a window's pixels: the pages are the window's, and when the last
+                                                          mapping or file lets go of them the window closes */
 enum { SEAL_SEAL_ = 1, SEAL_SHRINK_ = 2, SEAL_GROW_ = 4, SEAL_WRITE_ = 8, SEAL_FUTURE_WRITE_ = 16, SEAL_EXEC_ = 32 };
 struct shmmap { uint64_t s, e; struct shm *obj; uint64_t pgoff; };
 static void shm_put(struct shm *o) {
     if (!o || --o->refs > 0) return;
-    for (uint64_t i = 0; i < o->npg; i++) if (o->pg[i]) page_free((void *)o->pg[i]);
+    if (o->win_id) wm_close(o->win_owner, o->win_id);           /* (frees its pages; nothing maps them any more) */
+    else for (uint64_t i = 0; i < o->npg; i++) if (o->pg[i]) upage_free(o->pg[i]);
     kfree(o->pg); kfree(o);
 }
 static bool shm_resize(struct shm *o, uint64_t size) {        /* (pages beyond a smaller size stay until the end:
@@ -546,7 +562,7 @@ static bool shm_resize(struct shm *o, uint64_t size) {        /* (pages beyond a
     if (size < o->size)                                         /* what's cut off reads as zeros if it grows again */
         for (uint64_t a = size; a < o->size && a / 4096 < o->npg;) {
             uint64_t i = a / 4096, in = a % 4096, k = 4096 - in;
-            if (o->pg[i]) memset((uint8_t *)o->pg[i] + in, 0, k);
+            if (o->pg[i]) memset((uint8_t *)mmio_virt(o->pg[i]) + in, 0, k);
             a += k;
         }
     o->size = size;
@@ -554,8 +570,8 @@ static bool shm_resize(struct shm *o, uint64_t size) {        /* (pages beyond a
 }
 static uint8_t *shm_page(struct shm *o, uint64_t i) {           /* the page, made if need be */
     if (i >= o->npg) return 0;
-    if (!o->pg[i]) o->pg[i] = (uint64_t)page_alloc(1);
-    return (uint8_t *)o->pg[i];
+    if (!o->pg[i]) o->pg[i] = upage_alloc();                    /* (programs' memory: above 4 GiB when there is any) */
+    return o->pg[i] ? (uint8_t *)mmio_virt(o->pg[i]) : 0;
 }
 /* copy between the memfd at off and buf (user memory, already checked); returns bytes copied */
 static int64_t shm_rw(struct shm *o, uint64_t off, uint8_t *buf, uint64_t n, bool write) {
@@ -598,8 +614,7 @@ static void shm_forget_all(struct lxproc *lx) {              /* at exit (its pag
 /* map pages [pgoff, ...) of o at [va, va + len) of the program (the area is already made) */
 static void shm_map_pages(struct mm *mm, struct shm *o, uint64_t va, uint64_t len, uint64_t pgoff, int prot) {
     for (uint64_t i = 0; i < len / 4096 && pgoff + i < o->npg && (pgoff + i) * 4096 < o->size; i++) {
-        uint8_t *pg = shm_page(o, pgoff + i);
-        if (pg) mm_map_shared(mm, va + i * 4096, (uint64_t)pg, prot);
+        if (shm_page(o, pgoff + i)) mm_map_shared(mm, va + i * 4096, o->pg[pgoff + i], prot);   /* (physical) */
     }
 }
 
@@ -620,9 +635,10 @@ static int chan_fds(struct lxproc *lx, struct chan *r0, struct chan *w0, struct 
     return 0;
 }
 /* ---------------- /dev: the few devices every Linux program expects ---------------- */
-enum { DEV_NULL = 1, DEV_ZERO, DEV_FULL, DEV_RANDOM, DEV_URANDOM };
+enum { DEV_NULL = 1, DEV_ZERO, DEV_FULL, DEV_RANDOM, DEV_URANDOM, DEV_WINDOW };
 static const struct { const char *name; int minor; } devs[] = {
     { 0, 0 }, { "null", 3 }, { "zero", 5 }, { "full", 7 }, { "random", 8 }, { "urandom", 9 },
+    { "axiom/window", 0 },                                       /* (char device 240:0, a "local use" number) */
 };
 static int dev_of(const char *full) {                           /* full: a joined path (/system/linux/dev/...) */
     if (strncmp(full, "/system/linux/dev/", 18)) return 0;
@@ -631,7 +647,98 @@ static int dev_of(const char *full) {                           /* full: a joine
 }
 static void dev_stat(struct lstat *st, int dev) {
     fill_stat(st, false, 0, false, devs[dev].name);
-    st->mode = 0020666; st->rdev = (1 << 8) | (uint64_t)devs[dev].minor; st->blocks = 0;
+    st->mode = 0020666; st->rdev = dev == DEV_WINDOW ? 240 << 8 : (1 << 8) | (uint64_t)devs[dev].minor; st->blocks = 0;
+}
+
+/* ---------------- AXIOM windows (common/axiom_window.h) ----------------
+ * One file, one window. Its pixels are a struct shm borrowing the window's pages, so mmap, munmap and exit
+ * use the shared-memory code; the window closes when the file and every mapping have let go. Events for
+ * a Linux program's windows come here (event_push) instead of the task's own queue. */
+static struct axwin *axwins;
+static struct shm *axwin_pixels(struct task *owner, int id) {    /* the window's current pages as a shm */
+    int pages, w, h;
+    uint32_t *buf = wm_buffer(owner, id, &pages, &w, &h);
+    struct shm *o = buf ? kmalloc(sizeof *o) : 0;
+    if (!o) return 0;
+    memset(o, 0, sizeof *o);
+    if (!(o->pg = kmalloc((uint64_t)pages * 8))) { kfree(o); return 0; }
+    for (int i = 0; i < pages; i++) o->pg[i] = (uint64_t)buf + (uint64_t)i * 4096;
+    o->npg = (uint64_t)pages; o->size = (uint64_t)w * h * 4; o->refs = 1;
+    o->seals = SEAL_SEAL_ | SEAL_SHRINK_ | SEAL_GROW_;
+    o->win_owner = owner; o->win_id = id;
+    return o;
+}
+static void axwin_put(struct axwin *x) {
+    if (!x || --x->refs > 0) return;
+    for (struct axwin **pp = &axwins; *pp; pp = &(*pp)->next) if (*pp == x) { *pp = x->next; break; }
+    shm_put(x->pix);                                             /* (closes the window unless still mapped) */
+    kfree(x);
+}
+bool linux_window_event(struct task *t, const struct dunc_event *ev) {
+    for (struct axwin *x = axwins; x; x = x->next) {
+        if (x->owner != t || x->id != ev->win) continue;
+        if (ev->type == EV_MOUSE_MOVE && x->qh != x->qt) {        /* coalesce motion, as AXIOM does for its apps */
+            struct axwin_event *last = &x->q[(x->qh + AXQ - 1) % AXQ];
+            if (last->type == EV_MOUSE_MOVE) { memcpy(last, ev, sizeof *last); return true; }
+        }
+        int nh = (x->qh + 1) % AXQ;
+        if (nh != x->qt) { memcpy(&x->q[x->qh], ev, sizeof x->q[0]); x->qh = nh; }   /* (full: dropped) */
+        chan_wake();
+        return true;
+    }
+    return true;                     /* (a closed one's: a Linux program never reads the task's own queue) */
+}
+static uint64_t axwin_ioctl(struct lxproc *lx, struct lfd *fd, uint64_t req, uint64_t arg) {
+    struct axwin *x = fd->obj;
+    struct task *P = current->proc ? current->proc : current;
+    switch (req) {
+    case AXWIN_CREATE: {
+        if (x->id) return E(EEXIST_);
+        if (!uok(arg, sizeof(struct axwin_create), true)) return E(EFAULT_);
+        struct axwin_create *c = (struct axwin_create *)arg;
+        char title[64]; memcpy(title, c->title, 63); title[63] = 0;
+        uint32_t *buf; int pages;
+        struct window *w = wm_create(P, c->w, c->h, title, &buf, &pages, 0, (c->flags & AXWIN_RESIZABLE) ? WIN_RESIZABLE : 0);
+        if (!w) return E(EINVAL_);                               /* (too big or small for the screen, or too many) */
+        x->owner = P; x->id = wm_id(w); x->resizable = c->flags & AXWIN_RESIZABLE;
+        if (!(x->pix = axwin_pixels(P, x->id))) { wm_close(P, x->id); x->id = 0; return E(ENOMEM_); }
+        return (uint64_t)x->id;
+    }
+    case AXWIN_INFO: {                                          /* (before AXWIN_CREATE: just the screen's size) */
+        if (!uok(arg, sizeof(struct axwin_info), true)) return E(EFAULT_);
+        int pages, w = 0, h = 0, sw, sh;
+        if (x->id && !wm_buffer(x->owner, x->id, &pages, &w, &h)) return E(ENOENT_);
+        wm_screen(&sw, &sh);
+        *(struct axwin_info *)arg = (struct axwin_info){ x->id, w, h, w * 4, sw, sh };
+        return 0;
+    }
+    case AXWIN_FLUSH: {
+        if (!x->id) return E(ENOENT_);
+        if (!uok(arg, sizeof(struct axwin_rect), false)) return E(EFAULT_);
+        struct axwin_rect *r = (struct axwin_rect *)arg;
+        return wm_flush(x->owner, x->id, r->x, r->y, r->w, r->h) ? 0 : E(ENOENT_);
+    }
+    case AXWIN_TITLE: {
+        if (!x->id) return E(ENOENT_);
+        char title[64];
+        if (!uok(arg, 1, false) || !ustr(title, arg, sizeof title)) return E(EFAULT_);
+        return wm_set_title(x->owner, x->id, title) ? 0 : E(ENOENT_);
+    }
+    case AXWIN_RESIZE: {
+        if (!x->id) return E(ENOENT_);
+        if (!x->resizable) return E(EINVAL_);
+        if (x->pix->refs > 1) return E(EBUSY_);                 /* still mapped: munmap first (its pages are about to go) */
+        int nw, nh;
+        if (!wm_resize(x->owner, x->id, &nw, &nh)) return E(ENOMEM_);
+        struct shm *np = axwin_pixels(x->owner, x->id);
+        if (!np) return E(ENOMEM_);
+        kfree(x->pix->pg); kfree(x->pix);                        /* (the old pages were the window's; wm_resize freed them) */
+        x->pix = np;
+        return 0;
+    }
+    }
+    (void)lx;
+    return E(ENOTTY_);
 }
 
 static uint64_t do_open(struct lxproc *lx, int dirfd, uint64_t upath, int flags) {
@@ -657,6 +764,13 @@ static uint64_t do_open(struct lxproc *lx, int dirfd, uint64_t upath, int flags)
         if (fd < 0) return E(EMFILE_);
         struct lfd *f = &lx->fd[fd]; memset(f, 0, sizeof *f);
         f->kind = FD_DEV; f->dev = (uint8_t)dv; f->flags = flags & (3 | 04000 | 02000);
+        if (dv == DEV_WINDOW) {                                  /* a window (made by AXWIN_CREATE) */
+            struct axwin *x = kmalloc(sizeof *x);
+            if (!x) { f->kind = FD_NONE; return E(ENOMEM_); }
+            memset(x, 0, sizeof *x); x->refs = 1;
+            x->next = axwins; axwins = x;
+            f->kind = FD_WIN; f->obj = x;
+        }
         strncpy0(f->path, full, sizeof f->path);
         return fd;
     }
@@ -706,6 +820,18 @@ static uint64_t linux_syscall_(struct frame *f) {
         if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
         struct lfd *fd = &lx->fd[a];
         if (fd->kind == FD_TTY_IN) return 0;                     /* (no input yet: end of file) */
+        if (fd->kind == FD_WIN) {                               /* window events: whole records */
+            struct axwin *x = fd->obj;
+            if (n == 17) return E(ESPIPE_);
+            if (c < sizeof(struct axwin_event)) return E(EINVAL_);
+            while (x->qh == x->qt) { if (fd->flags & 04000) return E(EAGAIN_); chan_wait(-1); }
+            if (!uok(b, c, true)) return E(EFAULT_);
+            uint64_t k = 0;
+            while (x->qh != x->qt && k + sizeof(struct axwin_event) <= c) {
+                memcpy((uint8_t *)b + k, &x->q[x->qt], sizeof x->q[0]); x->qt = (x->qt + 1) % AXQ; k += sizeof x->q[0];
+            }
+            return k;
+        }
         if (fd->kind == FD_DEV) {
             if (fd->dev == DEV_NULL) return 0;
             if (!uok(b, c, true)) return E(EFAULT_);
@@ -747,6 +873,7 @@ static uint64_t linux_syscall_(struct frame *f) {
         if (!uok(b, c, false)) return E(EFAULT_);
         struct lfd *fd = &lx->fd[a];
         if (fd->kind == FD_TTY_OUT) { out_write(lx, (const char *)b, c); return c; }
+        if (fd->kind == FD_WIN) return E(EINVAL_);
         if (fd->kind == FD_DEV) return fd->dev == DEV_FULL ? E(ENOSPC_) : c;   /* (written to random: mixed in on Linux; here, dropped) */
         if (fd->kind == FD_EVENT) {
             struct evfd *ev = fd->obj;
@@ -820,6 +947,7 @@ static uint64_t linux_syscall_(struct frame *f) {
         if (fd->kind == FD_FILE || fd->kind == FD_DIR) vfs_stat(fd->path, &st);
         fill_stat((struct lstat *)b, fd->kind == FD_DIR, st.size, fd->kind == FD_TTY_IN || fd->kind == FD_TTY_OUT, fd->kind == FD_FILE || fd->kind == FD_DIR ? fd->path : (a == 0 ? "<stdin>" : "<tty>"));
         if (fd->kind == FD_DEV) dev_stat((struct lstat *)b, fd->dev);
+        if (fd->kind == FD_WIN) dev_stat((struct lstat *)b, DEV_WINDOW);
         if (fd->kind == FD_SHM) {                              /* a file in memory */
             struct lstat *ls = (struct lstat *)b;
             ls->mode = 0100600; ls->size = (int64_t)((struct shm *)fd->obj)->size; ls->blocks = (ls->size + 511) / 512;
@@ -905,6 +1033,7 @@ static uint64_t linux_syscall_(struct frame *f) {
         if (a < NFD && (lx->fd[a].kind == FD_TTY_IN || lx->fd[a].kind == FD_TTY_OUT) && b == 0x5413 && uok(c, 8, true)) {   /* TIOCGWINSZ */
             uint16_t *w = (uint16_t *)c; w[0] = 40; w[1] = 100; w[2] = w[3] = 0; return 0;
         }
+        if (a < NFD && lx->fd[a].kind == FD_WIN) return axwin_ioctl(lx, &lx->fd[a], (uint32_t)b, c);
         if (a < NFD && lx->fd[a].kind == FD_CHAN) {
             struct lfd *fd = &lx->fd[a];
             if (b == 0x541B && uok(c, 4, true)) { *(int32_t *)c = fd->rx ? (int32_t)(fd->rx->packet && fd->rx->mcount ? fd->rx->msg[fd->rx->mhead] : fd->rx->len) : 0; return 0; }   /* FIONREAD */
@@ -1243,8 +1372,9 @@ static uint64_t linux_syscall_(struct frame *f) {
             fl |= 0x20;                                        /* /dev/zero: fresh zeroed memory */
         }
         if (dfl) shm_unmapped(lx, a & ~4095ULL, (a + b + 4095) & ~4095ULL);   /* (whatever was there goes) */
-        if (!(fl & 0x20) && fd >= 0 && fd < NFD && lx->fd[fd].kind == FD_SHM) {   /* shared memory */
-            struct shm *o = lx->fd[fd].obj;
+        if (!(fl & 0x20) && fd >= 0 && fd < NFD && lx->fd[fd].kind == FD_WIN && !((struct axwin *)lx->fd[fd].obj)->pix) return E(ENODEV_);   /* (no window yet) */
+        if (!(fl & 0x20) && fd >= 0 && fd < NFD && (lx->fd[fd].kind == FD_SHM || lx->fd[fd].kind == FD_WIN)) {   /* shared memory, a window's pixels */
+            struct shm *o = lx->fd[fd].kind == FD_WIN ? ((struct axwin *)lx->fd[fd].obj)->pix : lx->fd[fd].obj;
             if (off & 4095) return E(EINVAL_);
             if ((lx->fd[fd].flags & 3) == 1) return E(EACCES_);   /* opened only for writing */
             if ((fl & 3) != 2 && (prot & DPROT_WRITE) && (lx->fd[fd].flags & 3) == 0) return E(EACCES_);   /* shared and writable, from a read-only file */
