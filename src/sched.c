@@ -182,7 +182,7 @@ long futex_wait(uint64_t addr, uint32_t val, int64_t timeout_ms) {
     if (__atomic_load_n((volatile uint32_t *)addr, __ATOMIC_SEQ_CST) != val) return -DERR_AGAIN;
     if (timeout_ms == 0) return -DERR_TIMEDOUT;
     t->futex_mm = t->mm; t->futex_addr = addr; t->futex_woken = false;
-    t->wake_at = timeout_ms > 0 ? uptime_ms() + (uint64_t)timeout_ms : 0;
+    t->wake_at = timeout_ms > 0 ? uptime_ms() + (uint64_t)timeout_ms + 1 : 0;   /* (+1: whole ms count, never wake early) */
     t->state = PS_BLOCKED;
     schedule();
     bool woken = t->futex_woken;
@@ -329,7 +329,7 @@ void kyield(void) {
 
 void task_sleep(uint64_t ms) {
     if (!sched_running) { sleep_ms(ms); return; }
-    current->wake_at = uptime_ms() + (ms ? ms : 1);
+    current->wake_at = uptime_ms() + (ms ? ms : 1) + 1;   /* (+1: the current ms is part gone; a sleep never ends early) */
     current->state = PS_SLEEPING;
     schedule();
 }

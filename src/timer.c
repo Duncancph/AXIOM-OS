@@ -35,9 +35,17 @@ void timer_init(void) {
 }
 
 uint64_t tsc_hz(void) { return hz; }
-uint64_t uptime_us(void) { return (rdtsc() - boot_tsc) / (hz / 1000000); }
-uint64_t uptime_ns(void) { uint64_t t = rdtsc() - boot_tsc; return t / hz * 1000000000ull + t % hz * 1000000000ull / hz; }
-uint64_t uptime_ms(void) { return (rdtsc() - boot_tsc) / (hz / 1000); }
+/* One clock for every core: the cores' time-stamp counters may differ a little (they do under emulation), so
+ * the clock is the highest any core has seen and never goes back, whichever core reads it. */
+static volatile uint64_t last_tsc;
+static uint64_t mono_tsc(void) {
+    uint64_t t = rdtsc(), l = __atomic_load_n(&last_tsc, __ATOMIC_RELAXED);
+    while (t > l) if (__atomic_compare_exchange_n(&last_tsc, &l, t, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) return t;
+    return l;
+}
+uint64_t uptime_us(void) { return (mono_tsc() - boot_tsc) / (hz / 1000000); }
+uint64_t uptime_ns(void) { uint64_t t = mono_tsc() - boot_tsc; return t / hz * 1000000000ull + t % hz * 1000000000ull / hz; }
+uint64_t uptime_ms(void) { return (mono_tsc() - boot_tsc) / (hz / 1000); }
 void udelay(uint64_t us) {
     uint64_t end = rdtsc() + us * (hz / 1000000);
     while (rdtsc() < end) cpu_relax();

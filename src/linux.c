@@ -285,7 +285,7 @@ static bool chan_wait(int64_t ms) {
     struct task *t = current;
     if (ms == 0) return false;
     t->futex_mm = IO_MM; t->futex_addr = IO_ADDR; t->futex_woken = false;
-    t->wake_at = ms > 0 ? uptime_ms() + (uint64_t)ms : 0;
+    t->wake_at = ms > 0 ? uptime_ms() + (uint64_t)ms + 1 : 0;   /* (+1: never early) */
     t->state = PS_BLOCKED;
     schedule();
     bool woken = t->futex_woken;
