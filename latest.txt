@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 143
-notes Wi-Fi test, stage 1: type 'wifi start' in CMD (Realtek RTL8821AE). It powers the card up and loads its firmware, and reports each step.
-file kernel b143/thane.elf.gz 18997272 c61dbd83e75a9693bdfaab59afc0b2cdd7f336333348e10e2c91d5f738742832
-file initrd b143/initrd.tar.gz 1372160 c4fca99f4a97cdfd07f5f07252bfc60f547e1b59ec238896bd18494a850c1c0d
-file bootx64 b143/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b143/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022075acda38360424a88a2033939dbf0b36ea9a36f923b66533ad639534c47774da0221008c27461df97d387bd902dea3f35b80d09ef3a0b32f066035c78d1486cfa80925
+build 145
+notes Wi-Fi test: 'wifi start' then 'wifi scan' in CMD (Realtek RTL8821AE): starts the card, sets up the radio and lists nearby networks.
+file kernel b145/thane.elf.gz 19084112 f9231280ea76fff4839c802f1f435616e9fd6e653c8d6dd2dca7fa896b2638fb
+file initrd b145/initrd.tar.gz 1372160 e2906e29fe8369b5be00e629f06a4c9be3dd2e84a25ca79e68d4402f6b2dd989
+file bootx64 b145/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b145/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304402202515f6ebfb36b3d5c30e1465d71cc7facf6350ff16e3ee0bd40393015945b0b9022032236c0967171d7e18a3026ccdb8a71e06d61f6a5042bf0dfe0cf636c99c916d
