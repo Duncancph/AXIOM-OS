@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 129
-notes Linux programs: pipes, sockets, poll/epoll, eventfd, shared memory and /dev devices - enough for Chromium (headless) to load a page. CMD takes longer command lines.
-file kernel b129/thane.elf.gz 18810264 6d1977daab8471ff663d853c9ab86b80c2dbfa638fb4134a11d252426a89904b
-file initrd b129/initrd.tar.gz 1310720 2107f98f7ea0eae0c222160c3c262e4d1812c3e5a04f5e327ae99931d56c9b5f
-file bootx64 b129/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b129/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3046022100a444941fe2836ab629b8e5a27f863aac97d0e3fa376695a7d7b819b2b82d67bd022100bee68461312140515dfadadb570547c91b597d446ebc920d1d11eb1493af9491
+build 133
+notes AXIOM uses all your memory (programs get the memory above 4 GB). Linux programs can pass files to each other, which fixes Chromium's crash on exit. Timers are exact across all cores.
+file kernel b133/thane.elf.gz 18823168 99d4bd11de48808a4eac6f9d106169ff0721b5715941a211a8e6ca8ba0134047
+file initrd b133/initrd.tar.gz 1310720 25fad0d3464c0abbeed51ebae818b36db52c7e324a5dcfe6b989b95ea93c82ce
+file bootx64 b133/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b133/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304502202f519d164ed995e9727d91244e83eb31dc8ad3a8a6d7f2c2d2e08aabd9924e330221008259a37a5656716f25b9231727de77252c743ebeba380a86b62f1234d17488b1
