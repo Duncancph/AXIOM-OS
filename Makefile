@@ -10,7 +10,7 @@ LIBGCC  := $(shell $(CC) -print-libgcc-file-name)
 
 APPS    := files about terminal monitor bluetooth network calc sandbox settings viewer web notes calendar music video
 REPO_APPS := editor clock
-K_SRCS  := $(filter-out src/desktop_highland.c,$(wildcard src/*.c)) common/gfx.c common/str.c common/inet.c user/lib/crypto/sha2.c user/lib/crypto/aead.c user/lib/crypto/bn.c user/lib/crypto/ecc.c user/lib/img/pngenc.c user/lib/img/inflate.c
+K_SRCS  := $(filter-out src/desktop_highland.c,$(wildcard src/*.c)) common/gfx.c common/str.c common/inet.c user/lib/crypto/sha2.c user/lib/crypto/aead.c user/lib/crypto/wpa.c user/lib/crypto/bn.c user/lib/crypto/ecc.c user/lib/img/pngenc.c user/lib/img/inflate.c
 K_OBJS  := $(patsubst %.c,build/k/%.o,$(K_SRCS)) build/k/boot.o build/k/isr.o build/k/apps.o build/k/ap_blob.o
 U_LIB   := build/u/crt0.o build/u/libdunc.o build/u/malloc.o build/u/gfx.o build/u/str.o build/u/inet.o build/u/json.o
 CRYPTO  := sha2 aead x25519 bn rsa ecc x509 tls
@@ -215,6 +215,8 @@ test:
 	gcc -std=gnu17 -O1 -g -fsanitize=address,undefined -DMALLOC_TEST -o build/test/test_malloc tests/test_malloc.c user/lib/malloc.c && build/test/test_malloc
 	gcc -std=gnu17 -O2 -w -fno-builtin -o build/test/test_crypto tests/test_crypto.c $(addprefix user/lib/crypto/,sha2.c aead.c x25519.c bn.c rsa.c ecc.c) common/str.c
 	python3 tests/test_crypto.py build/test/test_crypto
+	gcc -std=gnu17 -O1 -g -w -fno-builtin -fsanitize=address,undefined -o build/test/test_wpa tests/test_wpa.c $(addprefix user/lib/crypto/,wpa.c sha2.c aead.c) common/str.c
+	python3 tests/test_wpa.py build/test/test_wpa | tail -1
 	gcc -std=gnu17 -O2 -w -DX509_TESTING -fno-builtin -o build/test/test_roots tests/test_roots.c $(addprefix user/lib/crypto/,x509.c sha2.c bn.c rsa.c ecc.c) common/str.c common/inet.c
 	build/test/test_roots $(CA_BUNDLE) | tail -3
 	gcc -std=gnu17 -O2 -w -D_GNU_SOURCE -fno-builtin -o build/test/test_tls tests/test_tls.c $(addprefix user/lib/crypto/,tls.c x509.c sha2.c aead.c x25519.c bn.c rsa.c ecc.c) common/str.c common/inet.c
