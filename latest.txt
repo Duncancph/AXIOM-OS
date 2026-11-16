@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 149
-notes Fairer task scheduling (programs that wake each other run in order); Linux programs: fixes for Chromium closing, /proc/cpuinfo, /proc/meminfo, /dev/shm.
-file kernel b149/thane.elf.gz 19155352 96bffc79d085e26205d882db704636cc0c448cf2078dc0f428d0279decc0081c
-file initrd b149/initrd.tar.gz 1372160 d9d47d4a58c47669e649e5272e3910f61a179019322ce8f142a6787b9d3cef56
-file bootx64 b149/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b149/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022100d3a64454e2da3d863254cebc6c2fb628f1571122353ae363dceb5d00c225e0c90220356532c69f340bf422313d434c9c711ec5214c38409f960fd4b3bbbb275895a2
+build 150
+notes Linux programs can play sound (for the Chromium-based Vertex). The Music app now moves on to the next song and stops after the last.
+file kernel b150/thane.elf.gz 19203152 b120c39ad5eb8a651bccf0b87b7aa87b18bd23d2e98666cd32e06770105cda08
+file initrd b150/initrd.tar.gz 1372160 df24bcebd3e51b5456a09f61697076857cf68e1a9ac3524c40209aca679126d6
+file bootx64 b150/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b150/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304402200ae0fe618a70309a4f0d43f56641c14d833e58926cfb284aa3198b714dff90e6022069b0a0806c8c35456daa751c798b5232b25c521d658ef0ff03d9db8b454236e2
