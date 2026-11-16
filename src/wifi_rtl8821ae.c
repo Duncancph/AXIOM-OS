@@ -14,6 +14,8 @@
 #include "vfs.h"
 #include "wifi_rtl8821ae_tables.h"
 
+void wpa_pmk(const char *pass, const uint8_t *ssid, int ssid_len, uint8_t pmk[32]);   /* user/lib/crypto/wpa.c */
+
 static struct pci_dev *dev;
 static volatile uint8_t *mm;
 static char report[3000]; static int rlen;
@@ -459,39 +461,113 @@ static void note_beacon(const uint8_t *f, int len, int dbm) {
     }
     if (nfound < 48) { b.seen = 1; found[nfound++] = b; }
 }
-void wifi_scan(void) {
-    if (!started) wifi_start();
-    if (!radio_ok) { kprintf("The radio isn't ready (see 'wifi').\n"); return; }
-    nfound = 0;
-    int frames = 0, bad = 0, other = 0;
-    kprintf("Listening on channels 1-13 (about 3 seconds)...\n");
+static bool sim;                                  /* 'wifi simulate': a pretend card, for trying the Network app without one */
+static int scan_frames, scan_bad, scan_other;
+static void do_scan(void) {
+    nfound = 0; scan_frames = scan_bad = scan_other = 0;
+    if (sim) {
+        static const struct { const char *n; int ch, dbm, rsn, sae, priv; } fake[] = {
+            { "HomeNet", 6, -41, 1, 0, 1 }, { "HomeNet-Guest", 6, -47, 0, 0, 0 }, { "BT-7XKQ2A", 1, -63, 1, 0, 1 },
+            { "Neighbour 5G-ready", 11, -71, 1, 1, 1 }, { "", 3, -77, 1, 0, 1 }, { "Cafe Free WiFi", 9, -84, 0, 0, 0 },
+            { "Old Router", 13, -88, 0, 0, 1 } };
+        for (unsigned i = 0; i < sizeof fake / sizeof *fake; i++) {
+            struct bss *b = &found[nfound++]; memset(b, 0, sizeof *b);
+            strncpy0(b->ssid, fake[i].n, 33); b->ch = fake[i].ch; b->dbm = fake[i].dbm; b->rsn = fake[i].rsn; b->sae = fake[i].sae; b->privacy = fake[i].priv;
+            for (int k = 0; k < 6; k++) b->bssid[k] = (uint8_t)(0x10 * i + k);
+        }
+        sleep_ms(1500);
+        return;
+    }
     for (int ch = 1; ch <= 13; ch++) {
         set_channel(ch);
         uint64_t until = uptime_ms() + 220;
         while (uptime_ms() < until) {
             int len, dbm, rate; uint8_t *f;
             while ((f = rx_take(&len, &dbm, &rate))) {
-                frames++;
-                if (len < 0) { bad++; continue; }
-                if (len >= 1 && (f[0] == 0x80 || f[0] == 0x50)) note_beacon(f, len, dbm); else other++;
+                scan_frames++;
+                if (len < 0) { scan_bad++; continue; }
+                if (len >= 1 && (f[0] == 0x80 || f[0] == 0x50)) note_beacon(f, len, dbm); else scan_other++;
             }
             sleep_ms(2);
         }
     }
     for (int i = 0; i < nfound; i++) for (int j = i + 1; j < nfound; j++)       /* strongest first */
         if (found[j].dbm > found[i].dbm) { struct bss t = found[i]; found[i] = found[j]; found[j] = t; }
+}
+static int sec_of(const struct bss *b) { return b->sae && b->rsn ? WSEC_WPA3 : b->rsn ? WSEC_WPA2 : b->wpa ? WSEC_WPA : b->privacy ? WSEC_WEP : WSEC_OPEN; }
+void wifi_scan(void) {
+    if (!started && !sim) wifi_start();
+    if (!radio_ok && !sim) { kprintf("The radio isn't ready (see 'wifi').\n"); return; }
+    kprintf("Listening on channels 1-13 (about 3 seconds)...\n");
+    do_scan();
+    static const char *secn[] = { "open", "WEP", "WPA", "WPA2", "WPA3" };
     char line[160];
     rlen = 0; report[0] = 0;
-    add("Scan: %d frames received (%d damaged, %d not beacons), %d networks:", frames, bad, other, nfound);
+    add("Scan%s: %d frames received (%d damaged, %d not beacons), %d networks:", sim ? " (simulated)" : "", scan_frames, scan_bad, scan_other, nfound);
     for (int i = 0; i < nfound; i++) {
         struct bss *b = &found[i];
-        const char *sec = b->sae && b->rsn ? "WPA3" : b->rsn ? "WPA2" : b->wpa ? "WPA" : b->privacy ? "WEP" : "open";
-        ksnprintf(line, sizeof line, "  %-32s ch %2d  %4d dBm  %-4s  %02x:%02x:%02x:%02x:%02x:%02x", b->ssid[0] ? b->ssid : "(hidden)", b->ch, b->dbm, sec,
+        ksnprintf(line, sizeof line, "  %-32s ch %2d  %4d dBm  %-4s  %02x:%02x:%02x:%02x:%02x:%02x", b->ssid[0] ? b->ssid : "(hidden)", b->ch, b->dbm, secn[sec_of(b)],
                   b->bssid[0], b->bssid[1], b->bssid[2], b->bssid[3], b->bssid[4], b->bssid[5]);
         add("%s", line);
     }
-    if (!frames) add("Nothing at all was received: the radio isn't hearing yet. (RCR %08x, RX DMA %02x, CR %04x, RF 0x18 %05x)", r32(REG_RCR), r8(0x0286), r16(REG_CR), rf_read(0x18));
+    if (!scan_frames && !sim) add("Nothing at all was received: the radio isn't hearing yet. (RCR %08x, RX DMA %02x, CR %04x, RF 0x18 %05x)", r32(REG_RCR), r8(0x0286), r16(REG_CR), rf_read(0x18));
     kprintf("%s", report);
     vfs_write("/home/Documents/wifi-scan.txt", report, (uint64_t)rlen);
     kprintf("(Saved to Documents/wifi-scan.txt)\n");
+}
+void wifi_simulate(void) {
+    sim = !sim;
+    kprintf(sim ? "Simulated Wi-Fi card on (for trying the Network app; it doesn't connect to anything). 'wifi simulate' again turns it off.\n"
+                : "Simulated Wi-Fi card off.\n");
+}
+
+/* ---- for apps (SYS_WIFI) ---- */
+static char join_msg[128];
+static void hex(const uint8_t *b, int n, char *out) { static const char h[] = "0123456789abcdef"; for (int i = 0; i < n; i++) { out[2 * i] = h[b[i] >> 4]; out[2 * i + 1] = h[b[i] & 15]; } out[2 * n] = 0; }
+int64_t wifi_syscall(int op, uint64_t buf, int64_t n) {
+    if (op == WIFI_STATUS) {
+        struct wifi_status *st = (struct wifi_status *)buf;
+        memset(st, 0, sizeof *st);
+        st->simulated = sim;
+        strncpy0(st->saved, settings_get("wifi.ssid"), sizeof st->saved);
+        if (!dev && !sim) { st->state = WIFI_NONE; return 0; }
+        strncpy0(st->adapter, sim ? "Simulated Wi-Fi card" : "Realtek RTL8821AE", sizeof st->adapter);
+        if (sim) { st->state = WIFI_READY; static const uint8_t m[6] = { 0x02, 0xAC, 0x51, 0x00, 0x00, 0x01 }; memcpy(st->mac, m, 6); }
+        else { memcpy(st->mac, mac, 6); st->state = !started ? WIFI_OFF : radio_ok ? WIFI_READY : WIFI_FAILED; }
+        if (st->state == WIFI_FAILED) {                          /* the last line of the report says why */
+            int e = rlen - 1; while (e > 0 && report[e - 1] != '\n') e--;
+            int s0 = e - 1; while (s0 > 0 && report[s0 - 1] != '\n') s0--;
+            strncpy0(st->msg, report + (s0 > 0 ? s0 : 0), sizeof st->msg);
+        } else strncpy0(st->msg, join_msg, sizeof st->msg);
+        return 0;
+    }
+    if (op == WIFI_START) { if (sim) return 0; if (!dev) return -1; if (!started) wifi_start(); return radio_ok ? 0 : -1; }
+    if (op == WIFI_SCAN) { if (!sim && !radio_ok) return -1; do_scan(); return nfound; }
+    if (op == WIFI_RESULTS) {
+        struct wifi_net *o = (struct wifi_net *)buf; int k = 0;
+        const char *saved = settings_get("wifi.ssid");
+        for (int i = 0; i < nfound && k < n; i++, k++) {
+            memset(&o[k], 0, sizeof o[k]);
+            strncpy0(o[k].ssid, found[i].ssid, sizeof o[k].ssid); memcpy(o[k].bssid, found[i].bssid, 6);
+            o[k].ch = found[i].ch; o[k].dbm = found[i].dbm; o[k].sec = sec_of(&found[i]);
+            o[k].saved = found[i].ssid[0] && !strcmp(found[i].ssid, saved);
+        }
+        return k;
+    }
+    if (op == WIFI_CONNECT) {
+        struct wifi_join j; memcpy(&j, (void *)buf, sizeof j);
+        j.ssid[32] = 0; j.pass[63] = 0;
+        int pl = (int)strlen(j.pass);
+        if (!j.ssid[0]) return -1;
+        if (pl && (pl < 8 || pl > 63)) { strncpy0(join_msg, "A Wi-Fi password is 8 to 63 characters.", sizeof join_msg); return -1; }
+        /* keep the key derived from the password (not the password itself) for when joining works */
+        char hx[65] = "";
+        if (pl) { uint8_t pmk[32]; wpa_pmk(j.pass, (const uint8_t *)j.ssid, (int)strlen(j.ssid), pmk); hex(pmk, 32, hx); memset(pmk, 0, 32); }
+        memset(j.pass, 0, sizeof j.pass);
+        settings_set("wifi.ssid", j.ssid); settings_set("wifi.pmk", hx);
+        ksnprintf(join_msg, sizeof join_msg, "Saved \"%s\". Joining isn't finished yet: the scan is being tested on the real card first.", j.ssid);
+        return 1;                                                /* saved, not connected */
+    }
+    if (op == WIFI_FORGET) { settings_set("wifi.ssid", ""); settings_set("wifi.pmk", ""); join_msg[0] = 0; return 0; }
+    return -1;
 }

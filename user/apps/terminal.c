@@ -541,7 +541,7 @@ static void run(char *line) {
         char full[160];
         ksnprintf(full, sizeof full, "%s%s%s", line, *arg ? " " : "", arg);
         if (!strncmp(full, "bt scan", 7)) { puts_c("Scanning for Bluetooth devices...\n", C_DIM); draw(); }
-        if (!strncmp(full, "wifi s", 6)) { puts_c("Working on the Wi-Fi card (up to ~10 seconds)...\n", C_DIM); draw(); }
+        if (!strncmp(full, "wifi st", 7) || !strncmp(full, "wifi sc", 7)) { puts_c("Working on the Wi-Fi card (up to ~10 seconds)...\n", C_DIM); draw(); }
         static char out[16384];
         sys_kcmd(full, out, sizeof out);
         for (char *p = out; *p; p++) {

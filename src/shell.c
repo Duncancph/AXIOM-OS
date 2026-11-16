@@ -127,6 +127,7 @@ void shell_execute(char *line) {
     else if (!strcmp(c, "wifi")) {
         if (argc > 1 && !strcmp(argv[1], "start")) wifi_start();
         else if (argc > 1 && !strcmp(argv[1], "scan")) wifi_scan();
+        else if (argc > 1 && !strcmp(argv[1], "simulate")) wifi_simulate();
         else wifi_info();
     }
     else if (!strcmp(c, "echo")) { for (int i = 1; i < argc; i++) kprintf("%s%s", argv[i], i + 1 < argc ? " " : ""); kprintf("\n"); }

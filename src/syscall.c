@@ -257,6 +257,16 @@ uint64_t syscall_dispatch(struct frame *f) {
     }
     case SYS_KILL: return task_kill((int)a) ? 0 : (uint64_t)-1;
     case SYS_KCMD: return sys_kcmd(a, b, c);
+    case SYS_WIFI: {
+        uint64_t need = a == WIFI_STATUS ? sizeof(struct wifi_status) : a == WIFI_RESULTS ? (uint64_t)(c > 0 && c <= 64 ? c : 0) * sizeof(struct wifi_net) :
+                        a == WIFI_CONNECT ? sizeof(struct wifi_join) : 0;
+        if (a == WIFI_RESULTS && (c <= 0 || c > 64)) return (uint64_t)-1;
+        if (need && !UOK(b, need, a != WIFI_CONNECT)) return (uint64_t)-1;
+        current->busy++;
+        int64_t r = wifi_syscall((int)a, b, (int64_t)c);
+        current->busy--;
+        return (uint64_t)r;
+    }
     case SYS_BT:
         if (a == BT_INFO) {
             if (!UOK(b, sizeof(struct bt_adapter), true)) return (uint64_t)-1;
@@ -381,6 +391,7 @@ uint64_t syscall_dispatch(struct frame *f) {
     case SYS_SETTING_SET: {
         char key[32], val[112];
         if (!copy_str(key, a, sizeof key) || !copy_str(val, b, sizeof val)) return (uint64_t)-1;
+        if (!strncmp(key, "wifi.", 5)) return (uint64_t)-1;          /* only through SYS_WIFI */
         return (uint64_t)(int64_t)settings_set(key, val);
     }
     case SYS_CLIP_SET: {

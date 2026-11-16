@@ -7,6 +7,8 @@
  *   display.mode      e.g. 1920x1080 (used from the next start; empty = automatic)
  *   sound.volume      0..100
  *   lock.password     (stored as a salted hash; apps only see "set" or "")
+ *   wifi.ssid, wifi.pmk  the saved Wi-Fi network and its key (derived from the password; apps only see "set"
+ *                     or ""), changed only through SYS_WIFI
  *   lock.idle_min     lock after this many idle minutes (0 = never)
  *   mouse.speed       1..10 (5 = normal); mouse.natural 1 = content follows the fingers; mouse.left 1 = swap buttons
  *   screen.off_min    blank the screen after this many idle minutes (0 = never)
@@ -25,7 +27,7 @@ static const char *defaults[][2] = {
     { "keyboard.layout", "us" }, { "time.zone", "UTC" }, { "time.rtc_local", "0" }, { "time.24h", "0" },
     { "display.mode", "" }, { "mouse.speed", "5" }, { "mouse.natural", "0" }, { "mouse.left", "0" }, { "sound.volume", "70" }, { "lock.password", "" }, { "lock.idle_min", "0" }, { "screen.off_min", "10" },
     { "update.url", UPDATE_URL },
-    { "ui.accent", "" }, { "desktop.wallpaper", "axiom" }, { "user.name", "bryan" }, { "system.cores", "one" }, { "system.cores_trying", "0" }, { "dock.apps", "files,web,notes,calendar,music,terminal,settings" }, { "display.native", "off" }, { "display.native_check", "0" }, { "sound.output", "auto" }, { "web.test_slow", "0" }, { "web.profile", "0" },
+    { "ui.accent", "" }, { "desktop.wallpaper", "axiom" }, { "user.name", "bryan" }, { "system.cores", "one" }, { "system.cores_trying", "0" }, { "dock.apps", "files,web,notes,calendar,music,terminal,settings" }, { "display.native", "off" }, { "display.native_check", "0" }, { "sound.output", "auto" }, { "web.test_slow", "0" }, { "web.profile", "0" }, { "wifi.ssid", "" }, { "wifi.pmk", "" },
 };
 
 const char *settings_get(const char *key) {
@@ -151,6 +153,7 @@ int settings_syscall_get(const char *key, char *out, int n) {
     if (!strcmp(key, "sound.report")) return ksnprintf(out, n, "%s", hda_report());
     if (!strcmp(key, "sound.current")) return ksnprintf(out, n, "%s", hda_current());
     if (!strcmp(key, "lock.password")) return ksnprintf(out, n, "%s", settings_get(key)[0] ? "set" : "");
+    if (!strcmp(key, "wifi.pmk")) return ksnprintf(out, n, "%s", settings_get(key)[0] ? "set" : "");   /* the Wi-Fi key stays in the kernel */
     return ksnprintf(out, n, "%s", settings_get(key));
 }
 

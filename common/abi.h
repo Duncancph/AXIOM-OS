@@ -40,6 +40,7 @@ enum {
     SYS_UPDATE, SYS_ALARM, SYS_SIGRETURN,
     /* for ported software (a POSIX layer on top): memory maps, threads, futexes, thread-local storage, clocks */
     SYS_MMAP, SYS_MUNMAP, SYS_MPROTECT, SYS_THREAD, SYS_THREAD_EXIT, SYS_FUTEX, SYS_SET_FS, SYS_CLOCK, SYS_GETTID,
+    SYS_WIFI,
     SYS_COUNT
 };
 
@@ -74,6 +75,14 @@ struct sysinfo {
 
 enum { BT_INFO, BT_SCAN, BT_RESULTS, BT_PAIR, BT_PAIR_STATUS, BT_PAIR_CONFIRM, BT_PAIRED, BT_FORGET,
        BT_AUDIO_CONNECT /* (addr): play sound on that paired speaker */, BT_AUDIO_STOP, BT_AUDIO_STATUS /* (struct bt_audio *) */ };
+/* Wi-Fi (SYS_WIFI op, buf, n) */
+enum { WIFI_STATUS /* (struct wifi_status *) */, WIFI_START /* power the card up (slow) */, WIFI_SCAN /* listen ~3 s */,
+       WIFI_RESULTS /* (struct wifi_net *, max): count */, WIFI_CONNECT /* (struct wifi_join *) */, WIFI_FORGET };
+enum { WIFI_NONE /* no supported card */, WIFI_OFF /* found, not started */, WIFI_READY, WIFI_FAILED, WIFI_CONNECTING, WIFI_CONNECTED };
+enum { WSEC_OPEN, WSEC_WEP, WSEC_WPA, WSEC_WPA2, WSEC_WPA3 };
+struct wifi_status { int state, simulated; char adapter[48]; uint8_t mac[6]; char ssid[33]; char saved[33]; char msg[128]; };
+struct wifi_net { char ssid[33]; uint8_t bssid[6]; int ch, dbm, sec, saved; };
+struct wifi_join { char ssid[33]; uint8_t bssid[6]; char pass[64]; };
 /* Bluetooth audio (sound to a speaker or headphones) */
 enum { BTA_OFF, BTA_CONNECTING, BTA_SETUP, BTA_PLAYING, BTA_FAILED };
 struct bt_audio { int state; uint8_t addr[6]; char name[64]; char msg[96]; };
