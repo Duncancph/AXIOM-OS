@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 146
-notes Network app: a Wi-Fi tab (start the card, scan, see networks with signal and security, save one with its password). Still in testing on the Realtek RTL8821AE.
-file kernel b146/thane.elf.gz 19127280 c5b251238f442358ff616f8f4475a2411ed19973f210f9d777c279323c94be91
-file initrd b146/initrd.tar.gz 1372160 28824c02b49a1601c50c208916dcb68dd9db776dcb44c7e612aeab80a78fa6ed
-file bootx64 b146/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b146/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 304402205e2c670279d9b9a32bbc078d754fe06d7df318f9afa6562d2a01311b65482e4202206e7dac1cc61e3fe1dcdd4b3f140db7c7b3fa6c3f26a4489e94ede75ac792f133
+build 149
+notes Fairer task scheduling (programs that wake each other run in order); Linux programs: fixes for Chromium closing, /proc/cpuinfo, /proc/meminfo, /dev/shm.
+file kernel b149/thane.elf.gz 19155352 96bffc79d085e26205d882db704636cc0c448cf2078dc0f428d0279decc0081c
+file initrd b149/initrd.tar.gz 1372160 d9d47d4a58c47669e649e5272e3910f61a179019322ce8f142a6787b9d3cef56
+file bootx64 b149/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b149/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022100d3a64454e2da3d863254cebc6c2fb628f1571122353ae363dceb5d00c225e0c90220356532c69f340bf422313d434c9c711ec5214c38409f960fd4b3bbbb275895a2
