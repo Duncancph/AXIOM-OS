@@ -3,7 +3,6 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
-#include <stdbool.h>
 
 void sha1(const void *d, size_t n, uint8_t out[20]);
 void hmac_sha1(const uint8_t *key, size_t klen, const void *msg, size_t mlen, uint8_t out[20]);
@@ -24,7 +23,7 @@ struct wpa_sup {
     uint8_t ptk[48];                       /* KCK 0-15, KEK 16-31, TK 32-47 */
     uint8_t gtk[32]; int gtk_len, gtk_idx;
     uint8_t ie[64]; int ie_len;            /* our RSN element, exactly as in the association request */
-    uint64_t replay; bool replay_ok, have_ptk;
+    uint64_t replay; uint8_t replay_ok, have_ptk;   /* (not bool: the kernel and the library define it differently) */
     const char *why;                       /* the last problem, for the report */
 };
 void wpa_sup_init(struct wpa_sup *s, const uint8_t pmk[32], const uint8_t aa[6], const uint8_t spa[6], const uint8_t *ie, int ie_len, const uint8_t snonce[32]);

@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include "../user/lib/crypto/wpa.h"
 
 static uint8_t A[4000], B[4000], C[4000], D[4000], E[4000], O[4000];

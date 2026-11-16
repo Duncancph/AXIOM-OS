@@ -1,5 +1,6 @@
 /* WPA2-Personal: SHA-1 (FIPS 180-4), HMAC-SHA1, PBKDF2 (RFC 8018), the 802.11 PRF, AES key wrap (RFC 3394),
  * CCMP (802.11 section 12.5.3: AES-CCM, 8-byte MIC), and the supplicant side of the 4-way and group handshakes. */
+#include <stdbool.h>
 #include "wpa.h"
 #include "crypto.h"
 #include "../../../common/str.h"
