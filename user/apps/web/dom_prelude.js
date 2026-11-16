@@ -718,7 +718,7 @@
   getter(g, 'scrollY', function () { return D.viewport()[2]; }); getter(g, 'pageYOffset', function () { return D.viewport()[2]; });
   g.scrollX = 0; g.pageXOffset = 0; g.devicePixelRatio = 1; g.screenX = 0; g.screenY = 0; g.isSecureContext = /^https:/.test(D.url()); g.origin = '';
   g.screen = { width: 1920, height: 1080, availWidth: 1920, availHeight: 1080, colorDepth: 24, pixelDepth: 24, orientation: { type: 'landscape-primary', angle: 0 } };
-  g.navigator = { userAgent: 'Mozilla/5.0 (AXIOM; x86_64) Arc/0.4', appName: 'Netscape', appVersion: '5.0 (AXIOM)', platform: 'AXIOM', vendor: 'AXIOM', product: 'Gecko',
+  g.navigator = { userAgent: 'Mozilla/5.0 (AXIOM; x86_64) Vertex/0.5', appName: 'Netscape', appVersion: '5.0 (AXIOM)', platform: 'AXIOM', vendor: 'AXIOM', product: 'Gecko',
     language: 'en-GB', languages: ['en-GB', 'en'], onLine: true, cookieEnabled: true, doNotTrack: '1', hardwareConcurrency: 1, maxTouchPoints: 0, webdriver: false,
     clipboard: { writeText: function () { return Promise.resolve(); }, readText: function () { return Promise.resolve(''); } },
     sendBeacon: function () { return true; }, javaEnabled: function () { return false; }, serviceWorker: undefined, geolocation: undefined };

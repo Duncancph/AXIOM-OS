@@ -100,7 +100,7 @@ static uint64_t cycles_per_ms(void) {
     if (t - cal_ms0 < 200) return 3000000;               /* until measured: assume 3 GHz */
     return (cyc() - cal_tsc0) / (t - cal_ms0);
 }
-static bool busy_said; static uint64_t bar_wait;     /* bar_wait: when a click for Arc's bar arrived during this script */
+static bool busy_said; static uint64_t bar_wait;     /* bar_wait: when a click for Vertex's bar arrived during this script */
 static void script_begin(void) { bar_wait = 0; run_start = sys_time(); cyc_begin = cyc(); busy_said = false; }
 static void script_end(void) { if (cyc_begin) page_cycles += cyc() - cyc_begin; cyc_begin = 0; }
 static uint64_t page_cpu_ms(void) { return (page_cycles + (cyc_begin ? cyc() - cyc_begin : 0)) / cycles_per_ms(); }
@@ -111,7 +111,7 @@ static _Bool h_interrupt(void *c) {
     uint64_t now = sys_time();
     if (!page_on) return true;
     /* Like Chrome, scripts run to the end however long they take; a page that keeps one busy for a while
-     * only gets a note (Esc stops it, the close button still closes Arc). */
+     * only gets a note (Esc stops it, the close button still closes Vertex). */
     if (now - run_start > 8000 * (uint64_t)web_time_scale && !busy_said) { busy_said = true; web_busy_status("This page is busy (a script is still running). Press Esc to stop its scripts."); }
     if (now - last_look > 100) {
         last_look = now;
@@ -120,13 +120,13 @@ static _Bool h_interrupt(void *c) {
         while (sys_event(&e, 0) > 0) {
             if (e.type == EV_CLOSE) sys_exit(0);
             if (e.type == EV_KEY && e.key == 27) { scripts_off("stopped with Esc"); return true; }
-            /* clicks and keys aren't lost while a script runs: they wait for it to finish. One meant for Arc's
+            /* clicks and keys aren't lost while a script runs: they wait for it to finish. One meant for Vertex's
              * own bar doesn't wait long: a script still busy a second later is stopped for it. */
             if (e.type == EV_RESIZE || e.type == EV_MOUSE_DOWN || e.type == EV_MOUSE_UP || e.type == EV_KEY) web_requeue_event(&e);
             if (web_event_for_bar(&e) && !bar_wait) bar_wait = now;
         }
     }
-    if (bar_wait && now - bar_wait > 1000) { bar_wait = 0; scripts_off("stopped so that Arc's own bar could be used (the page's script was still busy)"); return true; }
+    if (bar_wait && now - bar_wait > 1000) { bar_wait = 0; scripts_off("stopped so that Vertex's own bar could be used (the page's script was still busy)"); return true; }
     return false;
 }
 static void h_console(void *c, int level, const char *s) {
@@ -1066,7 +1066,7 @@ static bool one_page_step(char *status, int n) {
 }
 
 void js_abandon(uint64_t where) {
-    char m[160]; ksnprintf(m, sizeof m, "Arc got stuck in its own code (at %lx) while running this page's scripts; they were turned off", where);
+    char m[160]; ksnprintf(m, sizeof m, "Vertex got stuck in its own code (at %lx) while running this page's scripts; they were turned off", where);
     con_add("[stuck] ", m);
     page_on = false; sq_active = false; nsq = sqpos = 0; nsev = 0;
     for (int i = 0; i < MAXT; i++) timers[i].used = false;

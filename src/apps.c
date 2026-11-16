@@ -64,7 +64,7 @@ int apps_count(void) { return napps; }
 int apps_visible(void) { return napps - nhidden; }
 const struct app_entry *apps_get(int i) { return i >= 0 && i < napps ? &apps[i] : 0; }
 const struct app_entry *apps_find(const char *id) {
-    if (id && !strcmp(id, "arc")) id = "web";             /* Arc is the Web app's name now */
+    if (id && (!strcmp(id, "vertex") || !strcmp(id, "arc"))) id = "web";   /* the browser is Vertex (it was Arc, and Web before that) */
     for (int i = 0; i < napps; i++) if (!strcmp(apps[i].id, id)) return &apps[i];
     return 0;
 }

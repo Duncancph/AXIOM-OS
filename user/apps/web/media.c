@@ -448,20 +448,20 @@ static void load(struct wmedia *m) {
     if (n >= 12 && !memcmp(p + 4, "ftyp", 4)) m->fmt = F_MP4;
     else if (n >= 12 && !memcmp(p, "RIFF", 4) && !memcmp(p + 8, "WAVE", 4)) m->fmt = F_WAV;
     else if (n >= 4 && (!memcmp(p, "ID3", 3) || (p[0] == 0xFF && (p[1] & 0xE0) == 0xE0))) m->fmt = F_MP3;
-    else if (n >= 4 && p[0] == 0x1A && p[1] == 0x45 && p[2] == 0xDF && p[3] == 0xA3) { set_error(m, "This is WebM, which Arc can't play yet (it plays MP4, MP3 and WAV)"); redraw(m); return; }
-    else if (n >= 4 && !memcmp(p, "OggS", 4)) { set_error(m, "This is Ogg, which Arc can't play yet (it plays MP4, MP3 and WAV)"); redraw(m); return; }
-    else if (n >= 7 && !memcmp(p, "#EXTM3U", 7)) { set_error(m, "This is a live stream (HLS), which Arc can't play yet"); redraw(m); return; }
+    else if (n >= 4 && p[0] == 0x1A && p[1] == 0x45 && p[2] == 0xDF && p[3] == 0xA3) { set_error(m, "This is WebM, which Vertex can't play yet (it plays MP4, MP3 and WAV)"); redraw(m); return; }
+    else if (n >= 4 && !memcmp(p, "OggS", 4)) { set_error(m, "This is Ogg, which Vertex can't play yet (it plays MP4, MP3 and WAV)"); redraw(m); return; }
+    else if (n >= 7 && !memcmp(p, "#EXTM3U", 7)) { set_error(m, "This is a live stream (HLS), which Vertex can't play yet"); redraw(m); return; }
     if (m->fmt == F_MP4) {
         m->mv = mp4_open(m->file, m->flen);
         if (!m->mv) { set_error(m, "This MP4 file can't be read"); redraw(m); return; }
         m->ma = m->mv; m->afile = m->file; m->aflen = m->flen;
         m->vt = m->video ? mp4_find(m->mv, MP4_VIDEO) : -1; m->at = mp4_find(m->mv, MP4_AUDIO);
         const struct mp4_track *v = m->vt >= 0 ? mp4_track(m->mv, m->vt) : 0, *s = m->at >= 0 ? mp4_track(m->mv, m->at) : 0;
-        if (v && strcmp(v->codec, "avc1") && strcmp(v->codec, "avc3")) { char e[140]; ksnprintf(e, sizeof e, "The video is %s, which Arc can't play yet (it plays H.264)", v->codec); strncpy0(m->msg, e, sizeof m->msg); m->vt = -1; }
+        if (v && strcmp(v->codec, "avc1") && strcmp(v->codec, "avc3")) { char e[140]; ksnprintf(e, sizeof e, "The video is %s, which Vertex can't play yet (it plays H.264)", v->codec); strncpy0(m->msg, e, sizeof m->msg); m->vt = -1; }
         if (s && (strcmp(s->codec, "mp4a") || (s->object_type && s->object_type != 0x40))) m->at = -1;
         if (m->vt >= 0) { m->vd = h264_open(v->config, v->config_len); if (!m->vd) m->vt = -1; else { m->vw = v->disp_w > 0 ? v->disp_w : v->width; m->vh = v->disp_h > 0 ? v->disp_h : v->height; } }
         if (m->at >= 0) { m->ad = aac_open(s->config, s->config_len); if (!m->ad) m->at = -1; }
-        if (m->vt < 0 && m->at < 0) { if (!m->msg[0]) strncpy0(m->msg, "Nothing in this file Arc can play", sizeof m->msg); m->state = MS_ERROR; fire(m, "error"); redraw(m); return; }
+        if (m->vt < 0 && m->at < 0) { if (!m->msg[0]) strncpy0(m->msg, "Nothing in this file Vertex can play", sizeof m->msg); m->state = MS_ERROR; fire(m, "error"); redraw(m); return; }
         m->dur_ms = mp4_duration_ms(m->mv);
         out_rate = 48000;
         if (m->at >= 0) { int r = s->sample_rate; out_rate = r == 44100 || r == 22050 || r == 11025 ? 44100 : 48000; }
@@ -473,7 +473,7 @@ static void load(struct wmedia *m) {
     } else if (m->fmt == F_WAV) {
         if (!open_wav(m)) { set_error(m, "This WAV file isn't plain PCM sound"); redraw(m); return; }
         out_rate = m->wav_rate % 11025 == 0 ? 44100 : 48000;
-    } else { set_error(m, "Arc can't play this kind of file (it plays MP4, MP3 and WAV)"); redraw(m); return; }
+    } else { set_error(m, "Vertex can't play this kind of file (it plays MP4, MP3 and WAV)"); redraw(m); return; }
     m->state = MS_READY; m->vs = m->as_ = 0; m->shown_ms = 0; m->wav_pos = 0;
     fire(m, "durationchange"); fire(m, "loadedmetadata"); fire(m, "loadeddata"); fire(m, "canplay"); fire(m, "canplaythrough");
     web_media_resized();                         /* the video's own size may change the layout */
@@ -492,7 +492,7 @@ static bool mse_try_ready(struct wmedia *m) {
     m->fmt = F_MP4; m->msg[0] = 0;
     if (vb) {
         const struct mp4_track *v = mp4_track(vb->m, vb->track);
-        if (strcmp(v->codec, "avc1") && strcmp(v->codec, "avc3")) { char e[140]; ksnprintf(e, sizeof e, "The video is %s, which Arc can't play yet (it plays H.264)", v->codec); set_error(m, e); redraw(m); return false; }
+        if (strcmp(v->codec, "avc1") && strcmp(v->codec, "avc3")) { char e[140]; ksnprintf(e, sizeof e, "The video is %s, which Vertex can't play yet (it plays H.264)", v->codec); set_error(m, e); redraw(m); return false; }
         m->vd = h264_open(v->config, v->config_len);
         if (!m->vd) { set_error(m, "This video can't be decoded"); redraw(m); return false; }
         m->mv = vb->m; m->file = vb->d; m->flen = vb->len; m->vt = vb->track;

@@ -551,10 +551,10 @@ long http_request(const char *url_in, const struct http_req *rq, http_sink sink,
         if (!c.p) return cerr;
         char target[1600]; encode_target(u.path, target, sizeof target);
         bool browser = http_options != 0;
-        /* Arc says plainly what it is, in the usual browser form (the same as its scripts' navigator.userAgent),
+        /* Vertex says plainly what it is, in the usual browser form (the same as its scripts' navigator.userAgent),
          * with the languages it would like */
         int rl = ksnprintf(req, sizeof req, "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nAccept: %s\r\n%s%sConnection: %s\r\n",
-                           method, target, hp, browser ? "Mozilla/5.0 (AXIOM; x86_64) Arc/0.4" : "AXIOM/0.1 (Axiom Core)",
+                           method, target, hp, browser ? "Mozilla/5.0 (AXIOM; x86_64) Vertex/0.5" : "AXIOM/0.1 (Axiom Core)",
                            browser ? "text/html,application/xhtml+xml,application/xml;q=0.9,image/png,image/jpeg,image/gif,image/svg+xml,*/*;q=0.8" : "*/*",
                            browser ? "Accept-Language: en-GB,en;q=0.9\r\n" : "",
                            want_gz ? "Accept-Encoding: gzip\r\n" : "", (http_options & HTTP_OPT_KEEPALIVE) ? "keep-alive" : "close");
