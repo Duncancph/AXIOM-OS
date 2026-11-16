@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 127
-notes Dual-boot friendly: AXIOM keeps its boot loader in its own folder (EFI/axiom) and leaves Ubuntu's or Windows' alone. Linux programs that use shared libraries now run.
-file kernel b127/thane.elf.gz 18719720 d68100440da080963c44045a7e192ee85ba36cf032aac58a1737829181e12b01
-file initrd b127/initrd.tar.gz 1310720 0f7072cda5207da6ce2349b9881084f4b40d9ef9812d505cf75d94cd7cdb04b7
-file bootx64 b127/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b127/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022100b0edbe9bbf56b3b736b63b571a8294c5b2e02ea784be990cbd0596b5d7c059a3022027034b23b6ba8c9d71206fcd52320cbe89c30b6154f6edc540be4010cbd8aa90
+build 129
+notes Linux programs: pipes, sockets, poll/epoll, eventfd, shared memory and /dev devices - enough for Chromium (headless) to load a page. CMD takes longer command lines.
+file kernel b129/thane.elf.gz 18810264 6d1977daab8471ff663d853c9ab86b80c2dbfa638fb4134a11d252426a89904b
+file initrd b129/initrd.tar.gz 1310720 2107f98f7ea0eae0c222160c3c262e4d1812c3e5a04f5e327ae99931d56c9b5f
+file bootx64 b129/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b129/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3046022100a444941fe2836ab629b8e5a27f863aac97d0e3fa376695a7d7b819b2b82d67bd022100bee68461312140515dfadadb570547c91b597d446ebc920d1d11eb1493af9491
