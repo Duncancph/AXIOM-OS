@@ -99,12 +99,32 @@ static void scan(struct disk *d) {
 
 static const char *kind_name(int k) { return k == DISK_SATA ? "SATA" : k == DISK_NVME ? "NVMe" : "USB"; }
 
+/* AXIOM's own copy of its boot loader (\EFI\axiom\axiomx64.efi), which its boot menu hands to the kernel and other
+ * systems' menus start. Disks set up before it existed get it from \EFI\BOOT\BOOTX64.EFI, when that one is AXIOM's
+ * (it holds AXIOM's start-up script) and not another system's (Ubuntu's or Windows' start-up file). */
+static void ensure_own_bootloader(void *vol) {
+    struct dunc_stat st;
+    if (fat_ops.stat(vol, "/EFI/axiom/axiomx64.efi", &st) == FS_OK && st.size > 65536) return;
+    if (fat_ops.stat(vol, "/EFI/BOOT/BOOTX64.EFI", &st) != FS_OK || st.size < 65536 || st.size > (16u << 20)) return;
+    uint8_t *b = kmalloc(st.size);
+    if (!b) return;
+    bool ours = false;
+    if (fat_ops.read(vol, "/EFI/BOOT/BOOTX64.EFI", b, 0, st.size) == (long)st.size)
+        for (uint64_t i = 0; i + 9 <= st.size && !ours; i++) if (!memcmp(b + i, "thane.elf", 9)) ours = true;
+    if (ours) {
+        fat_ops.mkdir(vol, "/EFI/axiom");
+        if (fat_ops.write(vol, "/EFI/axiom/axiomx64.efi", b, st.size) >= 0) LOG_INFO("Boot loader: AXIOM's own copy made in EFI/axiom\n");
+    }
+    kfree(b);
+}
+
 static bool mount_system(struct disk *d, struct part *pt) {
     char label[16], why[96];
     void *vol = fat_open(d->bd, pt->first, label, why, sizeof why);
     if (!vol) { LOG_WARN("AXIOM volume on %s: %s\n", d->bd->name, why); return false; }
     static const char *dirs[] = { "/home", "/apps", "/config", "/duncos", "/linux" };
     for (int i = 0; i < 5; i++) fat_ops.mkdir(vol, dirs[i]);
+    ensure_own_bootloader(vol);
     char kind[16]; ksnprintf(kind, sizeof kind, "%s disk", kind_name(d->kind));
     vfs_mount_at("/home", "/home", "AXIOM", kind, &fat_ops, vol);
     vfs_mount_at("/apps", "/apps", "AXIOM", kind, &fat_ops, vol);
@@ -189,15 +209,16 @@ void disk_flush_all(void) {
 }
 
 /* ---------------- installer ---------------- */
-static int inst_id, inst_mode;
+static int inst_id, inst_mode; static uint64_t inst_size_mb;   /* size_mb: 0 = the whole disk */
 
 static void progress(int pct, const char *msg) {
     inst.percent = pct; strncpy0(inst.msg, msg, sizeof inst.msg);
     kprintf("[install] %d%% %s\n", pct, msg);
 }
 
-/* a fresh GPT with one partition (the AXIOM EFI system partition) covering the disk */
-static int write_gpt(struct blockdev *bd, uint64_t *first, uint64_t *count) {
+/* a fresh GPT with one partition (the AXIOM EFI system partition) covering the disk, or its first size_mb MiB
+ * (the rest is left free, e.g. for Linux or Windows) */
+static int write_gpt(struct blockdev *bd, uint64_t *first, uint64_t *count, uint64_t size_mb) {
     uint32_t bs = bd->bsize;
     uint64_t last = bd->blocks - 1;
     uint32_t ent_blocks = (128 * 128 + bs - 1) / bs;
@@ -206,6 +227,7 @@ static int write_gpt(struct blockdev *bd, uint64_t *first, uint64_t *count) {
     uint64_t pfirst = (first_usable + align - 1) / align * align;
     uint64_t plast = last_usable;
     if (plast - pfirst + 1 > 0xFFFFFFFFull) plast = pfirst + 0xFFFFFFFEull;    /* FAT32 limit */
+    if (size_mb) { uint64_t want = size_mb * (1024 * 1024 / bs); if (want && pfirst + want - 1 < plast) plast = pfirst + want - 1; }
     if (plast <= pfirst + 131072) return FS_ENOSPC;
     uint8_t *ents = kmalloc(ent_blocks * bs), *b = kmalloc(bs);
     if (!ents || !b) { kfree(ents); kfree(b); return FS_ENOSPC; }
@@ -317,8 +339,16 @@ static int put(const char *path, const char *mod) {
     int which = !strcmp(mod, "kernel") ? 0 : !strcmp(mod, "initrd") ? 1 : !strcmp(mod, "bootx64") ? 2 : !strcmp(mod, "biosboot") ? 3 : -1;
     if (which >= 0 && src_data[which]) { data = src_data[which]; len = src_len[which]; }
     else data = bootmod(mod, &len);
-    if (!data) return FS_ENOENT;
+    uint8_t *own = 0;
+    if (!data && which == 2 && sysdisk && sysdisk->sysvol) {   /* GRUB didn't pass it: AXIOM's own copy on its disk */
+        struct dunc_stat st;
+        if (fat_ops.stat(sysdisk->sysvol, "/EFI/axiom/axiomx64.efi", &st) == FS_OK && st.size > 65536 && (own = kmalloc(st.size))) {
+            if (fat_ops.read(sysdisk->sysvol, "/EFI/axiom/axiomx64.efi", own, 0, st.size) == (long)st.size) { data = own; len = st.size; }
+        }
+    }
+    if (!data) { kfree(own); return FS_ENOENT; }
     long r = vfs_write(path, data, len);
+    kfree(own);
     return r < 0 ? (int)r : FS_OK;
 }
 
@@ -335,7 +365,7 @@ static void installer(void *arg) {
         if (bd->release) bd->release(bd->ctx);              /* e.g. a USB stick that is open in Files */
         progress(2, "Making a new partition table");
         uint64_t first, count;
-        r = write_gpt(bd, &first, &count);
+        r = write_gpt(bd, &first, &count, inst_size_mb);
         if (r) { ksnprintf(why, sizeof why, "the partition table couldn't be written (%s)", fs_error(r)); goto done; }
         progress(6, "Formatting the AXIOM partition (FAT32)");
         r = fat_format(bd, first, count, "AXIOM");
@@ -422,11 +452,12 @@ done:
     task_exit(0);
 }
 
-int disk_install(int id, int mode) {
+int disk_install(int id, int mode, uint64_t size_mb) {
     if (inst.state == 1) return FS_EINVAL;
     if (mode != INSTALL_ERASE && mode != INSTALL_UPDATE) return FS_EINVAL;
+    if (size_mb && size_mb < 4096) return FS_EINVAL;         /* at least 4 GB */
     memset(&inst, 0, sizeof inst);
-    inst.state = 1; inst_id = id; inst_mode = mode;
+    inst.state = 1; inst_id = id; inst_mode = mode; inst_size_mb = size_mb;
     progress(0, "Starting");
     task_create_kernel("Installer", installer, 0);
     return FS_OK;
@@ -439,7 +470,7 @@ int disk_system_id(void) { return sysdisk ? sysdisk->id : -1; }
 int disk_update_from(int id, const uint8_t *const data[4], const uint64_t len[4]) {
     if (inst.state == 1) return FS_EINVAL;
     for (int i = 0; i < 4; i++) { src_data[i] = data[i]; src_len[i] = len[i]; }
-    return disk_install(id, INSTALL_UPDATE);
+    return disk_install(id, INSTALL_UPDATE, 0);
 }
 
 int disk_set_boot_option(const char *key, const char *value) {

@@ -452,10 +452,11 @@ static void run(char *line) {
     }
     else if (!strcmp(line, "install")) {
         int id = (int)katoi(arg); const char *m = arg; while (*m && *m != ' ') m++; while (*m == ' ') m++;
-        int mode = !strcmp(m, "update") ? INSTALL_UPDATE : !strcmp(m, "erase") ? INSTALL_ERASE : 0;
-        if (!id || !mode) { puts_c("usage: install <disk number> erase|update   (see 'disks'; erase wipes the whole disk)\n", C_RED); }
+        int mode = !strncmp(m, "update", 6) ? INSTALL_UPDATE : !strncmp(m, "erase", 5) ? INSTALL_ERASE : 0;
+        long gb = 0; { const char *g = m; while (*g && *g != ' ') g++; while (*g == ' ') g++; if (*g) gb = katoi(g); }   /* "erase 64": AXIOM gets 64 GB */
+        if (!id || !mode || (gb && gb < 4)) { puts_c("usage: install <disk number> erase [GB] | update   (see 'disks'; erase wipes the whole disk;\n       with GB, AXIOM takes only that much and the rest is left empty for another system)\n", C_RED); }
         else {
-            int r = sys_install(id, mode);
+            int r = sys_install_size(id, mode, gb * 1024);
             if (r) { puts_c(fs_strerror(r), C_RED); putch('\n'); }
             else {
                 struct dunc_install st; int last = -1;

@@ -102,6 +102,7 @@ const char *app_for_file(const char *path);
 const char *open_file(const char *path);
 static inline int sys_disks(struct dunc_disk *out, int max) { return sys_call(SYS_DISK_LIST, (long)out, max, 0, 0, 0); }
 static inline int sys_install(int disk_id, int mode) { return sys_call(SYS_DISK_INSTALL, disk_id, mode, 0, 0, 0); }
+static inline int sys_install_size(int disk_id, int mode, long size_mb) { return sys_call(SYS_DISK_INSTALL, disk_id, mode, size_mb, 0, 0); }   /* size_mb: AXIOM's share when erasing (0: all) */
 static inline void sys_install_status(struct dunc_install *st) { sys_call(SYS_DISK_STATUS, (long)st, 0, 0, 0, 0); }
 /* join a directory and a name / resolve a user path (supports ~, ., ..) into out */
 void path_resolve(const char *cwd, const char *in, char *out, int n);

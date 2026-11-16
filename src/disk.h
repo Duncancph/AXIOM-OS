@@ -8,7 +8,7 @@
 bool disk_add(struct blockdev *bd, int kind);
 void disk_remove(struct blockdev *bd);
 int  disk_list(struct dunc_disk *out, int max);
-int  disk_install(int id, int mode);               /* starts the installer; 0 or an FS_ error */
+int  disk_install(int id, int mode, uint64_t size_mb);   /* starts the installer (size_mb: AXIOM's partition when erasing; 0 = all of it); 0 or an FS_ error */
 void disk_install_status(struct dunc_install *out);
 int  disk_system_id(void);                         /* the disk AXIOM runs from (installed), or -1 */
 /* install new system files from memory (an update) instead of the running ones; the buffers are kept */

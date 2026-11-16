@@ -390,7 +390,7 @@ uint64_t syscall_dispatch(struct frame *f) {
     case SYS_SOUND: return (uint64_t)(int64_t)sound_syscall((int)a, b, c);
     case SYS_LOCK: desktop_lock(); return 0;
     case SYS_UPDATE: return (uint64_t)update_syscall((int)a, (const void *)b, (long)c, upd_user_ok);
-    case SYS_DISK_INSTALL: return (uint64_t)(int64_t)disk_install((int)a, (int)b);
+    case SYS_DISK_INSTALL: return (uint64_t)(int64_t)disk_install((int)a, (int)b, c);   /* c: MiB for AXIOM (0: the whole disk) */
     case SYS_DISK_STATUS:
         if (!UOK(a, sizeof(struct dunc_install), true)) return (uint64_t)-1;
         disk_install_status((struct dunc_install *)a);

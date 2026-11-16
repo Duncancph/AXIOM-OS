@@ -489,6 +489,8 @@ static void draw_updates(void) {
 }
 
 static struct dunc_disk disks[8]; static int ndisks, confirm_disk = -1, confirm_mode;
+static int inst_gb;                     /* erasing: GB for AXIOM (0: the whole disk; the rest is left empty for another system) */
+static const int inst_sizes[] = { 0, 16, 32, 64, 128, 256 };
 static void fmt_size(uint64_t b, char *o, int n) {
     if (b >= (10ull << 30)) ksnprintf(o, n, "%lu GB", b >> 30);
     else ksnprintf(o, n, "%lu MB", b >> 20);
@@ -685,7 +687,7 @@ void draw(void) {
         struct dunc_disk *d = &disks[confirm_disk];
         nhits = 0;
         gfx_blend(c, 0, 0, WW, WH, 0x000000, 110);
-        int dw = 520, dh = 230, dx = (WW - dw) / 2, dy = (WH - dh) / 2;
+        int dw = 520, dh = confirm_mode == INSTALL_ERASE ? 290 : 230, dx = (WW - dw) / 2, dy = (WH - dh) / 2;
         gfx_rrect(c, dx, dy, dw, dh, 14, UI_PANEL, 255);
         gfx_rrect_outline(c, dx, dy, dw, dh, 14, confirm_mode == INSTALL_ERASE ? UI_RED : UI_ACCENT, 160);
         char b[128], sz[24]; fmt_size(d->bytes, sz, sizeof sz);
@@ -695,6 +697,13 @@ void draw(void) {
             label(dx + 24, dy + 102, UI_RED, "Everything on it will be deleted, including Windows or Linux");
             label(dx + 24, dy + 122, UI_RED, "if they are on this disk. This can't be undone.");
             label(dx + 24, dy + 148, UI_MUTED, "Your AXIOM files are copied onto it. Starting from it needs UEFI.");
+            /* how much of it AXIOM takes: the rest stays empty, for Linux or Windows next to it */
+            char sb[96];
+            if (!inst_gb) ksnprintf(sb, sizeof sb, "Space for AXIOM:  the whole disk");
+            else ksnprintf(sb, sizeof sb, "Space for AXIOM:  %d GB  (the rest stays empty for another system)", inst_gb);
+            label(dx + 24, dy + 184, UI_TEXT, sb);
+            ui_button(c, dx + 24, dy + 196, 120, 30, "Change", BTN_NORMAL, hover == H_BTN + 22, false);
+            add_hit(dx + 24, dy + 196, 120, 30, H_BTN + 22);
         } else {
             gfx_text(c, &font_title, dx + 24, dy + 44, UI_TEXT, "Update AXIOM on this disk?");
             ksnprintf(b, sizeof b, "%s (%s)", d->model, sz); gfx_text(c, &font_ui_bold, dx + 24, dy + 76, UI_TEXT, b);
@@ -770,7 +779,7 @@ static void click(int id, int mx) {
     if (id == H_BTN + 2) sys_call(SYS_LOCK, 0, 0, 0, 0, 0);
     if (id == H_BTN + 3) sys_power(1);
     if (id == H_BTN + 4) sys_power(0);
-    if (id >= H_DISK && id < H_DISK + 16) { confirm_disk = (id - H_DISK) / 2; confirm_mode = (id - H_DISK) % 2 ? INSTALL_UPDATE : INSTALL_ERASE; }
+    if (id >= H_DISK && id < H_DISK + 16) { confirm_disk = (id - H_DISK) / 2; confirm_mode = (id - H_DISK) % 2 ? INSTALL_UPDATE : INSTALL_ERASE; inst_gb = 0; }
     if (id == H_BTN + 40) sys_spawn("sandbox");
     if (id == H_BTN + 60) { show_gfx = true; }
     if (id == H_BTN + 62) { set("display.native", "off"); sys_power(1); }
@@ -792,8 +801,13 @@ static void click(int id, int mx) {
     if (id == H_BTN + 30 && ustate == U_AVAILABLE) install_update();
     if (id == H_BTN + 32) sys_power(1);
     if (id == H_BTN + 21) confirm_disk = -1;
+    if (id == H_BTN + 22 && confirm_disk >= 0) {             /* next size that leaves room on this disk */
+        uint64_t gbs = disks[confirm_disk].bytes >> 30;
+        int k = 0; while (k < 6 && inst_sizes[k] != inst_gb) k++;
+        for (int t = 1; t <= 6; t++) { int s = inst_sizes[(k + t) % 6]; if (!s || (uint64_t)s + 8 <= gbs) { inst_gb = s; break; } }
+    }
     if (id == H_BTN + 20 && confirm_disk >= 0) {
-        int r = sys_install(disks[confirm_disk].id, confirm_mode);
+        int r = sys_install_size(disks[confirm_disk].id, confirm_mode, confirm_mode == INSTALL_ERASE ? (long)inst_gb * 1024 : 0);
         if (r) say(UI_RED, "The installer couldn't start.");
         else { installing = true; memset(&inst, 0, sizeof inst); inst.state = 1; }
         confirm_disk = -1;
