@@ -66,9 +66,9 @@ long vm_alloc(uint64_t *pml4, uint64_t va, uint64_t len) {
         uint64_t *pte = pte_of(pml4, a, true);
         if (!pte) return -1;
         if (*pte & P) continue;
-        void *pg = page_alloc(1);
+        uint64_t pg = upage_alloc();
         if (!pg) return -1;
-        *pte = (uint64_t)pg | P | W | U | OWNED;
+        *pte = pg | P | W | U | OWNED;
         n++;
     }
     return n;
@@ -77,7 +77,7 @@ long vm_alloc(uint64_t *pml4, uint64_t va, uint64_t len) {
 uint64_t vm_phys(uint64_t *pml4, uint64_t va) {
     uint64_t *pte = pte_of(pml4, va, false);
     if (!pte || !(*pte & P)) return 0;
-    return ADDR(*pte) | (va & 0xFFF);
+    return (uint64_t)mmio_virt(ADDR(*pte) | (va & 0xFFF));   /* (where the kernel reaches it) */
 }
 
 /* Is [p, p+len) entirely mapped user memory (writable if asked)? */
@@ -106,7 +106,7 @@ void vm_destroy(uint64_t *pml4) {
                 if (!(l2[j] & P)) continue;
                 uint64_t *l1 = (uint64_t *)ADDR(l2[j]);
                 for (int k = 0; k < 512; k++)
-                    if ((l1[k] & OWNED) && ADDR(l1[k])) page_free((void *)ADDR(l1[k]));   /* (PROT_NONE pages too) */
+                    if ((l1[k] & OWNED) && ADDR(l1[k])) upage_free(ADDR(l1[k]));   /* (PROT_NONE pages too) */
                 page_free(l1);
             }
             page_free(l2);
@@ -263,7 +263,7 @@ static uint64_t drop_pages(struct mm *m, uint64_t s, uint64_t e) {
         t = next_level(t, (a >> 21) & 511, false);
         if (!t) { a = (a | ((1ULL << 21) - 1)) + 1 - 4096; continue; }      /* nothing in this 2 MiB */
         uint64_t *pte = &t[(a >> 12) & 511];
-        if (*pte) { if ((*pte & OWNED) && ADDR(*pte)) { page_free((void *)ADDR(*pte)); freed++; } *pte = 0; }
+        if (*pte) { if ((*pte & OWNED) && ADDR(*pte)) { upage_free(ADDR(*pte)); freed++; } *pte = 0; }
     }
     return freed;
 }
@@ -348,9 +348,9 @@ bool mm_fault(struct mm *m, uint64_t addr, bool write, bool exec, uint64_t *page
     if (!pte) return false;
     if (pte_kept(*pte)) *pte = pte_reprot(*pte, prot);      /* there already (another core's stale view, or protection back) */
     else {
-        void *pg = page_alloc(1);
+        uint64_t pg = upage_alloc();
         if (!pg) return false;
-        *pte = (uint64_t)pg | pte_flags(prot);
+        *pte = pg | pte_flags(prot);
         if (pages) (*pages)++;
     }
     __asm__ volatile("invlpg (%0)" ::"r"(va) : "memory");
@@ -362,7 +362,7 @@ bool mm_map_shared(struct mm *m, uint64_t va, uint64_t pa, int prot) {
     if (!m || (va & 4095) || !in_area(va, va + 4096)) return false;
     uint64_t *pte = pte_of(m->pml4, va, true);
     if (!pte) return false;
-    if ((*pte & OWNED) && ADDR(*pte)) page_free((void *)ADDR(*pte));
+    if ((*pte & OWNED) && ADDR(*pte)) upage_free(ADDR(*pte));
     *pte = pa | (pte_flags(prot & 7) & ~OWNED) | SHARED;
     __asm__ volatile("invlpg (%0)" ::"r"(va) : "memory");
     return true;

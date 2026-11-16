@@ -84,6 +84,11 @@ extern struct bootinfo bootinfo;
 void mem_init(void);
 void *page_alloc(size_t pages);      /* zeroed, 4 KiB aligned, below 4 GiB; NULL if out of memory */
 void *page_alloc_or_panic(size_t pages);
+int mem_high_regions(uint64_t *base, uint64_t *len, int max);
+void mem_high_init(uint64_t skip);          /* after the disk cache has taken its part */
+uint64_t upage_alloc(void);                 /* a program's page (physical; may be above 4 GiB) */
+void upage_free(uint64_t pa);
+uint64_t mem_low_free(void);
 void page_free(void *page);          /* single 4 KiB page */
 /* Device memory above 4 GiB is mapped into the kernel-only top half of the address space
  * (shared by every program's page tables); below 4 GiB it is identity mapped. */

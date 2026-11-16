@@ -65,25 +65,21 @@ static void insert(uint64_t k, const uint8_t *data) {
 }
 
 /* ---- the setup: find the memory ---- */
-void bcache_init(void) {
+static uint64_t cache_setup(void) {                  /* returns the bytes it took from memory above 4 GiB */
     uint64_t want = 0; struct { uint64_t base, len; } r[16]; int nr = 0;
-    for (int i = 0; i < bootinfo.mmap_count && nr < 16; i++) {           /* RAM above 4 GiB */
-        struct mmap_ent *e = &bootinfo.mmap[i];
-        if (e->type != 1) continue;
-        uint64_t b = (e->base + 0x1FFFFF) & ~0x1FFFFFULL, end = (e->base + e->len) & ~0x1FFFFFULL;
-        if (b < 0x100000000ULL) b = 0x100000000ULL;
-        if (end <= b) continue;
-        r[nr].base = b; r[nr].len = end - b; nr++; want += end - b;
-    }
-    uint64_t cap = 4ULL << 30;                                           /* at most 4 GiB of cache */
+    uint64_t hb[16], hl[16]; nr = mem_high_regions(hb, hl, 16);          /* RAM above 4 GiB */
+    for (int i = 0; i < nr; i++) { r[i].base = hb[i]; r[i].len = hl[i]; want += hl[i]; }
+    uint64_t high = want;
+    uint64_t cap = 4ULL << 30;                                           /* at most 4 GiB of cache, and a quarter of it: */
+    if (cap > high / 4) cap = high / 4 & ~(uint64_t)(CH - 1);             /* the rest is for programs (mem_high_init) */
     if (want > cap) want = cap;
     if (want < (64ULL << 20)) {                                          /* little or none: borrow some low memory */
         nr = 0;
-        uint64_t freelow = mem_total() > mem_used() ? mem_total() - mem_used() : 0;
+        uint64_t freelow = mem_low_free();
         uint64_t sz = freelow / 8; if (sz > (256ULL << 20)) sz = 256ULL << 20;
         sz &= ~(uint64_t)(CH - 1);
         void *p = sz >= (8ULL << 20) ? page_alloc(sz / 4096) : 0;
-        if (!p) { LOG_INFO("Disk cache: off (not enough memory)\n"); return; }
+        if (!p) { LOG_INFO("Disk cache: off (not enough memory)\n"); return 0; }
         r[0].base = (uint64_t)p; r[0].len = sz; nr = 1; want = sz;
     }
     nents = (uint32_t)(want / CH);
@@ -91,7 +87,7 @@ void bcache_init(void) {
     ents = page_alloc(((uint64_t)nents * sizeof *ents + 4095) / 4096);
     htab = page_alloc(((uint64_t)hs * 4 + 4095) / 4096);
     bounce = page_alloc(MAX_RUN * CH / 4096);
-    if (!ents || !htab || !bounce) { nents = 0; LOG_INFO("Disk cache: off (not enough memory for its index)\n"); return; }
+    if (!ents || !htab || !bounce) { nents = 0; LOG_INFO("Disk cache: off (not enough memory for its index)\n"); return 0; }
     hmask = hs - 1;
     for (uint32_t i = 0; i < hs; i++) htab[i] = NIL;
     uint64_t left = want; uint32_t first = 0;
@@ -107,7 +103,10 @@ void bcache_init(void) {
     for (uint32_t i = 0; i < nents; i++) ents[i].next = i + 1 < nents ? i + 1 : NIL;
     free_head = 0;
     LOG_OK("Disk cache: %lu MB of memory%s\n", (uint64_t)nents * CH >> 20, r[0].base >= 0x100000000ULL ? " (above 4 GB)" : "");
+    return r[0].base >= 0x100000000ULL ? want : 0;
 }
+/* the disk cache takes its part of the memory above 4 GiB first; the rest is for programs */
+void bcache_init(void) { mem_high_init(cache_setup()); }
 
 /* ---- in front of a drive ---- */
 static int c_read(void *ctx, uint64_t lba, uint32_t n, void *buf) {
