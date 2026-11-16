@@ -1110,6 +1110,7 @@ void net_init(void) {
     for (int i = 0; i < pci_count; i++) {
         struct pci_dev *p = &pci_devs[i];
         if (p->class_code != 0x02) continue;
+        if (wifi_probe(p)) continue;
         struct netif *n = e1000_probe(p);
         if (!n) n = rtl8168_probe(p);
         if (!n) continue;

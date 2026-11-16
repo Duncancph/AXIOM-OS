@@ -53,6 +53,8 @@ static void cmd_help(void) {
         {"bt", "Bluetooth adapter information"},
         {"bt scan [secs]", "find nearby Bluetooth devices (default 10 s)"},
         {"bt list", "show devices from the last scan"},
+        {"wifi", "Wi-Fi card information"},
+        {"wifi start", "power up the Wi-Fi card and load its firmware (test)"},
         {"echo <text>", "print text"},
         {"clear", "clear the screen"},
         {"uptime", "time since boot"},
@@ -120,6 +122,9 @@ void shell_execute(char *line) {
         else if (!strcmp(argv[1], "scan")) bt_scan(argc > 2 ? (int)katoi(argv[2]) : 10);
         else if (!strcmp(argv[1], "list")) bt_list();
         else kprintf("usage: bt [info|scan [seconds]|list]\n");
+    }
+    else if (!strcmp(c, "wifi")) {
+        if (argc > 1 && !strcmp(argv[1], "start")) wifi_start(); else wifi_info();
     }
     else if (!strcmp(c, "echo")) { for (int i = 1; i < argc; i++) kprintf("%s%s", argv[i], i + 1 < argc ? " " : ""); kprintf("\n"); }
     else if (!strcmp(c, "uptime")) cmd_uptime();
