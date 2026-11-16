@@ -194,7 +194,9 @@ clean:
 
 test:
 	@mkdir -p build/test
-	gcc -std=gnu17 -O1 -w -fno-builtin -DBT_TEST -DHOST_TEST -o build/test/test_bt tests/test_bt.c src/bt.c common/str.c && build/test/test_bt | tail -8
+	gcc -std=gnu17 -O1 -w -fno-builtin -DBT_TEST -DHOST_TEST -o build/test/test_bt tests/test_bt.c src/bt.c src/sbc.c common/str.c -lm && build/test/test_bt | tail -8
+	python3 tests/test_bt_audio.py
+	gcc -O2 -o build/test/test_sbc tests/test_sbc.c src/sbc.c -lm && python3 tests/test_sbc.py build/test/test_sbc
 	@if command -v ffmpeg >/dev/null && python3 -c 'import numpy' 2>/dev/null; then python3 tests/mp3/run.py --quick > build/test/mp3.log 2>&1; r=$$?; tail -3 build/test/mp3.log; [ $$r = 0 ] || exit 1; else echo 'mp3: skipped (needs ffmpeg and numpy)'; fi
 	@if command -v ffmpeg >/dev/null && python3 -c 'import numpy' 2>/dev/null; then python3 tests/h264/run.py --quick > build/test/h264.log 2>&1; r=$$?; tail -3 build/test/h264.log; [ $$r = 0 ] || exit 1; else echo 'h264: skipped (needs ffmpeg and numpy)'; fi
 	@if command -v ffmpeg >/dev/null && python3 -c 'import numpy' 2>/dev/null; then python3 tests/media/run.py --quick > build/test/media.log 2>&1; r=$$?; tail -3 build/test/media.log; [ $$r = 0 ] || exit 1; else echo 'mp4/aac: skipped (needs ffmpeg and numpy)'; fi

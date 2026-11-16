@@ -286,6 +286,17 @@ uint64_t syscall_dispatch(struct frame *f) {
             return 0;
         }
         if (a == BT_PAIR_CONFIRM) { bt_pair_confirm((int)c); return 0; }        /* sys_bt(BT_PAIR_CONFIRM, 0, yes) */
+        if (a == BT_AUDIO_CONNECT) {
+            if (!UOK(b, 6, false)) return (uint64_t)-1;
+            uint8_t ad[6]; memcpy(ad, (void *)b, 6);
+            return (uint64_t)(int64_t)bt_audio_connect(ad);
+        }
+        if (a == BT_AUDIO_STOP) { bt_audio_stop(); return 0; }
+        if (a == BT_AUDIO_STATUS) {
+            if (!UOK(b, sizeof(struct bt_audio), true)) return (uint64_t)-1;
+            bt_audio_status((struct bt_audio *)b);
+            return 0;
+        }
         if (a == BT_PAIRED) {
             int max = (int)c;
             if (max < 0 || max > 16 || !UOK(b, (uint64_t)max * sizeof(struct bt_paired), true)) return (uint64_t)-1;

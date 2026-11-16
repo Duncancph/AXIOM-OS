@@ -252,10 +252,23 @@ struct hconn {
     uint8_t cfg;                                        /* bits: 1 ctrl we're configured, 2 ctrl they are, 4/8 the same for intr */
     bool hid_on, outgoing; uint8_t ident; uint8_t kprev[8]; int lastb;
     uint8_t rx[700]; int rx_len, rx_want;               /* an L2CAP packet being put together */
+    /* Bluetooth audio (A2DP over AVDTP): a signalling channel and a media channel, both on PSM 0x19 */
+    bool audio, av_int;                                 /* av_int: we started it (else the speaker did) */
+    uint16_t avs_l, avs_r, avm_l, avm_r, avm_mtu;       /* channel ids; the speaker's MTU on the media channel */
+    uint8_t avcfg;                                      /* 1/2 signalling configured by us/them, 4/8 media */
+    int av_state; uint8_t av_label, remote_seid;        /* (states below) */
 };
 static struct hconn hc[4];
 static uint16_t next_cid = 0x40;
+static void av_fail(struct hconn *c, const char *why);
+static void av_channel_ready(struct hconn *c);
+static void av_stopped(struct hconn *c);
+static void av_gone(struct hconn *c);
+static void avdtp_in(struct hconn *c, const uint8_t *p, int len);
 
+/* The adapter takes ACL packets of up to acl_mtu bytes and holds acl_free of them at a time (it gives them back
+ * with Number_Of_Completed_Packets); a longer L2CAP packet goes in pieces. */
+static int acl_mtu = 310, acl_total = 4; static volatile int acl_free = 4;
 #ifndef BT_TEST
 static void on_acl(struct usb_dev *d, int dci, int cc, uint32_t len) {   /* raw data from the adapter: split into ACL packets */
     if (cc != CC_SUCCESS && cc != CC_SHORT) { usb_recover_in(d, dci, cc, on_acl); return; }
@@ -272,24 +285,35 @@ static void on_acl(struct usb_dev *d, int dci, int cc, uint32_t len) {   /* raw 
     usb_queue_in(d, dci, on_acl);
 }
 static void acl_send(struct hconn *c, uint16_t cid, const uint8_t *data, int len) {
-    if (!bdev || acl_out_dci < 0 || len > 600) return;
-    static uint8_t pkt[620];
-    pkt[0] = c->handle & 0xFF; pkt[1] = ((c->handle >> 8) & 0x0F) | 0x20;      /* first packet, flushable */
-    pkt[2] = (len + 4) & 0xFF; pkt[3] = (len + 4) >> 8;
-    pkt[4] = len & 0xFF; pkt[5] = len >> 8; pkt[6] = cid & 0xFF; pkt[7] = cid >> 8;
-    memcpy(pkt + 8, data, len);
-    usb_bulk(bdev, acl_out_dci, pkt, 8 + len, 1000);
+    if (!bdev || acl_out_dci < 0 || len > 1200) return;
+    static uint8_t l2[1210], pkt[1100];
+    l2[0] = len & 0xFF; l2[1] = len >> 8; l2[2] = cid & 0xFF; l2[3] = cid >> 8;
+    memcpy(l2 + 4, data, len);
+    int total = len + 4, off = 0, mtu = acl_mtu < 1090 ? acl_mtu : 1090;
+    while (off < total) {
+        uint64_t t0 = uptime_ms();
+        while (acl_free <= 0 && uptime_ms() - t0 < 300) kyield();       /* wait for the adapter to make room */
+        if (acl_free <= 0) acl_free = 1;                                 /* (a lost count must not stop us for good) */
+        int n = total - off < mtu ? total - off : mtu;
+        pkt[0] = c->handle & 0xFF; pkt[1] = ((c->handle >> 8) & 0x0F) | (off ? 0x10 : 0x20);   /* first piece / continuing */
+        pkt[2] = n & 0xFF; pkt[3] = n >> 8;
+        memcpy(pkt + 4, l2 + off, n);
+        acl_free--;
+        usb_bulk(bdev, acl_out_dci, pkt, 4 + n, 1000);
+        off += n;
+    }
 }
 #else
 static void acl_send(struct hconn *c, uint16_t cid, const uint8_t *data, int len) { bt_test_acl_sent(c->handle, cid, data, len); }
 #endif
 static void sig_send(struct hconn *c, uint8_t code, uint8_t id, const uint8_t *d, int n) {
-    uint8_t b[64]; b[0] = code; b[1] = id; b[2] = n; b[3] = 0; memcpy(b + 4, d, n);
+    uint8_t b[80]; if (n > 76) n = 76; b[0] = code; b[1] = id; b[2] = n; b[3] = 0; memcpy(b + 4, d, n);
     acl_send(c, 1, b, 4 + n);
 }
 static void l2_connect(struct hconn *c, uint16_t psm) {                   /* we open a channel (after pairing) */
     uint16_t l = next_cid++;
-    if (psm == 0x11) c->ctrl_l = l; else c->intr_l = l;
+    if (psm == 0x19) { if (!c->avs_l) c->avs_l = l; else c->avm_l = l; }
+    else if (psm == 0x11) c->ctrl_l = l; else c->intr_l = l;
     uint8_t d[4] = { psm & 0xFF, psm >> 8, l & 0xFF, l >> 8 };
     sig_send(c, 0x02, ++c->ident, d, 4);
 }
@@ -318,8 +342,11 @@ static void l2_signal(struct hconn *c, const uint8_t *p, int len) {
         if (n > len - 4) return;
         if (code == 0x02 && n >= 4) {                                     /* Connection Request (from the device) */
             uint16_t psm = d[0] | d[1] << 8, scid = d[2] | d[3] << 8, l = next_cid++;
-            uint16_t result = (psm == 0x11 || psm == 0x13) ? 0 : 2;
-            if (!result) { if (psm == 0x11) { c->ctrl_l = l; c->ctrl_r = scid; } else { c->intr_l = l; c->intr_r = scid; } }
+            uint16_t result = (psm == 0x11 || psm == 0x13 || (psm == 0x19 && !c->avm_l)) ? 0 : 2;
+            if (!result && psm == 0x19) {                                 /* audio: the first is signalling, the second media */
+                c->audio = true;
+                if (!c->avs_l) { c->avs_l = l; c->avs_r = scid; } else { c->avm_l = l; c->avm_r = scid; }
+            } else if (!result) { if (psm == 0x11) { c->ctrl_l = l; c->ctrl_r = scid; } else { c->intr_l = l; c->intr_r = scid; } }
             uint8_t r[8] = { l & 0xFF, l >> 8, scid & 0xFF, scid >> 8, result & 0xFF, result >> 8, 0, 0 };
             if (result) { r[0] = r[1] = 0; }
             sig_send(c, 0x03, id, r, 8);
@@ -328,18 +355,25 @@ static void l2_signal(struct hconn *c, const uint8_t *p, int len) {
             uint16_t dcid = d[0] | d[1] << 8, scid = d[2] | d[3] << 8, result = d[4] | d[5] << 8;
             if (result == 0) {
                 if (scid == c->ctrl_l) c->ctrl_r = dcid; else if (scid == c->intr_l) c->intr_r = dcid;
+                else if (scid == c->avs_l) c->avs_r = dcid; else if (scid == c->avm_l) c->avm_r = dcid;
                 l2_config(c, dcid);
-            }
+            } else if (result != 1 && (scid == c->avs_l || scid == c->avm_l)) av_fail(c, "The speaker refused the audio connection.");
         } else if (code == 0x04 && n >= 4) {                              /* Configuration Request: we accept theirs */
             uint16_t dcid = d[0] | d[1] << 8;
-            uint16_t remote = dcid == c->ctrl_l ? c->ctrl_r : dcid == c->intr_l ? c->intr_r : 0;
+            uint16_t remote = dcid == c->ctrl_l ? c->ctrl_r : dcid == c->intr_l ? c->intr_r : dcid == c->avs_l ? c->avs_r : dcid == c->avm_l ? c->avm_r : 0;
+            if (dcid == c->avm_l) {                                       /* their MTU: how big our media packets may be */
+                c->avm_mtu = 672;
+                for (int o = 4; o + 2 <= n; o += 2 + d[o + 1]) if ((d[o] & 0x7F) == 1 && d[o + 1] >= 2) c->avm_mtu = d[o + 2] | d[o + 3] << 8;
+            }
             uint8_t r[6] = { remote & 0xFF, remote >> 8, 0, 0, 0, 0 };
             sig_send(c, 0x05, id, r, 6);
             if (dcid == c->ctrl_l) c->cfg |= 2; else if (dcid == c->intr_l) c->cfg |= 8;
+            else if (dcid == c->avs_l) { c->avcfg |= 2; av_channel_ready(c); } else if (dcid == c->avm_l) { c->avcfg |= 8; av_channel_ready(c); }
             check_ready(c);
         } else if (code == 0x05 && n >= 6) {                              /* Configuration Response (to ours) */
             uint16_t scid = d[0] | d[1] << 8, result = d[4] | d[5] << 8;
-            if (result == 0) { if (scid == c->ctrl_l) c->cfg |= 1; else if (scid == c->intr_l) c->cfg |= 4; }
+            if (result == 0) { if (scid == c->ctrl_l) c->cfg |= 1; else if (scid == c->intr_l) c->cfg |= 4;
+                               else if (scid == c->avs_l) { c->avcfg |= 1; av_channel_ready(c); } else if (scid == c->avm_l) { c->avcfg |= 4; av_channel_ready(c); } }
             check_ready(c);
             /* after pairing we open the control channel first, then the interrupt one */
             if (c->outgoing && scid == c->ctrl_l && !c->intr_l) l2_connect(c, 0x13);
@@ -347,9 +381,10 @@ static void l2_signal(struct hconn *c, const uint8_t *p, int len) {
             uint16_t dcid = d[0] | d[1] << 8, scid = d[2] | d[3] << 8;
             uint8_t r[4] = { dcid & 0xFF, dcid >> 8, scid & 0xFF, scid >> 8 };
             sig_send(c, 0x07, id, r, 4);
-            if (dcid == c->ctrl_l) { c->ctrl_l = c->ctrl_r = 0; c->cfg &= ~3; }
-            if (dcid == c->intr_l) { c->intr_l = c->intr_r = 0; c->cfg &= ~12; }
-            c->hid_on = false;
+            if (dcid == c->ctrl_l) { c->ctrl_l = c->ctrl_r = 0; c->cfg &= ~3; c->hid_on = false; }
+            if (dcid == c->intr_l) { c->intr_l = c->intr_r = 0; c->cfg &= ~12; c->hid_on = false; }
+            if (dcid == c->avm_l) { c->avm_l = c->avm_r = 0; c->avcfg &= ~12; av_stopped(c); }
+            if (dcid == c->avs_l) { c->avs_l = c->avs_r = 0; c->avcfg = 0; av_stopped(c); }
         } else if (code == 0x08) {                                        /* Echo Request */
             sig_send(c, 0x09, id, d, n > 40 ? 40 : n);
         } else if (code == 0x0A && n >= 2) {                              /* Information Request: not supported */
@@ -388,6 +423,7 @@ static void acl_packet(const uint8_t *b, int n) {                         /* one
     c->rx_want = 0;
     if (cid == 1) l2_signal(c, c->rx + 4, l);
     else if (cid && cid == c->intr_l) hid_input(c, c->rx + 4, l);
+    else if (cid && cid == c->avs_l) avdtp_in(c, c->rx + 4, l);
 }
 static void hid_new_conn(uint16_t handle, const uint8_t *addr, bool outgoing) {
     struct hconn *c = 0;
@@ -420,13 +456,185 @@ static bool hid_event(uint8_t *e) {
         struct hconn *c = conn_by_handle(p[1] | (p[2] & 0x0F) << 8);
         if (c) {
             if (c->hid_on) { uint8_t z[8] = { 0 }; hid_kbd_report(c->kprev, z, 8); }   /* release any held keys */
+            if (c->audio) av_gone(c);
             c->used = false;
         }
         return !pairing_now;
     }
-    if (code == 0x13 || code == 0x08) return true;                        /* completed packets, encryption change */
+    if (code == 0x13) {                                                   /* Number_Of_Completed_Packets: room in the adapter again */
+        for (int i = 0; i < p[0]; i++) acl_free += p[1 + 4 * i + 2] | p[1 + 4 * i + 3] << 8;
+        if (acl_free > acl_total) acl_free = acl_total;
+        return true;
+    }
+    if (code == 0x08) return true;                                        /* encryption change */
     return false;
 }
+/* ---------------- Bluetooth audio: A2DP source (AXIOM's sound to a speaker or headphones) ----------------
+ * AVDTP on L2CAP PSM 0x19: a signalling channel (discover the speaker's audio endpoint, choose SBC settings,
+ * open, start) and a media channel carrying RTP packets of SBC frames. Either side may start it: we do when the
+ * user picks the speaker; many speakers do it themselves when switched on near a paired computer. */
+#include "sbc.h"
+enum { AV_IDLE, AV_DISCOVER, AV_GETCAP, AV_SETCONF, AV_OPEN, AV_MEDIA, AV_START, AV_STREAMING, AV_SUSPENDED };
+static struct bt_audio ast;                  /* for Settings */
+static struct hconn *avc;                    /* the speaker's connection */
+static int av_rate = 44100, av_bitpool = 53;
+static void say_audio(int state, const char *m) { ast.state = state; strncpy0(ast.msg, m, sizeof ast.msg); }
+static const char *dev_name(const uint8_t *addr) {
+    if (!keys_loaded) keys_load();
+    for (int i = 0; i < nkeys; i++) if (!memcmp(keys[i].addr, addr, 6) && keys[i].name[0]) return keys[i].name;
+    return "the speaker";
+}
+static void av_send(struct hconn *c, uint8_t type, uint8_t label, uint8_t sig, const uint8_t *d, int n) {   /* type 0 command, 2 accept, 3 reject, 1 general reject */
+    uint8_t b[40]; if (n > 38) n = 38;
+    b[0] = (uint8_t)(label << 4 | type); b[1] = sig & 0x3F;
+    if (n) memcpy(b + 2, d, n);
+    acl_send(c, c->avs_r, b, 2 + n);
+}
+static void av_cmd(struct hconn *c, uint8_t sig, const uint8_t *d, int n) { c->av_label = (c->av_label + 1) & 15; av_send(c, 0, c->av_label, sig, d, n); }
+static void av_fail(struct hconn *c, const char *why) { c->av_state = AV_IDLE; say_audio(BTA_FAILED, why); }
+static void av_stopped(struct hconn *c) {
+    if (c->av_state == AV_STREAMING || c->av_state == AV_SUSPENDED || c->av_state >= AV_OPEN) { c->av_state = AV_IDLE; say_audio(BTA_OFF, "The speaker closed the sound connection."); }
+}
+static void av_gone(struct hconn *c) {
+    if (avc == c) { avc = 0; if (ast.state != BTA_FAILED) say_audio(BTA_OFF, "The speaker disconnected. Sound plays on this computer again."); }
+}
+static void av_channel_ready(struct hconn *c) {
+    avc = c; c->audio = true;
+    if ((c->avcfg & 3) == 3 && c->av_int && c->av_state == AV_IDLE) {          /* signalling is up: find its audio sink */
+        say_audio(BTA_SETUP, "Setting up sound...");
+        c->av_state = AV_DISCOVER; av_cmd(c, 0x01, 0, 0);
+    }
+    if ((c->avcfg & 12) == 12 && c->av_int && c->av_state == AV_MEDIA) { uint8_t s = (uint8_t)(c->remote_seid << 2); c->av_state = AV_START; av_cmd(c, 0x07, &s, 1); }
+}
+/* what we can send: SBC, 44.1 or 48 kHz, stereo, 16 blocks, 8 subbands, loudness allocation, bitpool 2..53 */
+static const uint8_t our_caps[] = { 0x01, 0x00, 0x07, 0x06, 0x00, 0x00, 0x32, 0x15, 2, 53 };
+static void av_take_config(const uint8_t *sbc) {                                 /* the 4 SBC bytes chosen */
+    av_rate = (sbc[0] & 0x10) ? 48000 : 44100;
+    av_bitpool = sbc[3] > 53 ? 53 : sbc[3] < 2 ? 2 : sbc[3];
+}
+static void av_streaming(struct hconn *c) {
+    c->av_state = AV_STREAMING;
+    char m[96]; ksnprintf(m, sizeof m, "Sound plays on %s.", dev_name(c->addr));
+    strncpy0(ast.name, dev_name(c->addr), sizeof ast.name);
+    say_audio(BTA_PLAYING, m);
+}
+static void avdtp_in(struct hconn *c, const uint8_t *p, int len) {
+    if (len < 2) return;
+    uint8_t label = p[0] >> 4, type = p[0] & 3, sig = p[1] & 0x3F;
+    const uint8_t *d = p + 2; int n = len - 2;
+    avc = c; c->audio = true;
+    if (type == 0) {                                                             /* a command from the speaker */
+        switch (sig) {
+        case 0x01: { uint8_t r[2] = { 1 << 2 | (c->av_state >= AV_OPEN ? 2 : 0), 0x00 }; av_send(c, 2, label, sig, r, 2); return; }   /* DISCOVER: our audio source */
+        case 0x02: case 0x0C: av_send(c, 2, label, sig, our_caps, sizeof our_caps); return;        /* GET_(ALL_)CAPABILITIES */
+        case 0x03:                                                               /* SET_CONFIGURATION */
+            if (n >= 2) c->remote_seid = d[1] >> 2;
+            for (int o = 2; o + 2 <= n; o += 2 + d[o + 1]) if (d[o] == 7 && d[o + 1] >= 6 && d[o + 3] == 0) av_take_config(d + o + 4);
+            c->av_state = AV_OPEN; av_send(c, 2, label, sig, 0, 0); return;
+        case 0x04: av_send(c, 2, label, sig, our_caps, sizeof our_caps); return;   /* GET_CONFIGURATION (near enough) */
+        case 0x06: c->av_state = AV_MEDIA; av_send(c, 2, label, sig, 0, 0); return;  /* OPEN: they open the media channel next */
+        case 0x07: av_send(c, 2, label, sig, 0, 0); av_streaming(c); return;        /* START */
+        case 0x09: c->av_state = AV_SUSPENDED; av_send(c, 2, label, sig, 0, 0); return;   /* SUSPEND */
+        case 0x08: case 0x0A: c->av_state = AV_IDLE; av_send(c, 2, label, sig, 0, 0); return;   /* CLOSE, ABORT */
+        case 0x0D: av_send(c, 2, label, sig, 0, 0); return;                      /* DELAY_REPORT */
+        default: av_send(c, 1, label, sig, 0, 0); return;                        /* not supported */
+        }
+    }
+    if (type == 3 || type == 1) {                                                /* our command was refused */
+        if (sig == 0x07 && c->av_state == AV_STREAMING) return;
+        char m[96]; ksnprintf(m, sizeof m, "The speaker refused the sound set-up (step %d, error %d).", sig, n ? d[n > 1 ? 1 : 0] : 0);
+        av_fail(c, m); return;
+    }
+    switch (sig) {                                                               /* accepted */
+    case 0x01: {                                                                 /* DISCOVER: its endpoints */
+        int pick = -1;
+        for (int i = 0; i + 1 < n; i += 2) if (!(d[i] & 2) && (d[i + 1] >> 4) == 0 && (d[i + 1] & 8)) { pick = d[i] >> 2; break; }   /* audio sink, free */
+        if (pick < 0) { av_fail(c, "This device doesn't take sound (no free audio input)."); return; }
+        c->remote_seid = (uint8_t)pick; c->av_state = AV_GETCAP;
+        uint8_t s = (uint8_t)(pick << 2); av_cmd(c, 0x02, &s, 1); return;
+    }
+    case 0x02: case 0x0C: {                                                      /* its capabilities: choose SBC settings */
+        const uint8_t *sbc = 0;
+        for (int o = 0; o + 2 <= n; o += 2 + d[o + 1]) if (d[o] == 7 && d[o + 1] >= 6 && o + 8 <= n && d[o + 3] == 0) sbc = d + o + 4;
+        if (!sbc) { av_fail(c, "The speaker didn't offer the standard sound format (SBC)."); return; }
+        uint8_t cfg[4];
+        cfg[0] = (sbc[0] & 0x20 ? 0x20 : 0x10) | 0x02;                           /* 44.1 kHz (else 48), stereo */
+        cfg[1] = 0x10 | 0x04 | 0x01;                                             /* 16 blocks, 8 subbands, loudness */
+        cfg[2] = sbc[2] < 2 ? 2 : sbc[2];
+        cfg[3] = sbc[3] > 53 ? 53 : sbc[3];
+        if (cfg[3] < cfg[2]) cfg[3] = cfg[2];
+        if (!(sbc[0] & 0x30) || !(sbc[0] & 0x02) || !(sbc[1] & 0x10) || !(sbc[1] & 0x04) || !(sbc[1] & 0x01)) { av_fail(c, "The speaker's SBC settings don't include the ones AXIOM sends."); return; }
+        uint8_t sc[2 + 2 + 2 + 6] = { (uint8_t)(c->remote_seid << 2), 1 << 2, 0x01, 0x00, 0x07, 0x06, 0x00, 0x00, cfg[0], cfg[1], cfg[2], cfg[3] };
+        av_take_config(cfg);
+        c->av_state = AV_SETCONF; av_cmd(c, 0x03, sc, sizeof sc); return;
+    }
+    case 0x03: { uint8_t s = (uint8_t)(c->remote_seid << 2); c->av_state = AV_OPEN; av_cmd(c, 0x06, &s, 1); return; }   /* configured: OPEN */
+    case 0x06: c->av_state = AV_MEDIA; l2_connect(c, 0x19); return;              /* open: the media channel */
+    case 0x07: av_streaming(c); return;                                          /* started */
+    case 0x09: c->av_state = AV_SUSPENDED; return;
+    }
+}
+
+/* ---- the sound waiting to go out: a ring of 16-bit stereo samples at the speaker's rate ---- */
+#define RING (48000)
+static int16_t ring[RING * 2]; static volatile uint32_t ring_w, ring_r;   /* sample frames written / taken */
+static int32_t rs_prev[2]; static uint32_t rs_phase;                    /* resampling from the program's rate */
+static bool bta_paused; static uint64_t bta_last_write;
+bool bta_active(void) { return avc && avc->used && (avc->av_state == AV_STREAMING || avc->av_state == AV_SUSPENDED); }
+void bta_flush(void) { ring_r = ring_w; rs_phase = 0; bta_paused = false; }
+void bta_pause(bool on) { bta_paused = on; }
+long bta_queued_ms(void) { return (long)((ring_w - ring_r) * 1000ull / (uint64_t)av_rate) + 80; }
+/* add frames at in_rate (volume 0..10000 already applied by the caller); returns how many input frames were taken */
+long bta_write(const int16_t *pcm, long frames, int in_rate) {
+    uint32_t step = (uint32_t)((uint64_t)in_rate * 65536 / (uint64_t)av_rate);
+    long i = 0;
+    for (; i < frames; i++) {
+        uint32_t room = RING - 1 - (ring_w - ring_r);
+        if (room < 4) break;
+        int32_t cur[2] = { pcm[2 * i], pcm[2 * i + 1] };
+        while (rs_phase < 65536) {
+            for (int ch = 0; ch < 2; ch++) ring[(ring_w % RING) * 2 + ch] = (int16_t)(rs_prev[ch] + (((cur[ch] - rs_prev[ch]) * (int32_t)rs_phase) >> 16));
+            ring_w++; rs_phase += step;
+        }
+        rs_phase -= 65536; rs_prev[0] = cur[0]; rs_prev[1] = cur[1];
+    }
+    if (i) bta_last_write = uptime_ms();
+    return i;
+}
+/* the next 128 frames for the speaker (silence where there's nothing) */
+static void ring_take(int16_t *out) {
+    for (int i = 0; i < 128; i++) {
+        if (!bta_paused && ring_r != ring_w) { out[2 * i] = ring[(ring_r % RING) * 2]; out[2 * i + 1] = ring[(ring_r % RING) * 2 + 1]; ring_r++; }
+        else out[2 * i] = out[2 * i + 1] = 0;
+    }
+}
+/* one media packet: RTP header, SBC payload header, as many frames as fit the speaker's MTU */
+static struct sbc_enc enc; static uint16_t rtp_seq; static uint32_t rtp_ts;
+static int av_packet(struct hconn *c) {
+    static uint8_t pkt[1100]; static int16_t pcm[256];
+    int fl = sbc_frame_len(&enc), mtu = c->avm_mtu ? c->avm_mtu : 672;
+    if (mtu > 1000) mtu = 1000;
+    int nf = (mtu - 13) / fl; if (nf > 15) nf = 15; if (nf < 1) nf = 1;
+    pkt[0] = 0x80; pkt[1] = 0x60;                                                /* RTP v2, payload type 96 */
+    pkt[2] = rtp_seq >> 8; pkt[3] = rtp_seq & 0xFF; rtp_seq++;
+    pkt[4] = rtp_ts >> 24; pkt[5] = rtp_ts >> 16; pkt[6] = rtp_ts >> 8; pkt[7] = rtp_ts;
+    pkt[8] = 0; pkt[9] = 0; pkt[10] = 0; pkt[11] = 1;                            /* SSRC 1 */
+    pkt[12] = (uint8_t)nf;
+    int o = 13;
+    for (int f = 0; f < nf; f++) { ring_take(pcm); o += sbc_encode(&enc, pcm, pkt + o); }
+    rtp_ts += (uint32_t)(128 * nf);
+    acl_send(c, c->avm_r, pkt, o);
+    return nf * 128;
+}
+#ifdef BT_TEST
+int bt_test_audio_packet(void) { if (!avc) return 0; if (!enc.bitpool) sbc_init(&enc, av_rate, av_bitpool); return av_packet(avc); }
+void bt_test_audio_start(uint16_t h) {                                  /* as if the user chose this speaker (link is up) */
+    struct hconn *c = conn_by_handle(h); if (!c) return;
+    c->audio = true; c->av_int = true; avc = c; l2_connect(c, 0x19);
+}
+int bt_test_audio_state(void) { return avc ? avc->av_state : -1; }
+#endif
+
 static void acl_poll(void) {
     while (aclq_t != aclq_h) { int t = aclq_t; acl_packet(aclq[t], aclq_n[t]); aclq_t = (t + 1) % ACLQ; }
 }
@@ -562,6 +770,110 @@ void bt_forget(const uint8_t *addr) {
 }
 
 #ifndef BT_TEST
+/* ---- Bluetooth audio: connecting to a paired speaker, and the sender that keeps it fed in real time ---- */
+static uint8_t av_addr[6];
+static void av_connect_task(void *arg) {
+    const uint8_t *addr = av_addr;
+    struct hconn *c = 0;
+    for (int i = 0; i < 4; i++) if (hc[i].used && !memcmp(hc[i].addr, addr, 6)) c = &hc[i];   /* already connected (it came to us) */
+    if (!c) {
+        pairing_now = true;                                       /* (the events are ours until the link is up) */
+        say_audio(BTA_CONNECTING, "Connecting...");
+        uint8_t cc[13]; memcpy(cc, addr, 6); cc[6] = 0x18; cc[7] = 0xCC; cc[8] = 1; cc[9] = 0; cc[10] = cc[11] = 0; cc[12] = 1;
+        for (int i = 0; i < nfound; i++) if (!memcmp(found[i].addr, addr, 6) && !found[i].le) { cc[8] = found[i].pscan; cc[10] = found[i].clk & 0xFF; cc[11] = (found[i].clk >> 8) | 0x80; }
+        int handle = -1; bool authed = false, enc_on = false;
+        if (hci_cmd(0x0405, cc, 13, 0, 0) != 0) say_audio(BTA_FAILED, "The Bluetooth adapter refused to connect.");
+        uint64_t end = uptime_ms() + 20000;
+        while (ast.state == BTA_CONNECTING && uptime_ms() < end && !enc_on) {
+            uint8_t *e = next_event();
+            if (!e) { kyield(); continue; }
+            uint8_t code = e[0], *p = e + 2;
+            switch (code) {
+            case 0x03:                                            /* Connection_Complete */
+                if (memcmp(p + 3, addr, 6)) { handle_async(e); break; }
+                if (p[0]) { say_audio(BTA_FAILED, p[0] == 0x04 ? "The speaker didn't answer. Is it switched on?" : "Couldn't connect to the speaker."); break; }
+                handle = p[1] | (p[2] & 0x0F) << 8;
+                { uint8_t h[2] = { handle & 0xFF, handle >> 8 }; hci_cmd(0x0411, h, 2, 0, 0); }   /* Authentication_Requested */
+                break;
+            case 0x17: {                                          /* Link_Key_Request: the key from pairing */
+                struct bkey *k = key_find(p);
+                if (k) { uint8_t r[22]; memcpy(r, p, 6); memcpy(r + 6, k->key, 16); hci_cmd(0x040B, r, 22, 0, 0); }
+                else hci_cmd(0x040C, p, 6, 0, 0);
+                break;
+            }
+            case 0x31: { uint8_t r[7]; memcpy(r, p, 6); r[6] = 0x18; hci_cmd(0x0434, r, 7, 0, 0);   /* asked to pair again: no */
+                say_audio(BTA_FAILED, "The speaker wants to pair again: forget it in Settings > Bluetooth and pair it once more."); break; }
+            case 0x06:                                            /* Authentication_Complete */
+                if ((p[1] | (p[2] & 0x0F) << 8) != handle) break;
+                if (p[0]) { say_audio(BTA_FAILED, "The speaker didn't accept AXIOM's key: forget it and pair it again."); break; }
+                authed = true;
+                { uint8_t en[3] = { handle & 0xFF, handle >> 8, 1 }; hci_cmd(0x0413, en, 3, 0, 0); }   /* Set_Connection_Encryption */
+                break;
+            case 0x08:                                            /* Encryption_Change */
+                if ((p[1] | (p[2] & 0x0F) << 8) == handle && !p[0] && p[3]) enc_on = true;
+                else if ((p[1] | (p[2] & 0x0F) << 8) == handle) say_audio(BTA_FAILED, "The link to the speaker couldn't be encrypted.");
+                break;
+            case 0x05:                                            /* Disconnection_Complete */
+                if ((p[1] | (p[2] & 0x0F) << 8) == handle) say_audio(BTA_FAILED, "The speaker disconnected.");
+                break;
+            default: handle_async(e);
+            }
+        }
+        pairing_now = false;
+        if (!enc_on || !authed) {
+            if (ast.state == BTA_CONNECTING) say_audio(BTA_FAILED, "The speaker didn't answer in time.");
+            if (handle >= 0) { uint8_t dd[3] = { handle & 0xFF, handle >> 8, 0x13 }; hci_cmd(0x0406, dd, 3, 0, 0); }
+            task_exit(0);
+        }
+        hid_new_conn((uint16_t)handle, addr, true);
+        c = conn_by_handle((uint16_t)handle);
+        if (!c) { say_audio(BTA_FAILED, "Too many Bluetooth connections."); task_exit(0); }
+    }
+    c->audio = true; c->av_int = true; avc = c;
+    if (c->av_state == AV_STREAMING) { av_streaming(c); task_exit(0); }
+    say_audio(BTA_SETUP, "Connected. Setting up sound...");
+    if (!c->avs_l) l2_connect(c, 0x19);                           /* AVDTP signalling: the rest follows its answers */
+    else av_channel_ready(c);
+    task_exit(0);
+}
+int bt_audio_connect(const uint8_t *addr) {
+    if (!bdev || !info_ok) return -1;
+    if (ast.state == BTA_CONNECTING || ast.state == BTA_SETUP) return -1;
+    memcpy(av_addr, addr, 6);
+    memset(&ast, 0, sizeof ast); memcpy(ast.addr, addr, 6); strncpy0(ast.name, dev_name(addr), sizeof ast.name);
+    say_audio(BTA_CONNECTING, "Connecting...");
+    task_create_kernel("Bluetooth audio", av_connect_task, 0);
+    return 0;
+}
+void bt_audio_stop(void) {
+    struct hconn *c = avc;
+    if (c && c->used) { uint8_t dd[3] = { c->handle & 0xFF, c->handle >> 8, 0x13 }; hci_cmd(0x0406, dd, 3, 0, 0); }
+    avc = 0; say_audio(BTA_OFF, "Sound plays on this computer again.");
+}
+void bt_audio_status(struct bt_audio *out) { *out = ast; }
+/* keeps the speaker fed: SBC packets paced to the clock, ~80 ms ahead; suspends after 4 s of nothing to play */
+static void av_sender(void *arg) {
+    int last_rate = 0, last_bp = 0; uint64_t t0 = 0, sent = 0;
+    for (;;) {
+        struct hconn *c = avc;
+        bool want = c && c->used && c->avm_r && (c->av_state == AV_STREAMING || c->av_state == AV_SUSPENDED);
+        if (!want) { t0 = 0; task_sleep(20); continue; }
+        bool have = ring_w != ring_r && !bta_paused;
+        if (c->av_state == AV_SUSPENDED) {
+            if (have) { uint8_t s = (uint8_t)(c->remote_seid << 2); av_cmd(c, 0x07, &s, 1); c->av_state = AV_START; }   /* sound again: start */
+            t0 = 0; task_sleep(20); continue;
+        }
+        if (!have && bta_last_write && uptime_ms() - bta_last_write > 4000 && c->av_int) {   /* nothing playing: let it rest */
+            uint8_t s = (uint8_t)(c->remote_seid << 2); av_cmd(c, 0x09, &s, 1); c->av_state = AV_SUSPENDED; bta_last_write = 0;
+            continue;
+        }
+        if (av_rate != last_rate || av_bitpool != last_bp) { sbc_init(&enc, av_rate, av_bitpool); last_rate = av_rate; last_bp = av_bitpool; }
+        if (!t0) { t0 = uptime_ms(); sent = 0; }
+        uint64_t due = (uptime_ms() - t0) * (uint64_t)av_rate / 1000 + (uint64_t)av_rate * 80 / 1000;
+        while (sent < due && avc == c && c->av_state == AV_STREAMING) sent += (uint64_t)av_packet(c);
+        task_sleep(5);
+    }
+}
 static void pair_task(void *arg) { bt_pair_run(pair_addr); task_exit(0); }
 int bt_pair_start(const uint8_t *addr) {
     if (pst.state > BTP_IDLE && pst.state < BTP_DONE) return -1;
@@ -619,6 +931,11 @@ void bt_attach(struct usb_dev *d, int iface, int dci) {
         local_name[k] = 0;
     }
     if (hci_cmd(0x1003, 0, 0, r, sizeof r) == 0) le_ok = (r[1 + 4] >> 6) & 1;   /* LMP features byte 4 bit 6: LE supported */
+    if (hci_cmd(0x1005, 0, 0, r, sizeof r) == 0 && r[0] == 0) {              /* Read_Buffer_Size: ACL packet size and count */
+        int m = r[1] | r[2] << 8, n = r[4] | r[5] << 8;
+        if (m >= 27) acl_mtu = m;
+        if (n >= 1) acl_total = acl_free = n;
+    }
     char a[18]; fmt_addr(a, bdaddr);
     if (info_ok)
         LOG_OK("Bluetooth %s by %s, address %s\n", ver_name(hci_ver), mfr_name(manufacturer), a);
@@ -631,7 +948,7 @@ void bt_attach(struct usb_dev *d, int iface, int dci) {
     uint8_t scan = 0x02; hci_cmd(0x0C1A, &scan, 1, 0, 0);                     /* Write_Scan_Enable: page scan */
     if (acl_in_dci > 0) usb_queue_in(d, acl_in_dci, on_acl);
     static bool thread_started;
-    if (!thread_started) { thread_started = true; task_create_kernel("Bluetooth", bt_thread, 0); }
+    if (!thread_started) { thread_started = true; task_create_kernel("Bluetooth", bt_thread, 0); task_create_kernel("Bluetooth audio sender", av_sender, 0); }
 #endif
     if (manufacturer == 2 && !bdaddr[0] && !bdaddr[1] && !bdaddr[2])
         LOG_WARN("Intel Bluetooth needs a firmware upload before it works (not supported yet)\n");

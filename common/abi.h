@@ -72,7 +72,11 @@ struct sysinfo {
     uint64_t cache_used, cache_size;    /* the disk cache: bytes of files kept in memory, and its room */
 };
 
-enum { BT_INFO, BT_SCAN, BT_RESULTS, BT_PAIR, BT_PAIR_STATUS, BT_PAIR_CONFIRM, BT_PAIRED, BT_FORGET };
+enum { BT_INFO, BT_SCAN, BT_RESULTS, BT_PAIR, BT_PAIR_STATUS, BT_PAIR_CONFIRM, BT_PAIRED, BT_FORGET,
+       BT_AUDIO_CONNECT /* (addr): play sound on that paired speaker */, BT_AUDIO_STOP, BT_AUDIO_STATUS /* (struct bt_audio *) */ };
+/* Bluetooth audio (sound to a speaker or headphones) */
+enum { BTA_OFF, BTA_CONNECTING, BTA_SETUP, BTA_PLAYING, BTA_FAILED };
+struct bt_audio { int state; uint8_t addr[6]; char name[64]; char msg[96]; };
 /* pairing (Bluetooth Classic, Secure Simple Pairing) */
 enum { BTP_IDLE, BTP_CONNECTING, BTP_CONFIRM, BTP_TYPE_CODE, BTP_WORKING, BTP_DONE, BTP_FAILED };
 struct bt_pair { int state; uint32_t code; uint8_t addr[6]; char name[64]; char msg[96]; };

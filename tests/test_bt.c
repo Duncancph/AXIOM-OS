@@ -4,6 +4,8 @@
 #include <string.h>
 #include <time.h>
 #include <stdlib.h>
+#include <math.h>
+#include <stdarg.h>
 #include "../src/usb.h"
 
 static usb_xfer_cb evt_cb; static struct usb_dev dev; static uint8_t epbuf[64];
@@ -124,14 +126,10 @@ void console_set_color(int c) {}
 void kprintf(const char *f, ...) { va_list a; va_start(a, f); vprintf(f, a); va_end(a); }
 
 /* what we sent over ACL (L2CAP), and what reached the keyboard and mouse */
-static struct { uint16_t h, cid; uint8_t d[64]; int n; } sent[256]; static int nsent;
+static struct { uint16_t h, cid; uint8_t d[1200]; int n; } sent[1024]; static int nsent;
 void bt_test_acl_sent(uint16_t h, uint16_t cid, const uint8_t *d, int n) {
-    if (nsent < 256) { sent[nsent].h = h; sent[nsent].cid = cid; memcpy(sent[nsent].d, d, n > 64 ? 64 : n); sent[nsent].n = n; nsent++; }
+    if (nsent < 1024) { sent[nsent].h = h; sent[nsent].cid = cid; memcpy(sent[nsent].d, d, n > 1200 ? 1200 : n); sent[nsent].n = n; nsent++; }
 }
-static uint8_t lastkbd[8]; static int nkbd, mdx, mdy, mbtn, nmouse;
-void hid_kbd_report(uint8_t *last, const uint8_t *r, int len) { memcpy(lastkbd, r, len > 8 ? 8 : len); memcpy(last, r, len > 8 ? 8 : len); nkbd++; }
-void bt_test_mouse(int dx, int dy, int b) { mdx = dx; mdy = dy; mbtn = b; nmouse++; }
-void bt_test_event(uint8_t *e); void bt_test_acl_in(const uint8_t *b, int n);
 static void dev_l2(uint16_t h, uint16_t cid, const uint8_t *d, int n) {     /* the device sends an L2CAP packet */
     uint8_t b[300]; b[0] = h & 0xFF; b[1] = (h >> 8) | 0x20; b[2] = (n + 4) & 0xFF; b[3] = (n + 4) >> 8;
     b[4] = n & 0xFF; b[5] = n >> 8; b[6] = cid & 0xFF; b[7] = cid >> 8; memcpy(b + 8, d, n);
@@ -161,6 +159,45 @@ static int dev_open(uint16_t h, uint16_t psm, uint16_t their_cid) {
     return our;
 }
 static bool sent_cmd(int op) { for (int i = 0; i < ncmds; i++) if (sent_cmds[i] == op) return true; return false; }
+int settings_int(const char *k) { return 100; }
+void bt_test_audio_start(uint16_t h); int bt_test_audio_packet(void); int bt_test_audio_state(void);
+bool bta_active(void); long bta_write(const int16_t *pcm, long frames, int in_rate);
+static int last_on(uint16_t cid) { for (int i = nsent - 1; i >= 0; i--) if (sent[i].cid == cid) return i; return -1; }
+/* AVDTP message from the speaker on its signalling channel */
+static void av_dev(uint16_t h, uint16_t cid, uint8_t label, uint8_t type, uint8_t sig, const uint8_t *d, int n) {
+    uint8_t b[64] = { (uint8_t)(label << 4 | type), sig }; memcpy(b + 2, d, n); dev_l2(h, cid, b, 2 + n);
+}
+/* send ~2 s of a 1 kHz / 3 kHz tone through the speaker path; check the RTP packets and save the SBC frames */
+static int stream_check(uint16_t media_cid, const char *file) {
+    static int16_t pcm[44100 * 2]; int bad = 0;
+    for (int i = 0; i < 44100; i++) { pcm[2 * i] = (int16_t)(12000 * sin(2 * M_PI * 1000 * i / 44100.0)); pcm[2 * i + 1] = (int16_t)(8000 * sin(2 * M_PI * 3000 * i / 44100.0)); }
+    FILE *f = fopen(file, "wb"); long fed = 0; int mark = nsent, last_seq = -1; uint32_t last_ts = 0;
+    for (int k = 0; k < 400; k++) {                                              /* feed it all, then drain the queue */
+        if (fed < 44100) fed += bta_write(pcm + fed * 2, 44100 - fed > 4096 ? 4096 : 44100 - fed, 44100);
+        if (bt_test_audio_packet() <= 0) break;
+        if (fed >= 44100 && k > 80) break;
+    }
+    int npk = 0;
+    for (int i = mark; i < nsent; i++) {
+        if (sent[i].cid != media_cid) continue;
+        const uint8_t *d = sent[i].d; int n = sent[i].n; npk++;
+        int seq = d[2] << 8 | d[3]; uint32_t ts = (uint32_t)d[4] << 24 | d[5] << 16 | d[6] << 8 | d[7]; int nf = d[12] & 15;
+        if (d[0] != 0x80 || (d[1] & 0x7F) != 96 || nf < 1) bad++;
+        if (last_seq >= 0 && (seq != ((last_seq + 1) & 0xFFFF) || ts != last_ts + 128u * (uint32_t)nf)) bad++;
+        if (n > 672) bad++;                                                       /* within the speaker's MTU */
+        last_seq = seq; last_ts = ts;
+        int o = 13;
+        for (int fr = 0; fr < nf; fr++) { if (d[o] != 0x9C) bad++; int fl = 4 + 8 + (16 * d[o + 2] + 7) / 8; fwrite(d + o, 1, fl, f); o += fl; }
+        if (o != n) bad++;
+    }
+    fclose(f);
+    printf("audio: %d media packets, %d problems\n", npk, bad);
+    return npk > 20 && !bad;
+}
+static uint8_t lastkbd[8]; static int nkbd, mdx, mdy, mbtn, nmouse;
+void hid_kbd_report(uint8_t *last, const uint8_t *r, int len) { memcpy(lastkbd, r, len > 8 ? 8 : len); memcpy(last, r, len > 8 ? 8 : len); nkbd++; }
+void bt_test_mouse(int dx, int dy, int b) { mdx = dx; mdy = dy; mbtn = b; nmouse++; }
+void bt_test_event(uint8_t *e); void bt_test_acl_in(const uint8_t *b, int n);
 
 int main(void) {
     dev.ep_buf[3] = epbuf; dev.vid = 0x0BDA; dev.pid = 0xB85B;
@@ -234,6 +271,61 @@ int main(void) {
     nkbd = 0; dev_l2(0x42, c2, key, sizeof key);
     CHECK(nkbd == 1, "the newly paired keyboard should type");
     justworks = 0;
+    /* 8: a paired speaker connects by itself and sets up the sound (it leads: we answer) */
+    uint8_t sp4[] = {0x04, 10, phone[0], phone[1], phone[2], phone[3], phone[4], phone[5], 0x14, 0x04, 0x24, 1};
+    bt_test_event(sp4);
+    uint8_t sp3[] = {0x03, 11, 0, 0x44, 0x00, phone[0], phone[1], phone[2], phone[3], phone[4], phone[5], 1, 0};
+    bt_test_event(sp3);
+    int sig = dev_open(0x44, 0x19, 0x90);
+    CHECK(sig > 0, "the speaker's AVDTP signalling channel should be accepted");
+    av_dev(0x44, sig, 1, 0, 0x01, 0, 0);                                          /* DISCOVER */
+    int r = last_on(0x90);
+    CHECK(r >= 0 && sent[r].d[0] == 0x12 && sent[r].d[1] == 0x01 && (sent[r].d[2] >> 2) == 1 && !(sent[r].d[3] & 8), "we should answer DISCOVER with our audio source");
+    uint8_t seid = 1 << 2; av_dev(0x44, sig, 2, 0, 0x02, &seid, 1);               /* GET_CAPABILITIES */
+    r = last_on(0x90);
+    CHECK(r >= 0 && sent[r].d[0] == 0x22 && sent[r].n >= 12 && sent[r].d[4] == 7 && sent[r].d[7] == 0 && (sent[r].d[8] & 0x22) == 0x22, "our capabilities should offer SBC 44.1 kHz stereo");
+    uint8_t setc[] = { 1 << 2, 3 << 2, 1, 0, 7, 6, 0, 0, 0x22, 0x15, 2, 35 };
+    av_dev(0x44, sig, 3, 0, 0x03, setc, sizeof setc);                            /* SET_CONFIGURATION */
+    r = last_on(0x90); CHECK(r >= 0 && sent[r].d[0] == 0x32, "SET_CONFIGURATION should be accepted");
+    av_dev(0x44, sig, 4, 0, 0x06, &seid, 1);                                      /* OPEN */
+    r = last_on(0x90); CHECK(r >= 0 && sent[r].d[0] == 0x42, "OPEN should be accepted");
+    int media = dev_open(0x44, 0x19, 0x91);
+    CHECK(media > 0 && media != sig, "the speaker's media channel should be accepted");
+    av_dev(0x44, sig, 5, 0, 0x07, &seid, 1);                                      /* START */
+    r = last_on(0x90); CHECK(r >= 0 && sent[r].d[0] == 0x52, "START should be accepted");
+    CHECK(bta_active(), "sound should now go to the speaker");
+    CHECK(stream_check(0x91, "build/test/bt_audio1.sbc"), "the speaker should get well-formed SBC packets");
+    uint8_t sp5[] = {0x05, 4, 0, 0x44, 0x00, 0x13};
+    bt_test_event(sp5);
+    CHECK(!bta_active(), "after the speaker disconnects, sound comes back to the computer");
+    /* 9: we set up the sound with a speaker that's connected (as when the user picks it) */
+    bt_test_event(sp4); uint8_t sp3b[] = {0x03, 11, 0, 0x45, 0x00, phone[0], phone[1], phone[2], phone[3], phone[4], phone[5], 1, 0}; bt_test_event(sp3b);
+    mark = nsent;
+    bt_test_audio_start(0x45);
+    int s2 = dev_answer_conn(0x45, mark, 0xA0);
+    CHECK(s2 > 0, "we should open the AVDTP signalling channel");
+    r = last_on(0xA0);
+    CHECK(r >= 0 && sent[r].d[1] == 0x01 && (sent[r].d[0] & 3) == 0, "we should send DISCOVER");
+    uint8_t seps[] = { 2 << 2 | 2, 0x08, 4 << 2, 0x08, 5 << 2, 0x00 };          /* a busy sink, a free sink, a source */
+    av_dev(0x45, s2, sent[r].d[0] >> 4, 2, 0x01, seps, sizeof seps);
+    r = last_on(0xA0);
+    CHECK(r >= 0 && sent[r].d[1] == 0x02 && sent[r].d[2] == (4 << 2), "we should ask the free sink (4) for its capabilities");
+    uint8_t caps[] = { 1, 0, 7, 6, 0, 0, 0xFF, 0xFF, 2, 51 };
+    av_dev(0x45, s2, sent[r].d[0] >> 4, 2, 0x02, caps, sizeof caps);
+    r = last_on(0xA0);
+    CHECK(r >= 0 && sent[r].d[1] == 0x03 && sent[r].d[2] == (4 << 2) && sent[r].d[10] == 0x22 && sent[r].d[11] == 0x15 && sent[r].d[13] == 51, "SET_CONFIGURATION: SBC 44.1 kHz stereo, 16 blocks, 8 subbands, loudness, bitpool up to 51");
+    av_dev(0x45, s2, sent[r].d[0] >> 4, 2, 0x03, 0, 0);
+    r = last_on(0xA0);
+    CHECK(r >= 0 && sent[r].d[1] == 0x06, "we should OPEN");
+    mark = nsent;
+    av_dev(0x45, s2, sent[r].d[0] >> 4, 2, 0x06, 0, 0);
+    int m2 = dev_answer_conn(0x45, mark, 0xA1);
+    CHECK(m2 > 0, "we should open the media channel");
+    r = last_on(0xA0);
+    CHECK(r >= 0 && sent[r].d[1] == 0x07, "we should START");
+    av_dev(0x45, s2, sent[r].d[0] >> 4, 2, 0x07, 0, 0);
+    CHECK(bta_active() && bt_test_audio_state() == 7, "sound should be streaming");
+    CHECK(stream_check(0xA1, "build/test/bt_audio2.sbc"), "SBC packets should flow when we set it up");
     bt_forget(kbd);
     bt_forget(phone);
     CHECK(bt_paired(pd, 4) == 0, "forget should remove the key");

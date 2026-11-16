@@ -9,6 +9,8 @@ static int ndev = -1, hover;
 static bool scanning;
 static struct bt_paired paired[16]; static int npaired;
 static bool pairing; static struct bt_pair ps;
+static struct bt_audio au;                  /* sound to a speaker: 400+i "Play sound here" for paired device i, 500 "Stop" */
+static bool au_is(const uint8_t *a) { return au.state != BTA_OFF && au.state != BTA_FAILED && !memcmp(au.addr, a, 6); }
 static int hover_id = -1, list_off;         /* list_off: first nearby device shown (mouse wheel scrolls) */                  /* 100+i: Pair button of device i, 200+i: Forget, 300/301: dialog buttons */
 static void addr_str(const uint8_t *a, char *o) { ksnprintf(o, 18, "%02X:%02X:%02X:%02X:%02X:%02X", a[5], a[4], a[3], a[2], a[1], a[0]); }
 static bool is_paired(const uint8_t *a) { for (int i = 0; i < npaired; i++) if (!memcmp(paired[i].addr, a, 6)) return true; return false; }
@@ -62,12 +64,17 @@ static void draw(void) {
 
     int y = 302;
     if (npaired) {                             /* remembered devices */
-        gfx_text(c, &font_ui_bold, 22, y, UI_TEXT, "Paired devices"); y += 12;
+        gfx_text(c, &font_ui_bold, 22, y, UI_TEXT, "Paired devices");
+        if (au.state != BTA_OFF || au.msg[0])                     /* where the sound goes */
+            gfx_text(c, &font_ui, 160, y, au.state == BTA_FAILED ? UI_RED : au.state == BTA_PLAYING ? UI_GREEN : UI_MUTED, au.msg);
+        y += 12;
         for (int i = 0; i < npaired && y + 40 < WH; i++, y += 42) {
             ui_card(c, 20, y, WW - 40, 36);
             char d[24]; addr_str(paired[i].addr, d);
             gfx_text(c, &font_ui_bold, 36, y + 23, UI_TEXT, paired[i].name[0] ? paired[i].name : d);
-            gfx_text(c, &font_ui, 220, y + 23, UI_MUTED, d);
+            gfx_text(c, &font_ui, 200, y + 23, UI_MUTED, d);
+            if (au_is(paired[i].addr)) ui_button(c, WW - 20 - 90 - 128, y + 4, 120, 28, "Stop sound", BTN_NORMAL, hover_id == 500, false);
+            else ui_button(c, WW - 20 - 90 - 128, y + 4, 120, 28, "Play sound here", BTN_PRIMARY, hover_id == 400 + i, au.state == BTA_CONNECTING || au.state == BTA_SETUP);
             ui_button(c, WW - 20 - 90, y + 4, 80, 28, "Forget", BTN_NORMAL, hover_id == 200 + i, false);
         }
         y += 18;
@@ -129,7 +136,10 @@ static int hit(int x, int y0) {
     int y = 302;
     if (npaired) {
         y += 12;
-        for (int i = 0; i < npaired && y + 40 < WH; i++, y += 42) if (ui_in(x, y0, WW - 110, y + 4, 80, 28)) return 200 + i;
+        for (int i = 0; i < npaired && y + 40 < WH; i++, y += 42) {
+            if (ui_in(x, y0, WW - 110, y + 4, 80, 28)) return 200 + i;
+            if (ui_in(x, y0, WW - 238, y + 4, 120, 28)) return au_is(paired[i].addr) ? 500 : 400 + i;
+        }
         y += 18 + 26;
     }
     for (int i = list_off; i < ndev && y + 46 < WH; i++, y += 50) if (!devs[i].le && ui_in(x, y0, WW - 200, y + 8, 64, 28)) return 100 + i;
@@ -140,10 +150,16 @@ int main(void) {
     if (!app_open_ex(&a, WW, WH, "Bluetooth", WIN_RESIZABLE)) return 1;
     sys_bt(BT_INFO, &ad, 0);
     npaired = sys_bt(BT_PAIRED, paired, 16); if (npaired < 0) npaired = 0;
+    sys_bt(BT_AUDIO_STATUS, &au, 0);
     draw();
     for (;;) {
         struct dunc_event e;
-        int r = sys_event(&e, pairing ? 250 : -1);
+        int r = sys_event(&e, pairing ? 250 : 1000);
+        if (r == 0 && !pairing) {              /* follow the speaker (it may connect, or go, by itself) */
+            struct bt_audio was = au; sys_bt(BT_AUDIO_STATUS, &au, 0);
+            if (was.state != au.state || strcmp(was.msg, au.msg)) draw();
+            continue;
+        }
         if (r == 0) {                          /* pairing in progress: follow it */
             int was = ps.state;
             sys_bt(BT_PAIR_STATUS, &ps, 0);
@@ -157,7 +173,9 @@ int main(void) {
             int h = hit(e.x, e.y);
             if (h >= 100 && h < 164 && h - 100 < ndev) {
                 if (sys_bt(BT_PAIR, devs[h - 100].addr, 0) == 0) { pairing = true; memset(&ps, 0, sizeof ps); ps.state = BTP_CONNECTING; strncpy0(ps.name, devs[h - 100].name, sizeof ps.name); strncpy0(ps.msg, "Connecting...", sizeof ps.msg); }
-            } else if (h >= 200 && h < 216) { sys_bt(BT_FORGET, paired[h - 200].addr, 0); npaired = sys_bt(BT_PAIRED, paired, 16); if (npaired < 0) npaired = 0; }
+            } else if (h >= 400 && h < 416) { if (sys_bt(BT_AUDIO_CONNECT, paired[h - 400].addr, 0) == 0) sys_bt(BT_AUDIO_STATUS, &au, 0); }
+            else if (h == 500) { sys_bt(BT_AUDIO_STOP, 0, 0); sys_bt(BT_AUDIO_STATUS, &au, 0); }
+            else if (h >= 200 && h < 216) { sys_bt(BT_FORGET, paired[h - 200].addr, 0); npaired = sys_bt(BT_PAIRED, paired, 16); if (npaired < 0) npaired = 0; }
             else if (h == 300 && ps.state == BTP_CONFIRM) sys_bt(BT_PAIR_CONFIRM, 0, 1);
             else if (h == 301) sys_bt(BT_PAIR_CONFIRM, 0, 0);
             else if (h == 300) pairing = false;

@@ -406,6 +406,15 @@ void boot_progress(int percent);
 void bt_get_adapter(struct bt_adapter *a);
 int bt_get_results(struct bt_device *out, int max);
 int  bt_pair_start(const uint8_t *addr);
+/* Bluetooth audio: sound goes to a paired speaker while bta_active() */
+int  bt_audio_connect(const uint8_t *addr);
+void bt_audio_stop(void);
+void bt_audio_status(struct bt_audio *out);
+bool bta_active(void);
+long bta_write(const int16_t *pcm, long frames, int in_rate);   /* frames taken */
+long bta_queued_ms(void);
+void bta_flush(void);
+void bta_pause(bool on);
 void bt_pair_run(const uint8_t *addr);
 void bt_pair_confirm(int yes);
 void bt_pair_status(struct bt_pair *out);

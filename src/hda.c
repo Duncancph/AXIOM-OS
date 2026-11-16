@@ -312,8 +312,24 @@ int hda_outputs(char *out, int n) {
 }
 const char *hda_current(void) { return C == &none ? "" : C->hdmi ? "monitor" : "jack"; }
 
+static int vol_scale(void) { int v = settings_int("sound.volume"); if (v < 0) v = 0; if (v > 100) v = 100; return v * v; }   /* 0..10000 */
+/* sound for a Bluetooth speaker (bt.c), with the volume applied */
+static bool bt_streaming;
+static long bt_write(const int16_t *pcm, long frames, int rate) {
+    static int16_t tmp[4096];
+    int scale = vol_scale(); long done = 0;
+    while (done < frames) {
+        long n = frames - done < 2048 ? frames - done : 2048;
+        for (long i = 0; i < n * 2; i++) tmp[i] = (int16_t)((int32_t)pcm[done * 2 + i] * scale / 10000);
+        long t = bta_write(tmp, n, rate);
+        done += t;
+        if (t < n) break;
+    }
+    return done;
+}
 /* play 16-bit stereo 48 kHz samples (frames = sample pairs) */
 static int play(const int16_t *pcm, uint32_t frames) {
+    if (bta_active()) { if (bt_streaming) return -1; bt_write(pcm, frames, RATE); return 0; }   /* to the Bluetooth speaker */
     if (!ready || streaming) return -1;                      /* music is playing: no chimes */
     if (frames > (uint32_t)RATE * MAX_SECONDS) frames = RATE * MAX_SECONDS;
     stream_stop();
@@ -412,7 +428,24 @@ static int chime(int style) {
     return play(pcm, frames);
 }
 
+static int bt_rate = RATE;
 long sound_syscall(int op, uint64_t a, uint64_t b) {
+    if (bta_active() || (bt_streaming && op != SOUND_STREAM_START)) {          /* a Bluetooth speaker plays the sound */
+        switch (op) {
+        case SOUND_INFO: return 1;
+        case SOUND_STREAM_START: if (a != 44100 && a != 48000) return -1; bt_rate = (int)a; bta_flush(); bt_streaming = true; return 0;
+        case SOUND_STREAM_WRITE: {
+            if (!bt_streaming || (b && !user_ok(current->pml4, (const void *)a, b, false))) return -1;
+            if (!bta_active()) { bt_streaming = false; return -1; }        /* the speaker went away: the app starts again on this computer */
+            return bt_write((const int16_t *)a, (long)(b / 4), bt_rate) * 4;
+        }
+        case SOUND_STREAM_STATUS: return bt_streaming ? bta_queued_ms() : -1;
+        case SOUND_STREAM_STOP: bta_flush(); bt_streaming = false; return 0;
+        case SOUND_STREAM_PAUSE: if (!bt_streaming) return -1; bta_pause(a != 0); return 0;
+        default: break;                                                     /* chimes and short sounds: play() sends them */
+        }
+    }
+    if (op == SOUND_STREAM_START) bt_streaming = false;
     switch (op) {
     case SOUND_INFO: return ready ? 1 : 0;
     case SOUND_TEST: return chime(0);
