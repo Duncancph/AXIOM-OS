@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 139
-notes Sleep in the AXIOM menu (screen off; any key wakes it). Shut down and Restart now close apps first so they can save, and the PC's power button shuts down cleanly.
-file kernel b139/thane.elf.gz 18938472 e369b3fc521e1aedfa894322c8e67051fd2c35af64883eff5003386d39ae994d
-file initrd b139/initrd.tar.gz 1341440 c4c99c4b98315d3b1fff32f53dcd8a35f88008f78e35e5ca69843a4fed71a10f
-file bootx64 b139/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b139/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3046022100bb340d627fc5ec021f366cf8d982a3b4c2f75dd48b995473c99eccd032941919022100dcf3323ad20793683c86c2227894cd185488b76941021b886d336eab1a0670c4
+build 142
+notes Linux programs can open AXIOM windows (groundwork for the Chromium-based Vertex), and /proc/self/maps.
+file kernel b142/thane.elf.gz 18969328 dba59420bb053ddedc150d94ec96dc653c5fc8fc445bbc4db30e5776adc2d4f4
+file initrd b142/initrd.tar.gz 1341440 1ec54a9bc4e25a15c37ea6a481ac217f6a1ab77ff1af1c760318ad06df3c3a00
+file bootx64 b142/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b142/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304502205b36844c81ccb929475af5b1f9ff29669fbcc983c6f90926e420ce1a0111e39902210080a036bc799feabc379ff3957b2d243e47b1102ebcf109250101d33f48a095e7
