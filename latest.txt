@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 142
-notes Linux programs can open AXIOM windows (groundwork for the Chromium-based Vertex), and /proc/self/maps.
-file kernel b142/thane.elf.gz 18969328 dba59420bb053ddedc150d94ec96dc653c5fc8fc445bbc4db30e5776adc2d4f4
-file initrd b142/initrd.tar.gz 1341440 1ec54a9bc4e25a15c37ea6a481ac217f6a1ab77ff1af1c760318ad06df3c3a00
-file bootx64 b142/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b142/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 304502205b36844c81ccb929475af5b1f9ff29669fbcc983c6f90926e420ce1a0111e39902210080a036bc799feabc379ff3957b2d243e47b1102ebcf109250101d33f48a095e7
+build 143
+notes Wi-Fi test, stage 1: type 'wifi start' in CMD (Realtek RTL8821AE). It powers the card up and loads its firmware, and reports each step.
+file kernel b143/thane.elf.gz 18997272 c61dbd83e75a9693bdfaab59afc0b2cdd7f336333348e10e2c91d5f738742832
+file initrd b143/initrd.tar.gz 1372160 c4fca99f4a97cdfd07f5f07252bfc60f547e1b59ec238896bd18494a850c1c0d
+file bootx64 b143/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b143/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022075acda38360424a88a2033939dbf0b36ea9a36f923b66533ad639534c47774da0221008c27461df97d387bd902dea3f35b80d09ef3a0b32f066035c78d1486cfa80925
