@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 150
-notes Linux programs can play sound (for the Chromium-based Vertex). The Music app now moves on to the next song and stops after the last.
-file kernel b150/thane.elf.gz 19203152 b120c39ad5eb8a651bccf0b87b7aa87b18bd23d2e98666cd32e06770105cda08
-file initrd b150/initrd.tar.gz 1372160 df24bcebd3e51b5456a09f61697076857cf68e1a9ac3524c40209aca679126d6
-file bootx64 b150/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b150/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 304402200ae0fe618a70309a4f0d43f56641c14d833e58926cfb284aa3198b714dff90e6022069b0a0806c8c35456daa751c798b5232b25c521d658ef0ff03d9db8b454236e2
+build 151
+notes More apps in Settings > Updates: installs big apps like the coming Chromium-based Vertex (signed, resumable downloads). Longer file names.
+file kernel b151/thane.elf.gz 19244688 0af04fb4630a78c7cb3e0e6da090910654a5ec8a89c2b76cc132507c87c8e730
+file initrd b151/initrd.tar.gz 1372160 7745e2284871177fc5c46a8d855538800c2dd442e6caea984c7d964aa4bd410e
+file bootx64 b151/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b151/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022100942dac6ba2934f9517531770abe9043c45d204d51c3ab01fee23c998a6014d4b02204d7fd0b635d5d7dc1e7e2b141a4c761cabb4e9e20fa5a6f3e2a1c96709b58999
