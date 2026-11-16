@@ -312,7 +312,7 @@ static void cmd_help(void) {
     puts_c("Kernel commands\n", C_GOLD);
     static const char *k[][2] = {
         {"sysinfo", "CPU, memory, display"}, {"gfx", "graphics chip and monitor details"}, {"pci", "hardware on the PCI bus"}, {"usb", "USB devices"}, {"devices", "every device and its driver"},
-        {"bt", "Bluetooth adapter"}, {"bt scan [secs]", "find nearby Bluetooth devices"}, {"log", "kernel messages"},
+        {"bt", "Bluetooth adapter"}, {"bt scan [secs]", "find nearby Bluetooth devices"}, {"wifi", "Wi-Fi card (being added)"}, {"wifi start / scan", "test: start the Wi-Fi card / list networks"}, {"log", "kernel messages"},
         {"uptime", "time since boot"}, {"clan", "package manager (clan list / clan install)"},
         {"reboot / poweroff", "restart or shut down"} };
     for (unsigned i = 0; i < sizeof k / sizeof k[0]; i++) { puts_c("  ", C_TEXT); print("%-18s", k[i][0]); puts_c(k[i][1], C_DIM); putch('\n'); }
@@ -541,6 +541,7 @@ static void run(char *line) {
         char full[160];
         ksnprintf(full, sizeof full, "%s%s%s", line, *arg ? " " : "", arg);
         if (!strncmp(full, "bt scan", 7)) { puts_c("Scanning for Bluetooth devices...\n", C_DIM); draw(); }
+        if (!strncmp(full, "wifi s", 6)) { puts_c("Working on the Wi-Fi card (up to ~10 seconds)...\n", C_DIM); draw(); }
         static char out[16384];
         sys_kcmd(full, out, sizeof out);
         for (char *p = out; *p; p++) {

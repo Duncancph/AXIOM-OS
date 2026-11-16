@@ -4,17 +4,20 @@
  * This file follows Linux's rtlwifi/rtl8821ae driver (Copyright Realtek Corporation, GPL-2.0): the power-on
  * steps, register numbers and the order of the start-up are taken from it, so this file is under the GPL v2.
  *
- * Stage 1 (being tried on the real card): find the card, read its built-in settings (eFuse: the MAC address
- * among them), power it up, set up its packet memory, and load and start Realtek's firmware
- * (/system/firmware/rtlwifi/rtl8821aefw_29.bin). Nothing here runs at start-up: 'wifi start' does it, and
- * 'wifi' shows what happened, so a surprise on new hardware can't stop AXIOM from starting. */
+ * Stage 1: find the card, read its built-in settings (eFuse: the MAC address among them), power it up, set up
+ * its packet memory, and load and start Realtek's firmware (/system/firmware/rtlwifi/rtl8821aefw_29.bin).
+ * Stage 2: the receive ring, the MAC/baseband/radio tables (wifi_rtl8821ae_tables.h), 2.4 GHz at 20 MHz, and a
+ * passive scan: each channel in turn, listening for the beacons access points send ~10 times a second.
+ * Nothing here runs at start-up: 'wifi start' / 'wifi scan' do it, and 'wifi' shows what happened, so a surprise
+ * on new hardware can't stop AXIOM from starting. */
 #include "kernel.h"
 #include "vfs.h"
+#include "wifi_rtl8821ae_tables.h"
 
 static struct pci_dev *dev;
 static volatile uint8_t *mm;
 static char report[3000]; static int rlen;
-static bool started, fw_ok;
+static bool started, fw_ok, radio_ok;
 static uint8_t efuse[512], mac[6];
 
 static void add(const char *f, ...) {
@@ -57,6 +60,158 @@ static void w32(int o, uint32_t v) { *(volatile uint32_t *)(mm + o) = v; }
 #define MCUFWDL_RDY     (1u << 1)
 #define FWDL_CHKSUM_RPT (1u << 2)
 #define WINTINI_RDY     (1u << 6)
+
+/* ---- receiving: a ring of descriptors (32 bytes each) pointing at buffers the card fills ---- */
+#define REG_RCR 0x0608
+#define RCR_VALUE 0xF4007B0Eu      /* append FCS/MIC/ICV and PHY status; accept management, control, data, broadcast,
+                                    * multicast and our own frames (Linux's setting for this chip) */
+#define NRXD 64
+#define RXBUF 8192
+struct rxdesc { volatile uint32_t d[8]; };
+static struct rxdesc *rxd; static uint8_t *rxbuf[NRXD]; static int rx_next; static void *txring;
+static bool rings_setup(void) {
+    if (rxd) return true;
+    rxd = page_alloc(1); txring = page_alloc(1);
+    if (!rxd || !txring) { add("receive ring: out of memory"); return false; }
+    for (int i = 0; i < NRXD; i++) {
+        rxbuf[i] = page_alloc(RXBUF / 4096);
+        if (!rxbuf[i]) { add("receive buffers: out of memory"); return false; }
+        rxd[i].d[6] = (uint32_t)(uintptr_t)rxbuf[i];
+        rxd[i].d[0] = RXBUF | (i == NRXD - 1 ? 1u << 30 : 0) | 1u << 31;   /* length, end of ring, owned by the card */
+    }
+    return true;
+}
+/* the next received frame, or 0: *len, and the PHY status (signal) */
+static uint8_t *rx_take(int *len, int *dbm, int *rate) {
+    struct rxdesc *d = &rxd[rx_next];
+    if (d->d[0] & (1u << 31)) return 0;
+    uint32_t w0 = d->d[0];
+    int plen = w0 & 0x3FFF, drv = ((w0 >> 16) & 0xF) * 8, shift = (w0 >> 24) & 3;
+    bool crc_bad = w0 & (1u << 14), physt = w0 & (1u << 26);
+    *rate = d->d[3] & 0x7F;
+    uint8_t *b = rxbuf[rx_next];
+    *dbm = 0;
+    if (physt && drv >= 8) {
+        if (*rate < 4) {                                     /* CCK (1-11 Mb/s): from the AGC report */
+            int lna = (b[4] >> 5) & 7, vga = b[4] & 0x1F, p = -6;
+            *dbm = lna == 5 ? p - 32 - 2 * vga : lna == 4 ? p - 24 - 2 * vga : lna == 2 ? p - 11 - 2 * vga :
+                   lna == 1 ? p + 5 - 2 * vga : lna == 0 ? p + 21 - 2 * vga : -100;
+        } else *dbm = (b[0] & 0x7F) - 110;                   /* OFDM */
+    }
+    static uint8_t frame[RXBUF];
+    int n = plen; if (n > RXBUF - drv - shift) n = RXBUF - drv - shift;
+    if (n < 0) n = 0;
+    memcpy(frame, b + drv + shift, n);
+    d->d[0] = RXBUF | (rx_next == NRXD - 1 ? 1u << 30 : 0) | 1u << 31;  /* back to the card */
+    rx_next = (rx_next + 1) % NRXD;
+    *len = crc_bad ? -1 : n;
+    return frame;
+}
+
+/* ---- baseband (BB) and radio (RF) registers ---- */
+static int ctz32(uint32_t m) { int n = 0; while (m && !(m & 1)) { m >>= 1; n++; } return n; }
+static void bb_set(uint32_t reg, uint32_t mask, uint32_t v) {
+    if (mask != 0xFFFFFFFF) v = (r32(reg) & ~mask) | ((v << ctz32(mask)) & mask);
+    w32(reg, v);
+}
+static uint32_t bb_get(uint32_t reg, uint32_t mask) { return (r32(reg) & mask) >> ctz32(mask); }
+static uint32_t rf_read(int reg) {                           /* path A, through the LSSI read-back */
+    bool pi = bb_get(0xC00, 0x4);
+    bb_set(0x8B0, 0xFF, reg & 0xFF);
+    udelay(20);
+    return bb_get(pi ? 0xD04 : 0xD08, 0xFFFFF);
+}
+static void rf_write(int reg, uint32_t mask, uint32_t v) {
+    if (mask != 0xFFFFF) v = (rf_read(reg) & ~mask) | ((v << ctz32(mask)) & mask);
+    w32(0xC90, (((uint32_t)reg & 0xFF) << 20 | (v & 0xFFFFF)) & 0x0FFFFFFF);   /* RA_LSSIWRITE */
+}
+
+/* the tables' conditions: chip cut, interface (PCIe) and board options from the eFuse */
+static uint32_t drv1;
+static bool cond_ok(uint32_t c1, uint32_t c2) {
+    if ((c1 & 0x0000F000) && (c1 & 0x0000F000) != (drv1 & 0x0000F000)) return false;
+    if ((c1 & 0x0F000000) && (c1 & 0x0F000000) != (drv1 & 0x0F000000)) return false;
+    c1 &= 0x00FF0FFF;
+    uint32_t d = drv1 & 0x00FF0FFF;
+    if ((c1 & d) != c1) return false;
+    if (!(c1 & 0x0F)) return true;
+    /* the external amplifier types per path (Linux's type_glna/gpa/alna/apa) are 0 on the 8821AE */
+    uint32_t mask = (c1 & 1 ? 0xFFu : 0) | (c1 & 2 ? 0xFF00u : 0) | (c1 & 4 ? 0xFF0000u : 0) | (c1 & 8 ? 0xFF000000u : 0);
+    return (c2 & mask) == 0;
+}
+enum { T_MAC, T_BB, T_AGC, T_RF };
+static int run_table(const uint32_t *t, int n, int kind) {
+    bool matched = true, skipped = false; int writes = 0;
+    for (int i = 0; i + 1 < n; i += 2) {
+        uint32_t a = t[i], v = t[i + 1];
+        if (a & 0xC0000000) {
+            if (!(a & 0x80000000)) continue;
+            int c = (a >> 28) & 3;
+            if (c == 3) { matched = true; skipped = false; }             /* end */
+            else if (c == 2) matched = !skipped;                          /* else */
+            else if (skipped) matched = false;                            /* if / else if, after a match */
+            else if (cond_ok(a, v)) { matched = true; skipped = true; }
+            else { matched = false; skipped = false; }
+            continue;
+        }
+        if (!matched) continue;
+        writes++;
+        if (kind == T_MAC) w8(a, (uint8_t)v);
+        else if (kind == T_RF) { if (a == 0xFE || a == 0xFFE) sleep_ms(50); else { rf_write(a, 0xFFFFF, v); udelay(1); } }
+        else if (kind == T_BB && a >= 0xF9 && a <= 0xFE) {
+            if (a == 0xFE) sleep_ms(50); else if (a == 0xFD) sleep_ms(5); else if (a == 0xFC) sleep_ms(1);
+            else udelay(a == 0xFB ? 50 : a == 0xFA ? 5 : 1);
+        } else { w32(a, v); udelay(1); }
+    }
+    return writes;
+}
+
+static int channel;
+static void set_channel(int ch) {
+    bb_set(0x860, 0x1FFE0000, 0x96A);                        /* RFC_AREA, 2.4 GHz */
+    rf_write(0x18, (1u << 18) | (1u << 17) | (1u << 16) | (1u << 9) | (1u << 8), 0);
+    rf_write(0x18, 0xFF, (uint32_t)ch);
+    channel = ch;
+}
+static uint8_t efuse_board(void);
+static bool radio_init(void) {
+    uint32_t cfg = r32(REG_SYS_CFG);
+    uint8_t b = efuse_board();
+    drv1 = (cfg & 0xF000) << 12 | 0x04u << 16 | 1u << 8 | b;
+    add("radio: chip cut %u, board options %02x", (unsigned)((cfg >> 12) & 0xF), b);
+    int n = run_table(t_mac, sizeof t_mac / 4, T_MAC);
+    w8(REG_SYS_FUNC_EN, r8(REG_SYS_FUNC_EN) | 0x40);         /* FEN_PCIEA */
+    w8(REG_SYS_FUNC_EN, r8(REG_SYS_FUNC_EN) | 0x03);         /* baseband out of reset */
+    w8(0x001F, 7); w8(0x0074 + 2, 7);                        /* RF_CTRL, OPT_CTRL */
+    int nb = run_table(t_phy, sizeof t_phy / 4, T_BB);
+    int na = run_table(t_agc, sizeof t_agc / 4, T_AGC);
+    uint8_t xtal = efuse[0xB9] == 0xFF ? 0x20 : efuse[0xB9] & 0x3F;
+    bb_set(0x002C, 0xFFF000, xtal | xtal << 6);              /* crystal trim */
+    int nr = run_table(t_radioa, sizeof t_radioa / 4, T_RF);
+    add("radio: %d MAC, %d baseband, %d gain-table and %d radio settings written; RF 0x00 = %05x, 0x18 = %05x",
+        n, nb, na, nr, rf_read(0), rf_read(0x18));
+    /* 2.4 GHz */
+    bb_set(0x808, 0x30000000, 3);                            /* OFDM and CCK on */
+    bb_set(0xCB0, 0xF000, 7); bb_set(0xCB0, 0xF0, 7);        /* RFE pins: LNA on, PA for 2.4 GHz */
+    bb_set(0xC1C, 0xF00, 0);                                 /* the 2.4 GHz gain table */
+    bb_set(0x80C, 0xF0, 1); bb_set(0xA04, 0x0F000000, 1);
+    w8(0x0454, 0);                                           /* CCK_CHECK */
+    /* 20 MHz */
+    w16(0x0668, r16(0x0668) & 0xFE7F);
+    w8(0x0483, 0);
+    bb_set(0x8AC, 0x003003C3, 0x00300200);
+    bb_set(0x8C4, 1u << 30, 0);
+    bb_set(0x848, 0x03C00000, 8);
+    rf_write(0x18, (1u << 11) | (1u << 10), 3);
+    w8(0x0102, r8(0x0102) & ~3);                             /* MSR: no link */
+    w16(0x06A0, 0xFFFF);                                     /* RXFLTMAP0: every management frame */
+    w32(REG_RCR, RCR_VALUE);
+    w8(0x0286, r8(0x0286) & ~4);                             /* RXDMA_CONTROL: release receive DMA */
+    w8(0x0300 + 1, 0);                                       /* PCIE_CTRL_REG: release send/receive DMA */
+    set_channel(1);
+    add("radio: 2.4 GHz, 20 MHz, channel 1; RCR %08x, CR %04x", r32(REG_RCR), r16(REG_CR));
+    return true;
+}
 
 /* power steps: write (bits under the mask), poll until (reg & mask) == value, or wait */
 enum { PWR_WRITE = 1, PWR_POLL = 2, PWR_DELAY = 3, PWR_END = 4 };
@@ -193,9 +348,28 @@ static bool init_mac(void) {
     if (!llt_init()) return false;
     add("packet memory: set up");
     w32(REG_HISR, 0xFFFFFFFF); w32(REG_HISRE, 0xFFFFFFFF);
+    w8(0x0130 + 3, r8(0x0130 + 3) | 0x40);                   /* FWIMR: firmware beamformer interrupt */
+    w16(0x010C, (uint16_t)((r16(0x010C) & 0xF) | 0xF5B1));   /* TRXDMA_CTRL: queue to DMA mapping */
+    w8(0x0420 + 1, 0x1F);                                    /* FWHW_TXQ_CTRL */
+    w32(REG_RCR, RCR_VALUE);
+    w16(0x06A4, 0xFFFF);                                     /* RXFLTMAP2: every data frame type */
+    if (!rings_setup()) return false;
+    for (int q = 0; q < 8; q++) w32(0x0308 + q * 8, (uint32_t)(uintptr_t)txring);   /* the send queues: an empty ring each */
+    w32(0x0340, (uint32_t)(uintptr_t)rxd);                   /* RX_DESA */
+    w8(0x0300 + 3, 0x77);                                    /* PCIE_CTRL_REG */
+    w32(0x0304, 0);                                          /* INT_MIG */
+    w32(0x01C0, 0);                                          /* MCUTST_1 */
+    w8(0x0577, 3);                                           /* SECONDARY_CCA_CTRL */
     return true;
 }
 
+static uint8_t efuse_board(void) {               /* the tables' board bits: ext LNA/PA 2.4 and 5 GHz, Bluetooth */
+    uint8_t pa = efuse[0xBC], lna2 = efuse[0xBD], lna5 = efuse[0xBF];
+    if (pa == 0xFF && lna2 == 0xFF) pa = lna2 = 0;
+    if (pa == 0xFF && lna5 == 0xFF) lna5 = 0;
+    bool glna = lna2 & 0x80, gpa = pa & 0x20, alna = lna5 & 0x80, apa = pa & 0x02, bt = r32(0x0068) & (1u << 18);
+    return (uint8_t)(glna | gpa << 1 | alna << 2 | apa << 3 | bt << 4);
+}
 static void show_mac(const char *when) {
     if (efuse[0] == 0x29 && efuse[1] == 0x81) {                 /* the eFuse's ID: 0x8129 */
         memcpy(mac, efuse + 0xD0, 6);
@@ -227,9 +401,13 @@ void wifi_start(void) {
     if (efuse[0] != 0x29) { read_efuse(); show_mac("after power-on"); }
     w8(REG_SYS_CFG, r8(REG_SYS_CFG) & 0x7F);
     fw_ok = load_firmware();
-    add(fw_ok ? "Stage 1 done: the card is on and its firmware is running. (Scanning for networks comes next.)"
-              : "Stage 1 stopped: see above.");
+    /* show and save what we have before the radio step, in case it hangs on real hardware */
     kprintf("%s", report);
+    vfs_write("/home/Documents/wifi-report.txt", report, (uint64_t)rlen);
+    int shown = rlen;
+    if (fw_ok) { kprintf("Setting up the radio...\n"); radio_ok = radio_init(); }
+    add(!fw_ok ? "Stopped: the firmware didn't start (see above)." : radio_ok ? "The card is on, its firmware is running and the radio is set up. Type 'wifi scan'." : "Stopped while setting up the radio (see above).");
+    kprintf("%s", report + shown);
     vfs_write("/home/Documents/wifi-report.txt", report, (uint64_t)rlen);
     kprintf("(Saved to Documents/wifi-report.txt)\n");
     LOG_INFO("wifi: %s\n", fw_ok ? "firmware running" : "start failed (wifi shows why)");
@@ -247,4 +425,73 @@ bool wifi_probe(struct pci_dev *p) {
     dev_claim(p, "rtl8821ae", DEV_OFF, "Realtek RTL8821AE Wi-Fi", "Being added: type 'wifi start' in CMD to test");
     LOG_INFO("Wi-Fi: Realtek RTL8821AE found (support is being added: 'wifi start')\n");
     return true;
+}
+
+/* ---- scanning ---- */
+struct bss { uint8_t bssid[6]; char ssid[33]; int ch, dbm, seen; bool rsn, wpa, privacy, sae; };
+static struct bss found[48]; static int nfound;
+static void note_beacon(const uint8_t *f, int len, int dbm) {
+    if (len < 36) return;
+    int fc = f[0];
+    if (fc != 0x80 && fc != 0x50) return;                   /* beacon, probe response */
+    const uint8_t *bssid = f + 16, *ie = f + 36; int n = len - 36 - 4;   /* minus the FCS */
+    struct bss b; memset(&b, 0, sizeof b); memcpy(b.bssid, bssid, 6); b.ch = channel; b.dbm = dbm;
+    b.privacy = f[34] & 0x10;
+    for (int i = 0; i + 2 <= n;) {
+        int t = ie[i], l = ie[i + 1];
+        if (i + 2 + l > n) break;
+        const uint8_t *v = ie + i + 2;
+        if (t == 0 && l <= 32) { memcpy(b.ssid, v, l); b.ssid[l] = 0; }
+        else if (t == 3 && l >= 1) b.ch = v[0];
+        else if (t == 48 && l >= 2) {
+            b.rsn = true;
+            /* AKM suites: 00-0F-AC-8 is SAE (WPA3) */
+            if (l >= 8) { int pc = v[6] | v[7] << 8, off = 8 + pc * 4;
+                if (off + 2 <= l) { int ac = v[off] | v[off + 1] << 8; for (int k = 0; k < ac && off + 2 + k * 4 + 4 <= l; k++) if (v[off + 2 + k * 4 + 3] == 8) b.sae = true; } }
+        }
+        else if (t == 221 && l >= 4 && v[0] == 0x00 && v[1] == 0x50 && v[2] == 0xF2 && v[3] == 1) b.wpa = true;
+        i += 2 + l;
+    }
+    for (int i = 0; i < nfound; i++) if (!memcmp(found[i].bssid, b.bssid, 6)) {
+        found[i].seen++; if (dbm > found[i].dbm) found[i].dbm = dbm;
+        if (!found[i].ssid[0] && b.ssid[0]) strncpy0(found[i].ssid, b.ssid, 33);
+        return;
+    }
+    if (nfound < 48) { b.seen = 1; found[nfound++] = b; }
+}
+void wifi_scan(void) {
+    if (!started) wifi_start();
+    if (!radio_ok) { kprintf("The radio isn't ready (see 'wifi').\n"); return; }
+    nfound = 0;
+    int frames = 0, bad = 0, other = 0;
+    kprintf("Listening on channels 1-13 (about 3 seconds)...\n");
+    for (int ch = 1; ch <= 13; ch++) {
+        set_channel(ch);
+        uint64_t until = uptime_ms() + 220;
+        while (uptime_ms() < until) {
+            int len, dbm, rate; uint8_t *f;
+            while ((f = rx_take(&len, &dbm, &rate))) {
+                frames++;
+                if (len < 0) { bad++; continue; }
+                if (len >= 1 && (f[0] == 0x80 || f[0] == 0x50)) note_beacon(f, len, dbm); else other++;
+            }
+            sleep_ms(2);
+        }
+    }
+    for (int i = 0; i < nfound; i++) for (int j = i + 1; j < nfound; j++)       /* strongest first */
+        if (found[j].dbm > found[i].dbm) { struct bss t = found[i]; found[i] = found[j]; found[j] = t; }
+    char line[160];
+    rlen = 0; report[0] = 0;
+    add("Scan: %d frames received (%d damaged, %d not beacons), %d networks:", frames, bad, other, nfound);
+    for (int i = 0; i < nfound; i++) {
+        struct bss *b = &found[i];
+        const char *sec = b->sae && b->rsn ? "WPA3" : b->rsn ? "WPA2" : b->wpa ? "WPA" : b->privacy ? "WEP" : "open";
+        ksnprintf(line, sizeof line, "  %-32s ch %2d  %4d dBm  %-4s  %02x:%02x:%02x:%02x:%02x:%02x", b->ssid[0] ? b->ssid : "(hidden)", b->ch, b->dbm, sec,
+                  b->bssid[0], b->bssid[1], b->bssid[2], b->bssid[3], b->bssid[4], b->bssid[5]);
+        add("%s", line);
+    }
+    if (!frames) add("Nothing at all was received: the radio isn't hearing yet. (RCR %08x, RX DMA %02x, CR %04x, RF 0x18 %05x)", r32(REG_RCR), r8(0x0286), r16(REG_CR), rf_read(0x18));
+    kprintf("%s", report);
+    vfs_write("/home/Documents/wifi-scan.txt", report, (uint64_t)rlen);
+    kprintf("(Saved to Documents/wifi-scan.txt)\n");
 }

@@ -194,6 +194,7 @@ bool acpi_power_button(void);
 bool wifi_probe(struct pci_dev *p);
 void wifi_start(void);
 void wifi_info(void);
+void wifi_scan(void);
 void intelgfx_display(bool on);
 
 /* ---- usb ---- */
