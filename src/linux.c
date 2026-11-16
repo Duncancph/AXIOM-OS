@@ -17,8 +17,13 @@ void linux_cpu_init(void) {
 }
 
 /* ---------------- a Linux program's state ---------------- */
-enum { FD_NONE, FD_TTY_IN, FD_TTY_OUT, FD_FILE, FD_DIR };
-struct lfd { int kind; int flags; uint64_t off; char path[200]; };
+enum { FD_NONE, FD_TTY_IN, FD_TTY_OUT, FD_FILE, FD_DIR, FD_CHAN, FD_EVENT, FD_EPOLL, FD_SHM };
+struct chan;
+/* FD_CHAN: a pipe end or a socket-pair end. It reads from rx and writes to tx (either may be 0: a pipe's
+ * other end, or after shutdown) and holds a reader count on rx and a writer count on tx. */
+struct lfd { int kind; int flags; uint64_t off; char path[200]; struct chan *rx, *tx; bool sock; uint8_t stype;
+             void *obj; };   /* FD_EVENT: a struct evfd, FD_EPOLL: a struct epoll, FD_SHM: a struct shm (shared by duplicates) */
+struct shmmap;
 #define NFD 128
 struct lxproc {
     struct lfd fd[NFD];
@@ -27,12 +32,14 @@ struct lxproc {
     struct task *out;              /* the terminal task that started it (its output goes there), or 0 */
     int out_pid;
     char line[256]; int linelen;   /* output waiting for its end of line (for the log) */
+    struct shmmap *maps; int nmaps, capmaps;   /* where shared memory (memfd) is mapped */
 };
 
 uint64_t linux_now_ns(void);
 #define E(x) ((uint64_t)-(long)(x))
 enum { EPERM_ = 1, ENOENT_ = 2, EBADF_ = 9, EAGAIN_ = 11, ENOMEM_ = 12, EFAULT_ = 14, EEXIST_ = 17, ENOTDIR_ = 20, EISDIR_ = 21,
-       EINVAL_ = 22, EMFILE_ = 24, ENOTTY_ = 25, ESPIPE_ = 29, ERANGE_ = 34, ENOSYS_ = 38, ETIMEDOUT_ = 110 };
+       EACCES_ = 13, EBUSY_ = 16, EINVAL_ = 22, EMFILE_ = 24, ENOTTY_ = 25, ESPIPE_ = 29, EPIPE_ = 32, ERANGE_ = 34, ENOSYS_ = 38, ENOTSOCK_ = 88,
+       EMSGSIZE_ = 90, ENOPROTOOPT_ = 92, EOPNOTSUPP_ = 95, EAFNOSUPPORT_ = 97, ETIMEDOUT_ = 110 };
 
 static bool uok(uint64_t p, uint64_t n, bool w) { return n == 0 || user_ok(current->pml4, (const void *)p, n, w); }
 static bool ustr(char *dst, uint64_t src, size_t max) {
@@ -204,10 +211,14 @@ int linux_spawn(const char *path, int argc, char **argv, struct task *out) {
     kprintf("[linux] started %s (pid %d)%s%s\n", path, t->pid, interp[0] ? " with " : "", interp);
     return t->pid;
 }
+static void fd_close(struct lfd *f);
+static void shm_forget_all(struct lxproc *lx);
 void linux_task_exit(struct task *t) {
     struct lxproc *lx = t->lx;
     if (!lx) return;
     if (lx->linelen) { lx->line[lx->linelen] = 0; kprintf("[%s] %s\n", t->name, lx->line); }
+    for (int i = 0; i < NFD; i++) if (lx->fd[i].kind) fd_close(&lx->fd[i]);   /* (the other ends see end of file) */
+    shm_forget_all(lx);
     for (int i = 0; i < MAX_TASKS; i++) if (tasks[i].lx == lx) tasks[i].lx = 0;
     kfree(lx);
 }
@@ -223,7 +234,12 @@ static void fill_stat(struct lstat *st, bool dir, uint64_t size, bool tty, const
     uint64_t now = (uint64_t)(linux_now_ns() / 1000000000ull);
     st->at[0] = st->mt[0] = st->ct[0] = now;
 }
-static int fd_new(struct lxproc *lx, int from) { for (int i = from; i < NFD; i++) if (!lx->fd[i].kind) return i; return -1; }
+static int fd_new(struct lxproc *lx, int from) {
+    for (int i = from; i < NFD; i++) if (!lx->fd[i].kind) return i;
+    static int said;
+    if (said++ < 3) kprintf("[linux] %s: all %d files in use\n", current->name, NFD);
+    return -1;
+}
 static uint64_t ts_ms(uint64_t uts, bool *forever) {             /* a struct timespec (relative) in ms */
     if (!uts) { *forever = true; return 0; }
     *forever = false;
@@ -233,10 +249,356 @@ static uint64_t ts_ms(uint64_t uts, bool *forever) {             /* a struct tim
     return (uint64_t)s * 1000 + ((uint64_t)ns + 999999) / 1000000;
 }
 
+/* ---------------- pipes and socket pairs ----------------
+ * A chan is one direction: a ring of bytes, and for packet sockets (SOCK_SEQPACKET / SOCK_DGRAM) the
+ * lengths of the messages in it, so each read gets one whole message. A pipe is one chan; a socket pair
+ * is two, crossed. Everything here runs under the big kernel lock. Waiting uses the futex queue with a
+ * kernel address: any change to any chan wakes every waiter, which then looks again (poll, read, write). */
+#define CHAN_CAP  (64 * 1024)
+#define CHAN_MSGS 256
+struct chan {
+    uint8_t *data; uint32_t head, len;            /* ring of CHAN_CAP bytes */
+    uint32_t msg[CHAN_MSGS]; int mhead, mcount;   /* packet sockets: message lengths, oldest first */
+    bool packet;
+    int readers, writers;                         /* ends that can still read / write it */
+};
+static int io_tag;
+#define IO_MM   ((struct mm *)&io_tag)
+#define IO_ADDR ((uint64_t)&io_tag)
+static void chan_wake(void) { futex_wake(IO_MM, IO_ADDR, 1 << 30); }
+/* sleep until some chan changes or ms pass (ms < 0: no time limit); false if the time ran out */
+static bool chan_wait(int64_t ms) {
+    struct task *t = current;
+    if (ms == 0) return false;
+    t->futex_mm = IO_MM; t->futex_addr = IO_ADDR; t->futex_woken = false;
+    t->wake_at = ms > 0 ? uptime_ms() + (uint64_t)ms : 0;
+    t->state = PS_BLOCKED;
+    schedule();
+    bool woken = t->futex_woken;
+    t->futex_mm = 0; t->futex_addr = 0; t->futex_woken = false;
+    if (t->killed) task_exit(-1);
+    return woken;
+}
+static struct chan *chan_new(bool packet) {
+    struct chan *c = kmalloc(sizeof *c);
+    if (!c) return 0;
+    memset(c, 0, sizeof *c);
+    if (!(c->data = kmalloc(CHAN_CAP))) { kfree(c); return 0; }
+    c->packet = packet;
+    return c;
+}
+static void chan_drop(struct chan *c, bool reader) {
+    if (!c) return;
+    if (reader) c->readers--; else c->writers--;
+    if (c->readers <= 0 && c->writers <= 0) { kfree(c->data); kfree(c); }
+    chan_wake();
+}
+struct evfd { int refs; uint64_t count; bool sem; };
+struct shm;
+static void shm_put(struct shm *o);
+struct epitem { int fd; uint32_t events; uint64_t data; const void *id; bool off; };
+struct epoll { int refs, n, next; struct epitem it[NFD]; };
+static void fd_close(struct lfd *f) {
+    if (f->kind == FD_CHAN) { chan_drop(f->rx, true); chan_drop(f->tx, false); }
+    if ((f->kind == FD_EVENT || f->kind == FD_EPOLL) && f->obj && --*(int *)f->obj <= 0) { kfree(f->obj); chan_wake(); }   /* (refs come first in both) */
+    if (f->kind == FD_SHM) shm_put(f->obj);
+    memset(f, 0, sizeof *f);
+}
+static void fd_copy(struct lfd *dst, const struct lfd *src) {      /* dup: one more reference to the same ends */
+    if (dst == src) return;
+    fd_close(dst);
+    *dst = *src;
+    if (dst->kind == FD_CHAN) { if (dst->rx) dst->rx->readers++; if (dst->tx) dst->tx->writers++; }
+    if ((dst->kind == FD_EVENT || dst->kind == FD_EPOLL || dst->kind == FD_SHM) && dst->obj) (*(int *)dst->obj)++;
+}
+/* move bytes in or out of the ring (to / from a kernel buffer) */
+static void ring_put(struct chan *c, const uint8_t *s, uint32_t n) {
+    for (uint32_t done = 0; done < n;) {
+        uint32_t at = (c->head + c->len) % CHAN_CAP, k = CHAN_CAP - at; if (k > n - done) k = n - done;
+        memcpy(c->data + at, s + done, k); c->len += k; done += k;
+    }
+}
+static void ring_get(struct chan *c, uint8_t *d, uint32_t n, bool peek) {
+    uint32_t h = c->head;
+    for (uint32_t done = 0; done < n;) {
+        uint32_t k = CHAN_CAP - h; if (k > n - done) k = n - done;
+        if (d) memcpy(d + done, c->data + h, k);
+        h = (h + k) % CHAN_CAP; done += k;
+    }
+    if (!peek) { c->head = h; c->len -= n; }
+}
+/* read up to n bytes into buf (the running program's memory if user, else a kernel buffer): blocks unless
+ * nonblock; 0 = end of file */
+static int64_t chan_read(struct lfd *f, uint8_t *buf, uint64_t n, bool user, bool nonblock, bool peek, bool *trunc) {
+    struct chan *c = f->rx;
+    if (trunc) *trunc = false;
+    if (!c) return 0;                                           /* shut down for reading */
+    while (!c->len) {
+        if (!c->writers) return 0;                              /* nobody can write any more: end of file */
+        if (nonblock) return (int64_t)E(EAGAIN_);
+        chan_wait(-1);
+    }
+    if (user && !uok((uint64_t)buf, n, true)) return (int64_t)E(EFAULT_);   /* (another thread may have unmapped it meanwhile) */
+    uint64_t k;
+    if (c->packet) {
+        uint32_t m = c->msg[c->mhead];
+        k = m < n ? m : n;
+        if (trunc) *trunc = k < m;
+        ring_get(c, buf, (uint32_t)k, peek);
+        if (!peek) {
+            if (k < m) ring_get(c, 0, m - (uint32_t)k, false);  /* the rest of the message is lost, as on Linux */
+            c->mhead = (c->mhead + 1) % CHAN_MSGS; c->mcount--;
+        }
+    } else {
+        k = c->len < n ? c->len : n;
+        ring_get(c, buf, (uint32_t)k, peek);
+    }
+    if (!peek) chan_wake();
+    return (int64_t)k;
+}
+/* write n bytes from buf (as for chan_read): a stream writes all of it (blocking as needed) unless
+ * nonblock; a packet goes in whole or not at all */
+static int64_t chan_write(struct lfd *f, const uint8_t *buf, uint64_t n, bool user, bool nonblock) {
+    struct chan *c = f->tx;
+    if (!c || !c->readers) return (int64_t)E(EPIPE_);
+    if (c->packet) {
+        if (n > CHAN_CAP) return (int64_t)E(EMSGSIZE_);
+        while (CHAN_CAP - c->len < n || c->mcount == CHAN_MSGS) {
+            if (nonblock) return (int64_t)E(EAGAIN_);
+            chan_wait(-1);
+            if (!c->readers) return (int64_t)E(EPIPE_);
+        }
+        if (user && !uok((uint64_t)buf, n, false)) return (int64_t)E(EFAULT_);
+        ring_put(c, buf, (uint32_t)n);
+        c->msg[(c->mhead + c->mcount) % CHAN_MSGS] = (uint32_t)n; c->mcount++;
+        chan_wake();
+        return (int64_t)n;
+    }
+    uint64_t done = 0;
+    while (done < n) {
+        uint32_t space = CHAN_CAP - c->len;
+        if (!space) {
+            if (nonblock) { if (done) break; return (int64_t)E(EAGAIN_); }   /* (blocking: wait for room for the rest) */
+            chan_wait(-1);
+            if (!c->readers) return done ? (int64_t)done : (int64_t)E(EPIPE_);
+            continue;
+        }
+        uint32_t k = n - done < space ? (uint32_t)(n - done) : space;
+        if (user && !uok((uint64_t)buf + done, k, false)) return done ? (int64_t)done : (int64_t)E(EFAULT_);
+        ring_put(c, buf + done, k); done += k;
+        chan_wake();
+    }
+    return (int64_t)done;
+}
+enum { POLLIN_ = 1, POLLPRI_ = 2, POLLOUT_ = 4, POLLERR_ = 8, POLLHUP_ = 16, POLLNVAL_ = 32, POLLRDHUP_ = 0x2000 };
+static int epoll_scan(struct lxproc *lx, struct epoll *ep, uint8_t *out, int max);
+static int fd_ready(struct lxproc *lx, int fd) {
+    if (fd < 0 || fd >= NFD || !lx->fd[fd].kind) return POLLNVAL_;
+    struct lfd *f = &lx->fd[fd];
+    switch (f->kind) {
+    case FD_TTY_IN: return POLLIN_;                              /* (reads give end of file) */
+    case FD_TTY_OUT: return POLLOUT_;
+    case FD_CHAN: {
+        int r = 0;
+        if (f->rx) { if (f->rx->len || !f->rx->writers) r |= POLLIN_; if (!f->rx->writers) r |= f->sock ? POLLRDHUP_ | (f->tx ? 0 : POLLHUP_) : POLLHUP_; }
+        else if (f->sock) r |= POLLIN_ | POLLRDHUP_;              /* shut down for reading: reads give end of file */
+        if (f->tx) { if (!f->tx->readers) r |= f->sock ? POLLOUT_ | POLLHUP_ : POLLERR_; else if (f->tx->len < CHAN_CAP && f->tx->mcount < CHAN_MSGS) r |= POLLOUT_; }
+        return r;
+    }
+    case FD_EVENT: { struct evfd *ev = f->obj; return (ev->count ? POLLIN_ : 0) | (ev->count < ~0ULL - 1 ? POLLOUT_ : 0); }
+    case FD_EPOLL: return epoll_scan(lx, f->obj, 0, 1) ? POLLIN_ : 0;
+    default: return POLLIN_ | POLLOUT_;                          /* files are always ready */
+    }
+}
+/* poll / ppoll: fds is a user array of {int fd; short events, revents} */
+static uint64_t do_poll(struct lxproc *lx, uint64_t ufds, uint64_t nfds, int64_t ms) {
+    if (nfds > NFD * 8) return E(EINVAL_);
+    if (!uok(ufds, nfds * 8, true)) return E(EFAULT_);
+    uint64_t end = ms > 0 ? uptime_ms() + (uint64_t)ms : 0;
+    for (;;) {
+        int count = 0;
+        for (uint64_t i = 0; i < nfds; i++) {
+            uint8_t *p = (uint8_t *)ufds + i * 8;
+            int fd = *(int32_t *)p; uint16_t ev = *(uint16_t *)(p + 4), re = 0;
+            if (fd >= 0) re = (uint16_t)(fd_ready(lx, fd) & (ev | POLLERR_ | POLLHUP_ | POLLNVAL_));
+            *(uint16_t *)(p + 6) = re;
+            if (re) count++;
+        }
+        if (count || ms == 0) return count;
+        int64_t left = -1;
+        if (ms > 0) { uint64_t now = uptime_ms(); if (now >= end) return 0; left = (int64_t)(end - now); }
+        chan_wait(left);
+    }
+}
+/* ---------------- eventfd and epoll ----------------
+ * An eventfd is a counter: writes add, a read takes it all (or one, EFD_SEMAPHORE) and waits while it's 0.
+ * An epoll is a list of files to watch. Readiness is worked out when asked (as poll does), so it is level-
+ * triggered; EPOLLET is treated the same way, which only costs extra wake-ups for programs that read until
+ * EAGAIN (as they must with EPOLLET). EPOLLONESHOT turns an entry off once it's reported, until EPOLL_CTL_MOD. */
+#define EPOLLONESHOT_ (1u << 30)
+#define EPOLLET_      (1u << 31)
+static const void *fd_id(const struct lfd *f) {               /* which open file an fd number refers to */
+    if (f->kind == FD_CHAN) return f->rx ? (const void *)f->rx : (const void *)f->tx;
+    if (f->kind == FD_EVENT || f->kind == FD_EPOLL || f->kind == FD_SHM) return f->obj;
+    return f;
+}
+/* ready entries into out (12-byte struct epoll_event, packed), up to max; out 0: just count (no one-shot change) */
+static int epoll_scan(struct lxproc *lx, struct epoll *ep, uint8_t *out, int max) {
+    static int depth;
+    if (depth > 2) return 0;                                    /* (epolls watching epolls) */
+    depth++;
+    for (int i = 0; i < ep->n;) {                                /* drop files closed since (Linux drops them too) */
+        struct epitem *it = &ep->it[i];
+        struct lfd *f = it->fd >= 0 && it->fd < NFD ? &lx->fd[it->fd] : 0;
+        if (!f || !f->kind || fd_id(f) != it->id) ep->it[i] = ep->it[--ep->n]; else i++;
+    }
+    int k = 0, start = ep->n ? ep->next % ep->n : 0, last = -1;
+    for (int j = 0; j < ep->n && k < max; j++) {
+        int i = (start + j) % ep->n;                             /* round robin, so busy files don't starve the rest */
+        struct epitem *it = &ep->it[i];
+        if (it->off) continue;
+        uint32_t r = (uint32_t)fd_ready(lx, it->fd) & (it->events | POLLERR_ | POLLHUP_) & ~(EPOLLONESHOT_ | EPOLLET_);
+        if (!r) continue;
+        if (out) {
+            *(uint32_t *)(out + k * 12) = r; *(uint64_t *)(out + k * 12 + 4) = it->data;
+            if (it->events & EPOLLONESHOT_) it->off = true;
+            last = i;
+        }
+        k++;
+    }
+    if (last >= 0) ep->next = last + 1;                          /* next time, start after the last one reported */
+    depth--;
+    return k;
+}
+static uint64_t do_epoll_wait(struct lxproc *lx, uint64_t epfd, uint64_t uev, int max, int64_t ms) {
+    if (epfd >= NFD || lx->fd[epfd].kind != FD_EPOLL) return epfd < NFD && lx->fd[epfd].kind ? E(EINVAL_) : E(EBADF_);
+    if (max <= 0 || max > 4096) return E(EINVAL_);
+    if (!uok(uev, (uint64_t)max * 12, true)) return E(EFAULT_);
+    uint64_t end = ms > 0 ? uptime_ms() + (uint64_t)ms : 0;
+    for (;;) {
+        struct epoll *ep = lx->fd[epfd].obj;
+        if (lx->fd[epfd].kind != FD_EPOLL) return E(EBADF_);   /* (closed by another thread while waiting) */
+        int k = epoll_scan(lx, ep, (uint8_t *)uev, max);
+        if (k || ms == 0) return (uint64_t)k;
+        int64_t left = -1;
+        if (ms > 0) { uint64_t now = uptime_ms(); if (now >= end) return 0; left = (int64_t)(end - now); }
+        chan_wait(left);
+    }
+}
+/* ---------------- shared memory: memfd_create ----------------
+ * A memfd is a list of pages, given as they're first needed. Mapping it MAP_SHARED puts those same pages in
+ * the program's page tables (as SHARED: page tables never free them). It lives while an fd or a mapping
+ * holds it; each mapping is remembered (struct shmmap) so munmap, MAP_FIXED over it and exit let go. */
+struct shm { int refs; uint64_t size, npg; uint64_t *pg; int seals; };
+enum { SEAL_SEAL_ = 1, SEAL_SHRINK_ = 2, SEAL_GROW_ = 4, SEAL_WRITE_ = 8, SEAL_FUTURE_WRITE_ = 16, SEAL_EXEC_ = 32 };
+struct shmmap { uint64_t s, e; struct shm *obj; uint64_t pgoff; };
+static void shm_put(struct shm *o) {
+    if (!o || --o->refs > 0) return;
+    for (uint64_t i = 0; i < o->npg; i++) if (o->pg[i]) page_free((void *)o->pg[i]);
+    kfree(o->pg); kfree(o);
+}
+static bool shm_resize(struct shm *o, uint64_t size) {        /* (pages beyond a smaller size stay until the end:
+                                                                   they may still be mapped) */
+    uint64_t np = (size + 4095) / 4096;
+    if (np > o->npg) {
+        uint64_t *n = kmalloc(np * 8);
+        if (!n) return false;
+        memset(n, 0, np * 8);
+        if (o->pg) memcpy(n, o->pg, o->npg * 8);
+        kfree(o->pg); o->pg = n; o->npg = np;
+    }
+    if (size < o->size)                                         /* what's cut off reads as zeros if it grows again */
+        for (uint64_t a = size; a < o->size && a / 4096 < o->npg;) {
+            uint64_t i = a / 4096, in = a % 4096, k = 4096 - in;
+            if (o->pg[i]) memset((uint8_t *)o->pg[i] + in, 0, k);
+            a += k;
+        }
+    o->size = size;
+    return true;
+}
+static uint8_t *shm_page(struct shm *o, uint64_t i) {           /* the page, made if need be */
+    if (i >= o->npg) return 0;
+    if (!o->pg[i]) o->pg[i] = (uint64_t)page_alloc(1);
+    return (uint8_t *)o->pg[i];
+}
+/* copy between the memfd at off and buf (user memory, already checked); returns bytes copied */
+static int64_t shm_rw(struct shm *o, uint64_t off, uint8_t *buf, uint64_t n, bool write) {
+    if (write) { if (off + n > o->size && !shm_resize(o, off + n)) return (int64_t)E(ENOMEM_); }
+    else { if (off >= o->size) return 0; if (n > o->size - off) n = o->size - off; }
+    for (uint64_t done = 0; done < n;) {
+        uint64_t a = off + done, in = a % 4096, k = 4096 - in; if (k > n - done) k = n - done;
+        uint8_t *pg = shm_page(o, a / 4096);
+        if (!pg) return done ? (int64_t)done : (int64_t)E(ENOMEM_);
+        if (write) memcpy(pg + in, buf + done, k); else memcpy(buf + done, pg + in, k);
+        done += k;
+    }
+    return (int64_t)n;
+}
+/* [s, e) of the program's memory is going away (munmap, MAP_FIXED over it): forget the shared mappings there */
+static void shm_unmapped(struct lxproc *lx, uint64_t s, uint64_t e) {
+    for (int i = 0; i < lx->nmaps;) {
+        struct shmmap *m = &lx->maps[i];
+        if (m->e <= s || m->s >= e) { i++; continue; }
+        if (m->s >= s && m->e <= e) {                            /* all of it */
+            shm_put(m->obj); lx->maps[i] = lx->maps[--lx->nmaps]; continue;
+        }
+        if (m->s < s && m->e > e) {                              /* a hole in the middle: two mappings now */
+            if (lx->nmaps == lx->capmaps) {                      /* (no room to split: keep it whole, which only holds the memory longer) */
+                i++; continue;
+            }
+            struct shmmap r = { e, m->e, m->obj, m->pgoff + (e - m->s) / 4096 };
+            m->e = s; m->obj->refs++; lx->maps[lx->nmaps++] = r;
+            i++; continue;
+        }
+        if (m->s < s) m->e = s;                                  /* its end */
+        else { m->pgoff += (e - m->s) / 4096; m->s = e; }        /* its start */
+        i++;
+    }
+}
+static void shm_forget_all(struct lxproc *lx) {              /* at exit (its page tables go too; they never free these) */
+    for (int i = 0; i < lx->nmaps; i++) shm_put(lx->maps[i].obj);
+    kfree(lx->maps); lx->maps = 0; lx->nmaps = lx->capmaps = 0;
+}
+/* map pages [pgoff, ...) of o at [va, va + len) of the program (the area is already made) */
+static void shm_map_pages(struct mm *mm, struct shm *o, uint64_t va, uint64_t len, uint64_t pgoff, int prot) {
+    for (uint64_t i = 0; i < len / 4096 && pgoff + i < o->npg && (pgoff + i) * 4096 < o->size; i++) {
+        uint8_t *pg = shm_page(o, pgoff + i);
+        if (pg) mm_map_shared(mm, va + i * 4096, (uint64_t)pg, prot);
+    }
+}
+
+static int chan_fds(struct lxproc *lx, struct chan *r0, struct chan *w0, struct chan *r1, struct chan *w1, bool sock, int flags, int out[2]) {
+    int a = fd_new(lx, 0); if (a < 0) return -1;
+    lx->fd[a].kind = FD_CHAN;                                    /* (reserve it while finding the second) */
+    int b = fd_new(lx, 0); if (b < 0) { lx->fd[a].kind = FD_NONE; return -1; }
+    struct lfd *fa = &lx->fd[a], *fb = &lx->fd[b];
+    memset(fa, 0, sizeof *fa); memset(fb, 0, sizeof *fb);
+    fa->kind = fb->kind = FD_CHAN; fa->sock = fb->sock = sock;
+    fa->flags = fb->flags = 2 | (flags & 04000);                 /* O_RDWR, and O_NONBLOCK if asked for */
+    fa->rx = r0; fa->tx = w0; fb->rx = r1; fb->tx = w1;
+    if (r0) r0->readers++;
+    if (w0) w0->writers++;
+    if (r1) r1->readers++;
+    if (w1) w1->writers++;
+    out[0] = a; out[1] = b;
+    return 0;
+}
 static uint64_t do_open(struct lxproc *lx, int dirfd, uint64_t upath, int flags) {
     char p[200], full[200];
     if (!ustr(p, upath, sizeof p)) return E(EFAULT_);
     (void)dirfd;
+    if (!strncmp(p, "/proc/self/fd/", 14) || !strncmp(p, "/dev/fd/", 8)) {   /* an open file again, with its own access mode */
+        const char *num = p + (p[1] == 'p' ? 14 : 8);
+        if (*num < '0' || *num > '9') return E(ENOENT_);
+        uint64_t from = katoi(num);
+        if (from >= NFD || !lx->fd[from].kind) return E(ENOENT_);
+        int fd = fd_new(lx, 0);
+        if (fd < 0) return E(EMFILE_);
+        fd_copy(&lx->fd[fd], &lx->fd[from]);
+        lx->fd[fd].flags = (flags & (3 | 04000 | 02000)) | (lx->fd[fd].kind == FD_CHAN ? lx->fd[fd].flags & ~(3 | 04000 | 02000) : 0);
+        if (lx->fd[fd].kind == FD_FILE || lx->fd[fd].kind == FD_DIR || lx->fd[fd].kind == FD_SHM) lx->fd[fd].off = 0;
+        return fd;
+    }
     path_join(lx->cwd, p, full, sizeof full);
     struct dunc_stat st;
     bool exists = vfs_stat(full, &st) == 0;
@@ -258,7 +620,23 @@ static uint64_t do_open(struct lxproc *lx, int dirfd, uint64_t upath, int flags)
     return fd;
 }
 
+static uint64_t linux_syscall_(struct frame *f);
+/* Linux reads int arguments (file numbers, flags) from the low 32 bits of their registers; programs that make
+ * system calls themselves may leave anything in the upper half, so those are cut off here */
 uint64_t linux_syscall(struct frame *f) {
+    switch (f->rax) {
+    case 0: case 1: case 3: case 5: case 8: case 16: case 17: case 18: case 19: case 20: case 32: case 33: case 72:
+    case 77: case 138: case 217: case 285: case 292: case 44: case 45: case 46: case 47: case 48: case 232: case 281: case 54: case 55:
+    case 441: case 74: case 75: case 81:
+        f->rdi = (uint32_t)f->rdi; break;                        /* the first argument is a file */
+    case 233: f->rdi = (uint32_t)f->rdi; f->rdx = (uint32_t)f->rdx; break;   /* epoll_ctl: two */
+    case 9: f->r8 = (uint64_t)(int64_t)(int32_t)f->r8; f->rdx = (uint32_t)f->rdx; f->r10 = (uint32_t)f->r10; break;   /* mmap: fd (-1 for none), prot, flags */
+    case 257: case 262: case 269: case 267: case 258: case 263: case 264: case 316: case 265:
+        f->rdi = (uint64_t)(int64_t)(int32_t)f->rdi; break;      /* *at: a directory file or AT_FDCWD (-100) */
+    }
+    return linux_syscall_(f);
+}
+static uint64_t linux_syscall_(struct frame *f) {
     uint64_t n = f->rax, a = f->rdi, b = f->rsi, c = f->rdx, d = f->r10, e = f->r8;
     struct task *t = current;
     struct lxproc *lx = t->lx;
@@ -268,6 +646,28 @@ uint64_t linux_syscall(struct frame *f) {
         if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
         struct lfd *fd = &lx->fd[a];
         if (fd->kind == FD_TTY_IN) return 0;                     /* (no input yet: end of file) */
+        if (fd->kind == FD_EVENT) {
+            struct evfd *ev = fd->obj;
+            if (n == 17) return E(ESPIPE_);
+            if (c < 8) return E(EINVAL_);
+            while (!ev->count) { if (fd->flags & 04000) return E(EAGAIN_); chan_wait(-1); }
+            if (!uok(b, 8, true)) return E(EFAULT_);
+            uint64_t v = ev->sem ? 1 : ev->count;
+            ev->count -= v; *(uint64_t *)b = v; chan_wake();
+            return 8;
+        }
+        if (fd->kind == FD_CHAN) {
+            if (n == 17) return E(ESPIPE_);
+            if (!uok(b, c, true)) return E(EFAULT_);
+            return (uint64_t)chan_read(fd, (uint8_t *)b, c, true, fd->flags & 04000, false, 0);
+        }
+        if (fd->kind == FD_EPOLL) return E(EINVAL_);
+        if (fd->kind == FD_SHM) {
+            if (!uok(b, c, true)) return E(EFAULT_);
+            int64_t r = shm_rw(fd->obj, n == 17 ? d : fd->off, (uint8_t *)b, c, false);
+            if (r > 0 && n == 0) fd->off += r;
+            return (uint64_t)r;
+        }
         if (fd->kind != FD_FILE) return E(EISDIR_);
         if (!uok(b, c, true)) return E(EFAULT_);
         uint64_t off = n == 17 ? d : fd->off;
@@ -281,6 +681,28 @@ uint64_t linux_syscall(struct frame *f) {
         if (!uok(b, c, false)) return E(EFAULT_);
         struct lfd *fd = &lx->fd[a];
         if (fd->kind == FD_TTY_OUT) { out_write(lx, (const char *)b, c); return c; }
+        if (fd->kind == FD_EVENT) {
+            struct evfd *ev = fd->obj;
+            if (n == 18) return E(ESPIPE_);
+            if (c < 8) return E(EINVAL_);
+            uint64_t v = *(uint64_t *)b;
+            if (v == ~0ULL) return E(EINVAL_);
+            while (ev->count + v < ev->count || ev->count + v == ~0ULL) { if (fd->flags & 04000) return E(EAGAIN_); chan_wait(-1); }
+            ev->count += v; if (v) chan_wake();
+            return 8;
+        }
+        if (fd->kind == FD_EPOLL) return E(EINVAL_);
+        if (fd->kind == FD_SHM) {
+            struct shm *o = fd->obj;
+            if (!(fd->flags & 3)) return E(EBADF_);
+            uint64_t off = n == 18 ? d : (fd->flags & 02000) ? o->size : fd->off;
+            if (o->seals & (SEAL_WRITE_ | SEAL_FUTURE_WRITE_)) return E(EPERM_);
+            if ((o->seals & SEAL_GROW_) && off + c > o->size) { if (off >= o->size) return E(EPERM_); c = o->size - off; }
+            int64_t r = shm_rw(fd->obj, off, (uint8_t *)b, c, true);
+            if (r > 0 && n == 1) fd->off = off + r;
+            return (uint64_t)r;
+        }
+        if (fd->kind == FD_CHAN) return n == 18 ? E(ESPIPE_) : (uint64_t)chan_write(fd, (const uint8_t *)b, c, true, fd->flags & 04000);
         if (fd->kind != FD_FILE || !(fd->flags & 3)) return E(EBADF_);
         struct dunc_stat st; uint64_t off = n == 18 ? d : fd->off;
         if (vfs_stat(fd->path, &st) == 0 && off == st.size) { if (vfs_append(fd->path, (const void *)b, c) < 0) return E(EINVAL_); }
@@ -313,12 +735,12 @@ uint64_t linux_syscall(struct frame *f) {
     case 257: return do_open(lx, (int)a, b, (int)c);             /* openat */
     case 3:                                                    /* close */
         if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
-        lx->fd[a].kind = FD_NONE; return 0;
+        fd_close(&lx->fd[a]); return 0;
     case 8: {                                                  /* lseek */
         if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
         struct lfd *fd = &lx->fd[a];
-        if (fd->kind != FD_FILE) return E(ESPIPE_);
-        struct dunc_stat st; uint64_t size = vfs_stat(fd->path, &st) == 0 ? st.size : 0;
+        if (fd->kind != FD_FILE && fd->kind != FD_SHM) return E(ESPIPE_);
+        struct dunc_stat st; uint64_t size = fd->kind == FD_SHM ? ((struct shm *)fd->obj)->size : vfs_stat(fd->path, &st) == 0 ? st.size : 0;
         int64_t no = c == 0 ? (int64_t)b : c == 1 ? (int64_t)fd->off + (int64_t)b : c == 2 ? (int64_t)size + (int64_t)b : -1;
         if (no < 0) return E(EINVAL_);
         fd->off = no; return no;
@@ -329,6 +751,16 @@ uint64_t linux_syscall(struct frame *f) {
         struct lfd *fd = &lx->fd[a]; struct dunc_stat st = { 0 };
         if (fd->kind == FD_FILE || fd->kind == FD_DIR) vfs_stat(fd->path, &st);
         fill_stat((struct lstat *)b, fd->kind == FD_DIR, st.size, fd->kind == FD_TTY_IN || fd->kind == FD_TTY_OUT, fd->kind == FD_FILE || fd->kind == FD_DIR ? fd->path : (a == 0 ? "<stdin>" : "<tty>"));
+        if (fd->kind == FD_SHM) {                              /* a file in memory */
+            struct lstat *ls = (struct lstat *)b;
+            ls->mode = 0100600; ls->size = (int64_t)((struct shm *)fd->obj)->size; ls->blocks = (ls->size + 511) / 512;
+            ls->ino = path_ino("<memfd>") ^ (uint64_t)fd->obj;
+        }
+        if (fd->kind == FD_CHAN) {                             /* a socket or a fifo, told apart by its chans */
+            struct lstat *ls = (struct lstat *)b;
+            ls->mode = fd->sock ? 0140777 : 0010600; ls->size = 0; ls->blocks = 0;
+            ls->ino = path_ino("<chan>") ^ (uint64_t)(fd->rx ? fd->rx : fd->tx);
+        }
         return 0;
     }
     case 4: case 6: case 262: {                                /* stat, lstat, newfstatat */
@@ -342,6 +774,22 @@ uint64_t linux_syscall(struct frame *f) {
         struct dunc_stat st;
         if (vfs_stat(full, &st) != 0) return E(ENOENT_);
         fill_stat((struct lstat *)us, st.is_dir, st.size, false, full);
+        return 0;
+    }
+    case 137: case 138: {                                      /* statfs, fstatfs */
+        if (n == 137) {
+            char p[200], full[200]; struct dunc_stat st;
+            if (!ustr(p, a, sizeof p)) return E(EFAULT_);
+            path_join(lx->cwd, p, full, sizeof full);
+            if (vfs_stat(full, &st) != 0) return E(ENOENT_);
+        } else if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
+        if (!uok(b, 120, true)) return E(EFAULT_);
+        uint64_t *sf = (uint64_t *)b; memset(sf, 0, 120);
+        bool file = n == 137 || lx->fd[a].kind == FD_FILE || lx->fd[a].kind == FD_DIR;
+        sf[0] = file ? 0x4d44 : 0x01021994;                    /* f_type: MSDOS_SUPER_MAGIC (FAT), else TMPFS_MAGIC */
+        sf[1] = 4096; sf[2] = 1 << 20; sf[3] = sf[4] = 1 << 19; /* f_bsize, f_blocks, f_bfree, f_bavail (nominal) */
+        sf[5] = 1 << 20; sf[6] = 1 << 19;                       /* f_files, f_ffree */
+        sf[8] = 255; sf[9] = 4096;                              /* f_namelen, f_frsize */
         return 0;
     }
     case 21: case 269: {                                       /* access, faccessat */
@@ -387,13 +835,252 @@ uint64_t linux_syscall(struct frame *f) {
         if (a < NFD && (lx->fd[a].kind == FD_TTY_IN || lx->fd[a].kind == FD_TTY_OUT) && b == 0x5413 && uok(c, 8, true)) {   /* TIOCGWINSZ */
             uint16_t *w = (uint16_t *)c; w[0] = 40; w[1] = 100; w[2] = w[3] = 0; return 0;
         }
+        if (a < NFD && lx->fd[a].kind == FD_CHAN) {
+            struct lfd *fd = &lx->fd[a];
+            if (b == 0x541B && uok(c, 4, true)) { *(int32_t *)c = fd->rx ? (int32_t)(fd->rx->packet && fd->rx->mcount ? fd->rx->msg[fd->rx->mhead] : fd->rx->len) : 0; return 0; }   /* FIONREAD */
+            if (b == 0x5421 && uok(c, 4, false)) { if (*(int32_t *)c) fd->flags |= 04000; else fd->flags &= ~04000; return 0; }   /* FIONBIO */
+        }
         return E(ENOTTY_);
-    case 72: return 0;                                         /* fcntl */
-    case 32: { if (a >= NFD || !lx->fd[a].kind) return E(EBADF_); int k = fd_new(lx, 0); if (k < 0) return E(EMFILE_); lx->fd[k] = lx->fd[a]; return k; }   /* dup */
+    case 72: {                                                 /* fcntl */
+        if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
+        struct lfd *fd = &lx->fd[a];
+        switch (b) {
+        case 0: case 1030: {                                   /* F_DUPFD, F_DUPFD_CLOEXEC */
+            int k = c < NFD ? fd_new(lx, (int)c) : -1; if (k < 0) return E(EMFILE_);
+            fd_copy(&lx->fd[k], fd); return k;
+        }
+        case 3: return (uint64_t)(fd->flags & ~0300 & ~01000);  /* F_GETFL (without O_CREAT, O_EXCL, O_TRUNC) */
+        case 1033: case 1034: {                                /* F_ADD_SEALS, F_GET_SEALS: memfds only */
+            if (fd->kind != FD_SHM) return E(EINVAL_);
+            struct shm *o = fd->obj;
+            if (b == 1034) return (uint64_t)o->seals;
+            if (c & ~(uint64_t)63) return E(EINVAL_);
+            if (!(fd->flags & 3)) return E(EPERM_);
+            if (o->seals & SEAL_SEAL_) return E(EPERM_);
+            if ((c & SEAL_WRITE_) && !(o->seals & SEAL_WRITE_))  /* not while it's mapped shared and writable */
+                for (int i = 0; i < lx->nmaps; i++)
+                    if (lx->maps[i].obj == o && (mm_prot_at(t->mm, lx->maps[i].s) & DPROT_WRITE)) return E(EBUSY_);
+            o->seals |= (int)c;
+            return 0;
+        }
+        case 4: fd->flags = (fd->flags & ~(04000 | 02000)) | ((int)c & (04000 | 02000)); return 0;   /* F_SETFL: O_NONBLOCK, O_APPEND */
+        default: return 0;                                     /* F_GETFD / F_SETFD (no exec, so close-on-exec doesn't matter), locks */
+        }
+    }
+    case 32: { if (a >= NFD || !lx->fd[a].kind) return E(EBADF_); int k = fd_new(lx, 0); if (k < 0) return E(EMFILE_); fd_copy(&lx->fd[k], &lx->fd[a]); return k; }   /* dup */
     case 33: case 292:                                         /* dup2, dup3 */
         if (a >= NFD || !lx->fd[a].kind || b >= NFD) return E(EBADF_);
-        if (a != b) lx->fd[b] = lx->fd[a];
+        if (n == 292 && a == b) return E(EINVAL_);
+        fd_copy(&lx->fd[b], &lx->fd[a]);
         return b;
+
+    /* ---- pipes, socket pairs, poll ---- */
+    case 22: case 293: {                                       /* pipe, pipe2 */
+        if (n == 293 && (b & ~(uint64_t)(04000 | 02000000 | 040000))) return E(EINVAL_);   /* O_NONBLOCK, O_CLOEXEC, O_DIRECT */
+        if (!uok(a, 8, true)) return E(EFAULT_);
+        struct chan *ch = chan_new(false); if (!ch) return E(ENOMEM_);
+        int fds[2];
+        if (chan_fds(lx, ch, 0, 0, ch, false, n == 293 ? (int)b : 0, fds) < 0) { kfree(ch->data); kfree(ch); return E(EMFILE_); }
+        lx->fd[fds[0]].flags &= ~3; lx->fd[fds[1]].flags = (lx->fd[fds[1]].flags & ~3) | 1;   /* O_RDONLY / O_WRONLY */
+        ((int32_t *)a)[0] = fds[0]; ((int32_t *)a)[1] = fds[1];
+        return 0;
+    }
+    case 53: {                                                 /* socketpair */
+        int type = (int)b & 0xF;
+        if (a != 1) return E(EAFNOSUPPORT_);                   /* AF_UNIX only */
+        if (type != 1 && type != 2 && type != 5) return E(EINVAL_);   /* SOCK_STREAM, SOCK_DGRAM, SOCK_SEQPACKET */
+        if ((b & ~(uint64_t)0xF) & ~(uint64_t)(04000 | 02000000)) return E(EINVAL_);   /* SOCK_NONBLOCK, SOCK_CLOEXEC */
+        if (!uok(d, 8, true)) return E(EFAULT_);
+        struct chan *x = chan_new(type != 1), *y = chan_new(type != 1);
+        int fds[2];
+        if (!x || !y || chan_fds(lx, x, y, y, x, true, (int)b, fds) < 0) {
+            if (x) { kfree(x->data); kfree(x); }
+            if (y) { kfree(y->data); kfree(y); }
+            return x && y ? E(EMFILE_) : E(ENOMEM_);
+        }
+        lx->fd[fds[0]].stype = lx->fd[fds[1]].stype = (uint8_t)type;
+        ((int32_t *)d)[0] = fds[0]; ((int32_t *)d)[1] = fds[1];
+        return 0;
+    }
+    case 54: case 55: {                                        /* setsockopt, getsockopt: socket pairs */
+        if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
+        struct lfd *fd = &lx->fd[a];
+        if (fd->kind != FD_CHAN || !fd->sock) return E(ENOTSOCK_);
+        if (n == 54) {
+            if (!uok(d, e < 4 ? 4 : e, false)) return E(EFAULT_);
+            if (b == 1) return 0;                              /* SOL_SOCKET: buffer sizes, SO_PASSCRED, priority... all fine as they are */
+            return E(ENOPROTOOPT_);
+        }
+        if (!uok(e, 4, true) || !uok(d, *(uint32_t *)e, true) || *(uint32_t *)e < 4) return E(EFAULT_);
+        if (b != 1) return E(ENOPROTOOPT_);
+        uint32_t v;
+        switch (c) {
+        case 3: v = fd->stype; break;                          /* SO_TYPE */
+        case 4: v = 0; break;                                  /* SO_ERROR */
+        case 7: case 8: v = CHAN_CAP; break;                   /* SO_SNDBUF, SO_RCVBUF */
+        case 39: v = 1; break;                                 /* SO_DOMAIN: AF_UNIX */
+        case 16: case 12: v = 0; break;                        /* SO_PASSCRED, SO_PRIORITY */
+        case 17:                                               /* SO_PEERCRED: this program (both ends are its own) */
+            if (*(uint32_t *)e < 12) return E(EINVAL_);
+            ((uint32_t *)d)[0] = (uint32_t)t->proc->pid; ((uint32_t *)d)[1] = 1000; ((uint32_t *)d)[2] = 1000;
+            *(uint32_t *)e = 12; return 0;
+        default: return E(ENOPROTOOPT_);
+        }
+        *(uint32_t *)d = v; *(uint32_t *)e = 4;
+        return 0;
+    }
+    case 48: {                                                 /* shutdown */
+        if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
+        struct lfd *fd = &lx->fd[a];
+        if (fd->kind != FD_CHAN || !fd->sock) return E(ENOTSOCK_);
+        if (b > 2) return E(EINVAL_);
+        if (b != 1 && fd->rx) { chan_drop(fd->rx, true); fd->rx = 0; }    /* SHUT_RD, SHUT_RDWR */
+        if (b != 0 && fd->tx) { chan_drop(fd->tx, false); fd->tx = 0; }   /* SHUT_WR, SHUT_RDWR */
+        return 0;
+    }
+    case 319: {                                                /* memfd_create (the name is only for /proc, which isn't there) */
+        char nm[250];
+        if (!ustr(nm, a, sizeof nm)) return uok(a, 1, false) ? E(EINVAL_) : E(EFAULT_);   /* (names are at most 249 bytes) */
+        if (b & ~(uint64_t)(1 | 2 | 8 | 16)) return E(EINVAL_);   /* MFD_CLOEXEC, ALLOW_SEALING, NOEXEC_SEAL, EXEC (no HUGETLB); Chromium checks this */
+        if ((b & 8) && (b & 16)) return E(EINVAL_);
+        struct shm *o = kmalloc(sizeof *o); if (!o) return E(ENOMEM_);
+        int k = fd_new(lx, 0); if (k < 0) { kfree(o); return E(EMFILE_); }
+        memset(o, 0, sizeof *o); o->refs = 1;
+        o->seals = (b & 2) ? 0 : SEAL_SEAL_;                   /* without MFD_ALLOW_SEALING no seals can be added */
+        if (b & 8) o->seals |= SEAL_EXEC_;                      /* MFD_NOEXEC_SEAL */
+        struct lfd *fd = &lx->fd[k]; memset(fd, 0, sizeof *fd);
+        fd->kind = FD_SHM; fd->obj = o; fd->flags = 2;
+        return k;
+    }
+    case 77: case 285: {                                       /* ftruncate, fallocate */
+        if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
+        struct lfd *fd = &lx->fd[a];
+        uint64_t want = n == 77 ? b : c + d;                   /* (fallocate: offset + length, if that's bigger) */
+        if ((int64_t)want < 0) return E(EINVAL_);
+        if (fd->kind == FD_SHM) {
+            struct shm *o = fd->obj;
+            if (n == 285 && want <= o->size) return 0;
+            if ((want < o->size && (o->seals & SEAL_SHRINK_)) || (want > o->size && (o->seals & SEAL_GROW_))) return E(EPERM_);
+            if (!(fd->flags & 3)) return E(EINVAL_);
+            return shm_resize(o, want) ? 0 : E(ENOMEM_);
+        }
+        if (fd->kind != FD_FILE || !(fd->flags & 3)) return E(EINVAL_);
+        struct dunc_stat st; if (vfs_stat(fd->path, &st) != 0) return E(ENOENT_);
+        if (n == 285 && want <= st.size) return 0;
+        if (want == st.size) return 0;
+        uint8_t *buf = kmalloc(want ? want : 1); if (!buf) return E(ENOMEM_);   /* (files on AXIOM's volumes: read, resize, write) */
+        memset(buf, 0, want); vfs_read(fd->path, buf, 0, st.size < want ? st.size : want);
+        long r = vfs_write(fd->path, buf, want); kfree(buf);
+        return r < 0 ? E(EINVAL_) : 0;
+    }
+    case 74: case 75:                                          /* fsync, fdatasync: writes go straight to the volume */
+        return a < NFD && lx->fd[a].kind ? 0 : E(EBADF_);
+    case 284: case 290: {                                      /* eventfd, eventfd2 */
+        if (n == 290 && (b & ~(uint64_t)(1 | 04000 | 02000000))) return E(EINVAL_);   /* EFD_SEMAPHORE, NONBLOCK, CLOEXEC (Chromium checks) */
+        struct evfd *ev = kmalloc(sizeof *ev); if (!ev) return E(ENOMEM_);
+        int k = fd_new(lx, 0); if (k < 0) { kfree(ev); return E(EMFILE_); }
+        ev->refs = 1; ev->count = (uint32_t)a; ev->sem = n == 290 && (b & 1);   /* EFD_SEMAPHORE */
+        struct lfd *fd = &lx->fd[k]; memset(fd, 0, sizeof *fd);
+        fd->kind = FD_EVENT; fd->obj = ev; fd->flags = 2 | (n == 290 ? (int)b & 04000 : 0);
+        return k;
+    }
+    case 213: case 291: {                                      /* epoll_create, epoll_create1 */
+        if (n == 213 && (int)a <= 0) return E(EINVAL_);
+        if (n == 291 && (a & ~(uint64_t)02000000)) return E(EINVAL_);   /* EPOLL_CLOEXEC only */
+        struct epoll *ep = kmalloc(sizeof *ep); if (!ep) return E(ENOMEM_);
+        int k = fd_new(lx, 0); if (k < 0) { kfree(ep); return E(EMFILE_); }
+        memset(ep, 0, sizeof *ep); ep->refs = 1;
+        struct lfd *fd = &lx->fd[k]; memset(fd, 0, sizeof *fd);
+        fd->kind = FD_EPOLL; fd->obj = ep; fd->flags = 2;
+        return k;
+    }
+    case 233: {                                                /* epoll_ctl */
+        if (a >= NFD || !lx->fd[a].kind || c >= NFD || !lx->fd[c].kind) return E(EBADF_);
+        if (lx->fd[a].kind != FD_EPOLL || a == c) return E(EINVAL_);
+        struct lfd *tf = &lx->fd[c];
+        if (tf->kind == FD_FILE || tf->kind == FD_DIR) return E(EPERM_);   /* (as Linux: files are always ready) */
+        struct epoll *ep = lx->fd[a].obj;
+        int i = 0; const void *id = fd_id(tf);
+        while (i < ep->n && !(ep->it[i].fd == (int)c && ep->it[i].id == id)) i++;
+        if (b == 2) {                                          /* EPOLL_CTL_DEL */
+            if (i == ep->n) return E(ENOENT_);
+            ep->it[i] = ep->it[--ep->n]; return 0;
+        }
+        if (b != 1 && b != 3) return E(EINVAL_);
+        if (!uok(d, 12, false)) return E(EFAULT_);
+        if (b == 1 && i < ep->n) return E(EEXIST_);             /* EPOLL_CTL_ADD */
+        if (b == 3 && i == ep->n) return E(ENOENT_);            /* EPOLL_CTL_MOD */
+        if (b == 1) { if (ep->n == NFD) return E(ENOMEM_); ep->n++; }
+        struct epitem *it = &ep->it[i];
+        it->fd = (int)c; it->id = id; it->off = false;
+        it->events = *(uint32_t *)d; it->data = *(uint64_t *)(d + 4);
+        chan_wake();                                           /* (a waiter may now have something to report) */
+        return 0;
+    }
+    case 232: case 281:                                        /* epoll_wait, epoll_pwait (no signals: the mask doesn't matter) */
+        return do_epoll_wait(lx, a, b, (int)c, (int64_t)(int32_t)d);
+    case 441: {                                                /* epoll_pwait2 (a timespec) */
+        bool forever; uint64_t ms = ts_ms(d, &forever);
+        return do_epoll_wait(lx, a, b, (int)c, forever ? -1 : (int64_t)ms);
+    }
+    case 7: return do_poll(lx, a, b, (int64_t)(int32_t)c);    /* poll (timeout in ms, negative: none) */
+    case 271: {                                                /* ppoll (no signals, so the mask doesn't matter) */
+        bool forever; uint64_t ms = ts_ms(c, &forever);
+        return do_poll(lx, a, b, forever ? -1 : (int64_t)ms);
+    }
+    case 44: case 45: {                                        /* sendto, recvfrom: on a socket pair (no addresses) */
+        if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
+        struct lfd *fd = &lx->fd[a];
+        if (fd->kind != FD_CHAN || !fd->sock) return E(ENOTSOCK_);
+        bool nb = (fd->flags & 04000) || (d & 0x40);           /* MSG_DONTWAIT */
+        if (!uok(b, c, n == 45)) return E(EFAULT_);
+        if (n == 44) return (uint64_t)chan_write(fd, (const uint8_t *)b, c, true, nb);
+        if (e && uok(f->r9, 4, true)) *(uint32_t *)f->r9 = 0;   /* (no sender address) */
+        return (uint64_t)chan_read(fd, (uint8_t *)b, c, true, nb, d & 2, 0);   /* MSG_PEEK */
+    }
+    case 46: case 47: {                                        /* sendmsg, recvmsg: gathered / scattered, one message */
+        if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
+        struct lfd *fd = &lx->fd[a];
+        if (fd->kind != FD_CHAN || !fd->sock) return E(ENOTSOCK_);
+        if (!uok(b, 56, n == 47)) return E(EFAULT_);
+        uint8_t *mh = (uint8_t *)b;
+        uint64_t iov = *(uint64_t *)(mh + 16), niov = *(uint64_t *)(mh + 24), ctl = *(uint64_t *)(mh + 32), ctllen = *(uint64_t *)(mh + 40);
+        if (niov > 1024 || !uok(iov, niov * 16, false)) return E(EFAULT_);
+        if (n == 46 && ctl && ctllen) return E(EOPNOTSUPP_);   /* passing files (SCM_RIGHTS) isn't there yet */
+        uint64_t total = 0;
+        for (uint64_t i = 0; i < niov; i++) total += ((uint64_t *)iov)[i * 2 + 1];
+        if (total > CHAN_CAP) total = CHAN_CAP;
+        uint8_t *kb = kmalloc(total ? total : 1); if (!kb) return E(ENOMEM_);
+        bool nb = (fd->flags & 04000) || (c & 0x40);
+        int64_t r;
+        if (n == 46) {
+            uint64_t at = 0;
+            for (uint64_t i = 0; i < niov && at < total; i++) {
+                uint64_t base = ((uint64_t *)iov)[i * 2], len = ((uint64_t *)iov)[i * 2 + 1];
+                if (len > total - at) len = total - at;
+                if (!uok(base, len, false)) { kfree(kb); return E(EFAULT_); }
+                memcpy(kb + at, (const void *)base, len); at += len;
+            }
+            r = chan_write(fd, kb, total, false, nb);
+        } else {
+            bool trunc;
+            r = chan_read(fd, kb, total, false, nb, c & 2, &trunc);
+            if (r >= 0) {
+                uint64_t at = 0;
+                for (uint64_t i = 0; i < niov && at < (uint64_t)r; i++) {
+                    uint64_t base = ((uint64_t *)iov)[i * 2], len = ((uint64_t *)iov)[i * 2 + 1];
+                    if (len > (uint64_t)r - at) len = (uint64_t)r - at;
+                    if (!uok(base, len, true)) { kfree(kb); return E(EFAULT_); }
+                    memcpy((void *)base, kb + at, len); at += len;
+                }
+                *(uint32_t *)(mh + 8) = 0;                       /* msg_namelen: no sender address */
+                *(uint64_t *)(mh + 40) = 0;                      /* msg_controllen: no files */
+                *(int32_t *)(mh + 48) = trunc ? 0x20 : 0;        /* msg_flags: MSG_TRUNC */
+            }
+        }
+        kfree(kb);
+        return (uint64_t)r;
+    }
     case 89: case 267: {                                       /* readlink(at): only /proc/self/exe is a link */
         char p[200];
         if (!ustr(p, n == 89 ? a : b, sizeof p)) return E(EFAULT_);
@@ -415,6 +1102,21 @@ uint64_t linux_syscall(struct frame *f) {
         path_join(lx->cwd, p, full, sizeof full);
         return vfs_delete(full) == 0 ? 0 : E(ENOENT_);
     }
+    case 86: case 265: {                                       /* link, linkat: FAT has no hard links, so a copy (same
+                                                                  contents now; later writes to one don't show in the other) */
+        char p[200], q[200], f1[200], f2[200]; struct dunc_stat st;
+        if (!ustr(p, n == 86 ? a : b, sizeof p) || !ustr(q, n == 86 ? b : d, sizeof q)) return E(EFAULT_);
+        path_join(lx->cwd, p, f1, sizeof f1); path_join(lx->cwd, q, f2, sizeof f2);
+        if (vfs_stat(f1, &st) != 0) return E(ENOENT_);
+        if (st.is_dir) return E(EPERM_);
+        if (vfs_stat(f2, &st) == 0) return E(EEXIST_);
+        vfs_stat(f1, &st);
+        uint8_t *buf = kmalloc(st.size ? st.size : 1); if (!buf) return E(ENOMEM_);
+        long r = vfs_read(f1, buf, 0, st.size);
+        if (r >= 0) r = vfs_write(f2, buf, (uint64_t)r);
+        kfree(buf);
+        return r < 0 ? E(ENOENT_) : 0;
+    }
     case 82: case 264: case 316: {                             /* rename, renameat(2) */
         char p[200], q[200], f1[200], f2[200];
         if (!ustr(p, n == 82 ? a : b, sizeof p) || !ustr(q, n == 82 ? b : d, sizeof q)) return E(EFAULT_);
@@ -430,6 +1132,35 @@ uint64_t linux_syscall(struct frame *f) {
             long r = mm_mmap(t->mm, a, b, prot, 0, &t->proc->pages);
             if (r >= 0 && (uint64_t)r != (a & ~4095ULL)) { mm_munmap(t->mm, r, b, &t->proc->pages); return E(EEXIST_); }
             return r < 0 ? E(ENOMEM_) : (uint64_t)r;
+        }
+        if (dfl) shm_unmapped(lx, a & ~4095ULL, (a + b + 4095) & ~4095ULL);   /* (whatever was there goes) */
+        if (!(fl & 0x20) && fd >= 0 && fd < NFD && lx->fd[fd].kind == FD_SHM) {   /* shared memory */
+            struct shm *o = lx->fd[fd].obj;
+            if (off & 4095) return E(EINVAL_);
+            if ((lx->fd[fd].flags & 3) == 1) return E(EACCES_);   /* opened only for writing */
+            if ((fl & 3) != 2 && (prot & DPROT_WRITE) && (lx->fd[fd].flags & 3) == 0) return E(EACCES_);   /* shared and writable, from a read-only file */
+            if ((fl & 3) != 2 && (prot & DPROT_WRITE) && (o->seals & (SEAL_WRITE_ | SEAL_FUTURE_WRITE_))) return E(EPERM_);
+            if ((fl & 3) == 2) {                               /* MAP_PRIVATE: a copy */
+                long r = mm_mmap(t->mm, a, b, DPROT_READ | DPROT_WRITE, dfl, &t->proc->pages);
+                if (r < 0) return E(ENOMEM_);
+                if (off < o->size) { uint64_t k = o->size - off < b ? o->size - off : b; if (uok(r, k, true)) shm_rw(o, off, (uint8_t *)r, k, false); }
+                if (prot != (DPROT_READ | DPROT_WRITE)) mm_mprotect(t->mm, r, b, prot);
+                return r;
+            }
+            if (lx->nmaps == lx->capmaps) {                    /* room to remember it */
+                int nc = lx->capmaps ? lx->capmaps * 2 : 64;
+                struct shmmap *nm = kmalloc(nc * sizeof *nm);
+                if (!nm) return E(ENOMEM_);
+                if (lx->maps) memcpy(nm, lx->maps, lx->nmaps * sizeof *nm);
+                kfree(lx->maps); lx->maps = nm; lx->capmaps = nc;
+            }
+            long r = mm_mmap(t->mm, a, b, prot, dfl, &t->proc->pages);
+            if (r < 0) return E(ENOMEM_);
+            uint64_t len = (b + 4095) & ~4095ULL;
+            shm_map_pages(t->mm, o, (uint64_t)r, len, off / 4096, prot);
+            lx->maps[lx->nmaps++] = (struct shmmap){ (uint64_t)r, (uint64_t)r + len, o, off / 4096 };
+            o->refs++;
+            return (uint64_t)r;
         }
         if (!(fl & 0x20)) {                                    /* a file: read into private memory */
             if (fd < 0 || fd >= NFD || lx->fd[fd].kind != FD_FILE) return E(EBADF_);
@@ -453,10 +1184,23 @@ uint64_t linux_syscall(struct frame *f) {
         long r = mm_mmap(t->mm, a, b, prot, dfl, &t->proc->pages);
         return r < 0 ? (uint64_t)r : (uint64_t)r;
     }
-    case 11: { long r = mm_munmap(t->mm, a, b, &t->proc->pages); return r < 0 ? (uint64_t)r : 0; }   /* munmap */
+    case 11: {                                                 /* munmap */
+        long r = mm_munmap(t->mm, a, b, &t->proc->pages);
+        if (r >= 0) shm_unmapped(lx, a, (a + b + 4095) & ~4095ULL);
+        return r < 0 ? (uint64_t)r : 0;
+    }
     case 10: { long r = mm_mprotect(t->mm, a, b, (int)c & 7); return r < 0 ? (uint64_t)r : 0; }       /* mprotect */
     case 28:                                                   /* madvise: DONTNEED frees the pages (they come back zeroed) */
-        if (c == 4) mm_dontneed(t->mm, a, b, &t->proc->pages);
+        if (c == 4) {
+            mm_dontneed(t->mm, a, b, &t->proc->pages);
+            for (int i = 0; i < lx->nmaps; i++) {               /* shared memory keeps its contents: put its pages back */
+                struct shmmap *m = &lx->maps[i];
+                uint64_t s = a > m->s ? a : m->s, e = a + b < m->e ? a + b : m->e;
+                s &= ~4095ULL;
+                if (s >= e) continue;
+                shm_map_pages(t->mm, m->obj, s, (e - s + 4095) & ~4095ULL, m->pgoff + (s - m->s) / 4096, mm_prot_at(t->mm, s));
+            }
+        }
         return 0;
     case 25: return E(ENOMEM_);                                /* mremap: callers fall back */
     case 12: {                                                 /* brk */
@@ -493,6 +1237,9 @@ uint64_t linux_syscall(struct frame *f) {
     case 186: return t->pid;                                   /* gettid */
     case 110: return 1;                                        /* getppid */
     case 102: case 104: case 107: case 108: return 1000;       /* getuid, getgid, geteuid, getegid */
+    case 118: case 120:                                        /* getresuid, getresgid */
+        if (!uok(a, 4, true) || !uok(b, 4, true) || !uok(c, 4, true)) return E(EFAULT_);
+        *(uint32_t *)a = *(uint32_t *)b = *(uint32_t *)c = 1000; return 0;
     case 112: return t->proc->pid;                             /* setsid */
     case 62: case 200: case 234:                               /* kill, tkill, tgkill: ending itself */
         if (n == 62 && a == (uint64_t)t->proc->pid && (b == 6 || b == 9 || b == 15)) task_exit(128 + (int)b);
@@ -508,7 +1255,9 @@ uint64_t linux_syscall(struct frame *f) {
     }
     case 203: return 0;                                        /* sched_setaffinity */
     case 302: {                                                /* prlimit64 */
-        if (d && uok(d, 16, true)) {
+        if (d && !uok(d, 16, true)) return E(EFAULT_);          /* (Chromium checks this, with a read-only page) */
+        if (c && !uok(c, 16, false)) return E(EFAULT_);
+        if (d) {
             uint64_t cur = ~0ULL, max = ~0ULL;
             if (b == 3) cur = STACK_SIZE;                      /* RLIMIT_STACK */
             if (b == 7) cur = max = NFD;                       /* RLIMIT_NOFILE */
@@ -516,7 +1265,7 @@ uint64_t linux_syscall(struct frame *f) {
         }
         return 0;
     }
-    case 97: if (uok(b, 16, true)) { ((uint64_t *)b)[0] = a == 3 ? STACK_SIZE : ~0ULL; ((uint64_t *)b)[1] = ~0ULL; } return 0;   /* getrlimit */
+    case 97: if (!uok(b, 16, true)) return E(EFAULT_); { ((uint64_t *)b)[0] = a == 3 ? STACK_SIZE : ~0ULL; ((uint64_t *)b)[1] = ~0ULL; } return 0;   /* getrlimit */
     case 63: {                                                 /* uname */
         if (!uok(a, 390, true)) return E(EFAULT_);
         char *u = (char *)a; memset(u, 0, 390);
@@ -536,7 +1285,10 @@ uint64_t linux_syscall(struct frame *f) {
         random_bytes((void *)a, b); return b;
     }
     case 334: case 324: case 273: case 332: return E(ENOSYS_); /* rseq, membarrier, set_robust_list, statx */
+    case 444: return E(EOPNOTSUPP_);                           /* landlock_create_ruleset: no Landlock (as a kernel without it) */
     case 157: return 0;                                        /* prctl */
+    case 140: return 20;                                       /* getpriority (as 20 - nice: nice 0) */
+    case 141: return 0;                                        /* setpriority: everything runs at one priority */
 
     /* ---- time ---- */
     case 228: {                                                /* clock_gettime */

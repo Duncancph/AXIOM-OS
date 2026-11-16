@@ -244,6 +244,8 @@ long mm_mprotect(struct mm *m, uint64_t addr, uint64_t len, int prot);
 long mm_dontneed(struct mm *m, uint64_t addr, uint64_t len, uint64_t *pages);
 struct frame;
 bool mm_fault(struct mm *m, uint64_t addr, bool write, bool exec, uint64_t *pages);
+int mm_prot_at(struct mm *m, uint64_t addr);
+bool mm_map_shared(struct mm *m, uint64_t va, uint64_t pa, int prot);   /* a page owned elsewhere (not freed with the program) */
 void tlb_sync(void);                   /* before going back to an app: drop stale translations */
 void tlb_ipi(void);                    /* the shootdown interrupt (no kernel lock) */
 long futex_wait(uint64_t addr, uint32_t val, int64_t timeout_ms);

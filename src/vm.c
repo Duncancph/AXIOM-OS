@@ -7,6 +7,7 @@
 #define W 2ULL
 #define U 4ULL
 #define OWNED (1ULL << 9)     /* page belongs to this address space; free it on exit */
+#define SHARED (1ULL << 10)   /* page belongs to something else (a Linux program's shared memory): never freed here */
 #define NX (1ULL << 63)       /* not executable (EFER.NXE is on) */
 #define ADDR(e) ((e) & 0x000FFFFFFFFFF000ULL)
 #define USER_PML4_INDEX 1     /* 0x8000000000 - 0x10000000000 */
@@ -214,6 +215,11 @@ static uint64_t pte_flags(int prot) {
     if (!prot) return OWNED | U;                            /* kept, but not present: any access faults */
     return P | U | OWNED | ((prot & DPROT_WRITE) ? W : 0) | ((prot & DPROT_EXEC) ? 0 : NX);
 }
+/* new protection for a page that's there: keeps whether it's the program's own or shared */
+static uint64_t pte_reprot(uint64_t pte, int prot) {
+    return ADDR(pte) | (pte_flags(prot) & ~OWNED) | (pte & (OWNED | SHARED));
+}
+static bool pte_kept(uint64_t pte) { return (pte & (OWNED | SHARED)) && ADDR(pte); }
 
 /* TLB shootdown: other cores running this program's threads drop their cached translations */
 static void tlb_shootdown(struct mm *m) {
@@ -325,7 +331,7 @@ long mm_mprotect(struct mm *m, uint64_t addr, uint64_t len, int prot) {
         t = next_level(t, (a >> 21) & 511, false);
         if (!t) { a = (a | ((1ULL << 21) - 1)) + 1 - 4096; continue; }
         uint64_t *pte = &t[(a >> 12) & 511];
-        if ((*pte & OWNED) && ADDR(*pte)) *pte = ADDR(*pte) | pte_flags(prot & 7);
+        if (pte_kept(*pte)) *pte = pte_reprot(*pte, prot & 7);
     }
     tlb_shootdown(m);
     return 0;
@@ -340,7 +346,7 @@ bool mm_fault(struct mm *m, uint64_t addr, bool write, bool exec, uint64_t *page
     uint64_t va = addr & ~4095ULL;
     uint64_t *pte = pte_of(m->pml4, va, true);
     if (!pte) return false;
-    if ((*pte & OWNED) && ADDR(*pte)) *pte = ADDR(*pte) | pte_flags(prot);   /* there already (another core's stale view) */
+    if (pte_kept(*pte)) *pte = pte_reprot(*pte, prot);      /* there already (another core's stale view, or protection back) */
     else {
         void *pg = page_alloc(1);
         if (!pg) return false;
@@ -349,4 +355,19 @@ bool mm_fault(struct mm *m, uint64_t addr, bool write, bool exec, uint64_t *page
     }
     __asm__ volatile("invlpg (%0)" ::"r"(va) : "memory");
     return true;
+}
+/* put a page that belongs to something else (shared memory) at va, inside an area made by mm_mmap; munmap and
+ * exit take it out of the page tables but leave the page itself to its owner */
+bool mm_map_shared(struct mm *m, uint64_t va, uint64_t pa, int prot) {
+    if (!m || (va & 4095) || !in_area(va, va + 4096)) return false;
+    uint64_t *pte = pte_of(m->pml4, va, true);
+    if (!pte) return false;
+    if ((*pte & OWNED) && ADDR(*pte)) page_free((void *)ADDR(*pte));
+    *pte = pa | (pte_flags(prot & 7) & ~OWNED) | SHARED;
+    __asm__ volatile("invlpg (%0)" ::"r"(va) : "memory");
+    return true;
+}
+int mm_prot_at(struct mm *m, uint64_t addr) {              /* the protection of the area at addr (0 if none) */
+    int i = vma_find(m, addr);
+    return i < m->nv && m->v[i].s <= addr ? m->v[i].prot : 0;
 }
