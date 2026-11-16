@@ -333,6 +333,22 @@ static bool do_switch(void) {
 /* Settings: display.native = off | try | on. "try" switches once and asks (desktop) whether to keep it;
  * display.native_check is set while an attempt hasn't been confirmed or settled: if it's still set at
  * the next start, that start went wrong, and the switch is turned off. */
+/* sleep: the pipe stops sending a picture, so the monitor goes into standby; and back */
+void intelgfx_display(bool on) {
+    static bool off; static uint32_t plane, conf;
+    if (!native_on || on == !off) return;
+    if (!on) {
+        plane = rd(0x70180); conf = rd(0x70008);
+        wr(0x70180, plane & ~(1u << 31)); wr(0x7019C, rd(0x7019C));
+        wr(0x70008, conf & ~(1u << 31)); wait_bit(0x70008, 1u << 30, false, 100);
+        off = true;
+    } else {
+        wr(0x70008, conf | (1u << 31)); wait_bit(0x70008, 1u << 30, true, 100);
+        wr(0x70180, plane | (1u << 31)); wr(0x7019C, rd(0x7019C));
+        off = false;
+    }
+}
+
 void intelgfx_maybe_switch(void) {
     const char *v = settings_get("display.native"), *chk = settings_get("display.native_check");
     if (!v || !strcmp(v, "off") || !*v) return;

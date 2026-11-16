@@ -190,6 +190,8 @@ extern int ncpus_on, ncpus_found;
 void acpi_init(void);
 void acpi_poweroff(void);
 void acpi_reboot(void);
+bool acpi_power_button(void);
+void intelgfx_display(bool on);
 
 /* ---- usb ---- */
 void xhci_init_all(void);

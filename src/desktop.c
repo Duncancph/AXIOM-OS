@@ -147,7 +147,7 @@ static void menu_layout(void) {
 static struct rect menu_rect(void) { return (struct rect){ 8, HL_BAR_H + 8, MENU_W, menu_h }; }
 static struct rect menu_item(int i) { return mrect[i]; }
 static struct rect menu_pin(int i) { struct rect r = mrect[i]; return (struct rect){ r.x + r.w - 34, r.y + 7, 26, 26 }; }
-static struct rect menu_btn(int k) { struct rect m = menu_rect(); return (struct rect){ m.x + 14 + k * 140, m.y + m.h - 50, 132, 34 }; }
+static struct rect menu_btn(int k) { struct rect m = menu_rect(); return (struct rect){ m.x + 14 + k * 104, m.y + m.h - 50, 96, 34 }; }   /* Sleep, Restart, Shut down */
 /* right-click on a dock icon: a small "Remove from dock" / "Keep in dock" button above it */
 static int ctx_app = -1, ctx_slot;
 static struct rect dock_item(int i);
@@ -414,17 +414,17 @@ static void draw_menu(void) {
         if (pin) { gfx_rrect(&cv, p.x + 4, p.y + 4, p.w - 8, p.h - 8, 5, HL_ACCENT, hp ? 200 : 255); gfx_fill(&cv, p.x + 9, p.y + p.h - 11, p.w - 18, 2, HL_NAVY); }
         else gfx_rrect_outline(&cv, p.x + 4, p.y + 4, p.w - 8, p.h - 8, 5, hp ? HL_TEXT : HL_TEXT_FAINT, 255);
     }
-    gfx_mono_text(&cv, m.x + m.w - 250, m.y + m.h - 44, "Filled square: in the dock.", HL_TEXT_FAINT);
-    gfx_mono_text(&cv, m.x + m.w - 250, m.y + m.h - 28, "Click it to add or remove.", HL_TEXT_FAINT);
+    gfx_mono_text(&cv, m.x + m.w - 228, m.y + m.h - 44, "Filled square: in the dock.", HL_TEXT_FAINT);
+    gfx_mono_text(&cv, m.x + m.w - 228, m.y + m.h - 28, "Click it to add or remove.", HL_TEXT_FAINT);
     gfx_blend(&cv, m.x + 1, m.y + m.h - 64, m.w - 2, 1, 0xFFFFFF, 16);
-    static const char *bl[] = { "Restart", "Shut down" };
-    for (int k = 0; k < 2; k++) {
+    static const char *bl[] = { "Sleep", "Restart", "Shut down" };
+    for (int k = 0; k < 3; k++) {
         struct rect r = menu_btn(k);
-        bool h = hover_ctl == 300 + k;
-        gfx_rrect(&cv, r.x, r.y, r.w, r.h, 8, k && h ? HL_RED : h ? 0x2A2A28 : 0x1C1C1B, 255);
+        bool h = hover_ctl == 300 + k, red = k == 2 && h;
+        gfx_rrect(&cv, r.x, r.y, r.w, r.h, 8, red ? HL_RED : h ? 0x2A2A28 : 0x1C1C1B, 255);
         gfx_rrect_outline(&cv, r.x, r.y, r.w, r.h, 8, HL_WIN_BORDER, 255);
         int tw = (int)strlen(bl[k]) * 8;
-        gfx_mono_text(&cv, r.x + (r.w - tw) / 2, r.y + 9, bl[k], k && h ? 0xFFFFFF : HL_TEXT);
+        gfx_mono_text(&cv, r.x + (r.w - tw) / 2, r.y + 9, bl[k], red ? 0xFFFFFF : HL_TEXT);
     }
 }
 
@@ -519,6 +519,92 @@ static void lock_key(int k) {
     else if (k == 27) { lock_len = 0; memset(lock_pw, 0, sizeof lock_pw); }
     else if (k >= 32 && k <= 255 && k != 127 && lock_len < 63) { lock_pw[lock_len++] = (char)k; lock_msg[0] = 0; }
     damage(0, 0, W, H);
+}
+
+/* ---------------- sleep, shut down, restart ---------------- */
+/* Sleep: the screen goes dark (with AXIOM's own graphics driver the monitor itself goes into standby), the desktop
+ * looks at the keyboard and mouse less often, and a key, the mouse or the power button wakes it - to the lock screen
+ * if there's a password. (Suspend-to-RAM, where the whole PC powers down, would need every driver to restart its
+ * hardware afterwards; not yet.) */
+static uint64_t off_since;
+static void toggle_menu(bool open);
+static void screen_sleep(void) { if (!screen_off) { screen_off = true; off_since = uptime_ms(); damage(0, 0, W, H); intelgfx_display(false); } }
+static bool screen_wake(void) {                           /* false if it was asleep only a moment (the click that sent it) */
+    if (!screen_off) return true;
+    if (uptime_ms() - off_since < 1500) return false;
+    intelgfx_display(true); screen_off = false; damage(0, 0, W, H); return false;
+}
+static void go_to_sleep(void) { if (settings_get("lock.password")[0]) desktop_lock(); screen_sleep(); }
+
+/* Shut down and Restart first ask every app to close, as its close button would - an app with unsaved work can
+ * ask about it - then flush the disks and switch off. If an app is still open after a few seconds, a box at the
+ * top says which and offers "anyway" or Cancel. */
+static int power_act;                                     /* 0 no, 1 shutting down, 2 restarting */
+static uint64_t power_deadline; static bool power_stuck;
+static char power_msg[96];                                /* the last full-screen message */
+static struct rect power_rect(void) { return (struct rect){ (W - 560) / 2, HL_BAR_H + 16, 560, 150 }; }
+static struct rect power_btn(int k) { struct rect b = power_rect(); return (struct rect){ b.x + b.w - 360 + k * 180, b.y + b.h - 52, 166, 36 }; }  /* Cancel, anyway */
+static int windows_open(char *first, int n) {
+    int c = 0;
+    for (int i = 0; i < MAX_WIN; i++) if (wins[i].used) { if (!c && first) strncpy0(first, wins[i].owner ? wins[i].owner->name : wins[i].title, n); c++; }
+    return c;
+}
+static void power_start(int act) {
+    if (power_act) return;
+    if (menu_open) toggle_menu(false);
+    power_act = act; power_stuck = false; power_deadline = uptime_ms() + 6000;
+    for (int i = 0; i < MAX_WIN; i++) if (wins[i].used && wins[i].owner) {
+        struct dunc_event e = { EV_CLOSE, wins[i].id, 0, 0, 0, 0 };
+        event_push(wins[i].owner, &e);
+    }
+    damage_r(power_rect());
+}
+static void power_cancel(void) { damage_r(power_rect()); power_act = 0; power_stuck = false; }
+static void power_screen(const char *msg) {               /* the whole screen: dark, one line in the middle */
+    strncpy0(power_msg, msg, sizeof power_msg);
+    struct rect all = { 0, 0, W, H };
+    gfx_clip(&cv, 0, 0, W, H); gfx_fill(&cv, 0, 0, W, H, 0x0B0B0A);
+    ax_logo(&full, W / 2 - 60, H / 2 - 70, ax_logo_img(0), HL_CREAM, 255);
+    gfx_text_center(&cv, &font_ui, 0, W, H / 2 + 20, HL_TEXT_DIM, power_msg);
+    flush_rect(all);
+}
+static void power_finish(void) {
+    int act = power_act;
+    power_screen(act == 2 ? "Restarting..." : "Shutting down...");
+    if (act == 2) acpi_reboot(); else acpi_poweroff();
+    power_screen("It's now safe to turn off your computer.");   /* power-off isn't available here */
+    for (;;) task_sleep(1000);
+}
+static void power_tick(uint64_t now) {
+    if (acpi_power_button()) {                            /* the PC's power button: wake if asleep, else shut down */
+        if (screen_off) { off_since = 0; screen_wake(); last_input = now; }
+        else power_start(1);
+    }
+    if (!power_act) return;
+    char first[48] = "";
+    if (!windows_open(first, sizeof first)) power_finish();
+    else if (now > power_deadline && !power_stuck) { power_stuck = true; damage_r(power_rect()); }
+}
+static void draw_power(void) {
+    struct rect b = power_rect();
+    gfx_rrect(&cv, b.x - 2, b.y + 8, b.w + 4, b.h + 4, 18, HL_SHADOW, 120);
+    gfx_rrect(&cv, b.x, b.y, b.w, b.h, 14, HL_WIN_BG, 248);
+    gfx_rrect_outline(&cv, b.x, b.y, b.w, b.h, 14, HL_ACCENT, 110);
+    const char *what = power_act == 2 ? "Restarting" : "Shutting down";
+    gfx_text(&cv, &font_ui_bold, b.x + 22, b.y + 32, HL_TEXT, what);
+    char first[48] = "", m[140]; int n = windows_open(first, sizeof first);
+    if (power_stuck) ksnprintf(m, sizeof m, "%s%s hasn't closed. It may be asking you to save something.", first, n > 1 ? " (and others)" : "");
+    else ksnprintf(m, sizeof m, "Closing apps... (%d open)", n);
+    gfx_text(&cv, &font_ui, b.x + 22, b.y + 62, HL_TEXT_DIM, m);
+    for (int k = 0; k < 2; k++) {
+        struct rect r = power_btn(k);
+        const char *l = k ? (power_act == 2 ? "Restart anyway" : "Shut down anyway") : "Cancel";
+        bool h = hover_ctl == 320 + k;
+        gfx_rrect(&cv, r.x, r.y, r.w, r.h, 8, k && h ? HL_RED : h ? 0x2A2A28 : 0x1C1C1B, 255);
+        gfx_rrect_outline(&cv, r.x, r.y, r.w, r.h, 8, HL_WIN_BORDER, 255);
+        int tw = (int)strlen(l) * 8;
+        gfx_mono_text(&cv, r.x + (r.w - tw) / 2, r.y + 10, l, k && h ? 0xFFFFFF : HL_TEXT);
+    }
 }
 
 /* the area a window fills when dragged to the left/right edge or the top */
@@ -627,6 +713,7 @@ static void compose(struct rect r) {
     if (snap_zone) { struct rect s = snap_rect(snap_zone); gfx_rrect(&cv, s.x + 6, s.y + 6, s.w - 12, s.h - 12, 14, HL_CREAM, 34); gfx_rrect_outline(&cv, s.x + 6, s.y + 6, s.w - 12, s.h - 12, 14, HL_CREAM, 120); }
     if (sw_until) draw_switcher();
     if (keep_until) draw_keep();
+    if (power_act) draw_power();
     draw_toasts();
     flush_rect(r);
 }
@@ -857,10 +944,11 @@ static int resize_zone(int *wi_out) {
 
 static void update_hover(void) {
     int zw; set_cursor(resize_win >= 0 || resize_zone(&zw));
+    if (power_act) for (int k = 0; k < 2; k++) if (in_rect(power_btn(k), mx, my)) { set_hover(320 + k, power_btn(k)); return; }
     if (menu_open) {
         for (int i = 0; i < mn; i++) if (in_rect(menu_pin(i), mx, my)) { set_hover(500 + i, menu_item(i)); return; }
         for (int i = 0; i < mn; i++) if (in_rect(menu_item(i), mx, my)) { set_hover(200 + i, menu_item(i)); return; }
-        for (int k = 0; k < 2; k++) if (in_rect(menu_btn(k), mx, my)) { set_hover(300 + k, menu_btn(k)); return; }
+        for (int k = 0; k < 3; k++) if (in_rect(menu_btn(k), mx, my)) { set_hover(300 + k, menu_btn(k)); return; }
     }
     if (in_rect(crown_btn(), mx, my)) { set_hover(50, bar_rect()); return; }
     if (ctx_app >= 0 && in_rect(ctx_rect(), mx, my)) { set_hover(600, ctx_rect()); return; }
@@ -928,6 +1016,11 @@ static void close_window_clicked(struct window *w) {
 }
 
 static void click(int button) {
+    if (power_act) {
+        if (in_rect(power_btn(0), mx, my)) { power_cancel(); return; }
+        if (in_rect(power_btn(1), mx, my)) { power_finish(); return; }
+        if (in_rect(power_rect(), mx, my)) return;
+    }
     if (keep_until) {                                      /* the keep-this-size box answers first */
         if (in_rect(keep_btn(1), mx, my)) { keep_until = 0; damage(0, 0, W, H); intelgfx_native_answer(true); desktop_notify("Screen size", "Kept. You can change it in Settings > Display."); }
         else if (in_rect(keep_btn(0), mx, my)) { keep_until = 0; intelgfx_native_answer(false); }
@@ -937,8 +1030,9 @@ static void click(int button) {
         if (in_rect(menu_rect(), mx, my)) {
             for (int i = 0; i < mn; i++) if (in_rect(menu_pin(i), mx, my)) { toggle_pin(mapp[i]); return; }
             for (int i = 0; i < mn; i++) if (in_rect(menu_item(i), mx, my)) { toggle_menu(false); launch(mapp[i]); return; }
-            if (in_rect(menu_btn(0), mx, my)) acpi_reboot();
-            if (in_rect(menu_btn(1), mx, my)) { acpi_poweroff(); desktop_notify("Shut down", "This computer doesn't support ACPI power-off."); }
+            if (in_rect(menu_btn(0), mx, my)) { toggle_menu(false); go_to_sleep(); }
+            if (in_rect(menu_btn(1), mx, my)) power_start(2);
+            if (in_rect(menu_btn(2), mx, my)) power_start(1);
             return;
         }
         toggle_menu(false);
@@ -1001,7 +1095,7 @@ static void handle_mouse(int dx, int dy, int b, int wheel) {
     dx = fx / 5; dy = fy / 5; fx -= dx * 5; fy -= dy * 5;      /* keep the remainder: slow speeds stay smooth */
     if (settings_int("mouse.natural")) wheel = -wheel;
     if (settings_int("mouse.left")) b = (b & ~3) | ((b & 1) << 1) | ((b >> 1) & 1);
-    if (screen_off) { screen_off = false; damage(0, 0, W, H); }
+    if (screen_off && !screen_wake()) return;
     if (locked) {                                           /* only the pointer moves; nothing is clicked */
         int ox = mx, oy = my;
         mx += dx; my += dy;
@@ -1115,7 +1209,7 @@ static void take_screenshot(void) {
 static void handle_key(int k) {
     random_event(k);
     last_input = uptime_ms();
-    if (screen_off) { screen_off = false; damage(0, 0, W, H); return; }      /* the key just wakes the screen */
+    if (screen_off) { screen_wake(); return; }               /* the key just wakes the screen */
     if (locked) { lock_key(k); return; }
     if (k == (KEYMOD_SUPER | 'l')) { desktop_lock(); return; }
     if (KEY_CODE(k) == KEY_PRTSC) { take_screenshot(); return; }
@@ -1262,7 +1356,8 @@ void desktop_thread(void *arg) {
             if (!last_input) { last_input = now; if (settings_get("lock.password")[0]) desktop_lock(); }   /* locked at start-up */
             int lock_min = settings_int("lock.idle_min"), off_min = settings_int("screen.off_min");
             if (!locked && lock_min > 0 && settings_get("lock.password")[0] && now - last_input > (uint64_t)lock_min * 60000) desktop_lock();
-            if (!screen_off && off_min > 0 && now - last_input > (uint64_t)off_min * 60000) { screen_off = true; damage(0, 0, W, H); }
+            if (!screen_off && off_min > 0 && now - last_input > (uint64_t)off_min * 60000) screen_sleep();
+            power_tick(now);
             static int last_min = -1;                       /* the lock screen's clock */
             if (locked && !screen_off) { struct rtc_time tt; rtc_read_local(&tt); if (tt.min != last_min) { last_min = tt.min; damage(0, 0, W, H); } }
             char app[48], clk[32], sig[96];
@@ -1297,6 +1392,6 @@ void desktop_thread(void *arg) {
             /* between pieces of redrawing (a playing video makes a lot of it), keep the mouse pointer moving */
             if (i + 1 < n) { ps2_poll(); xhci_poll(); int ddx, ddy, bb2, wh2; while (mouse_pop(&ddx, &ddy, &bb2, &wh2)) handle_mouse(ddx, ddy, bb2, wh2); }
         }
-        task_sleep(n ? 4 : 8);                           /* while the screen is changing, look at the mouse more often */
+        task_sleep(screen_off ? 30 : n ? 4 : 8);             /* asleep: look at the keyboard and mouse less often */                           /* while the screen is changing, look at the mouse more often */
     }
 }
