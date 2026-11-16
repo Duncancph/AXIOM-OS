@@ -110,6 +110,7 @@ struct style {
     int gap;                          /* flex/grid gap between columns, px */
     int rgap;                         /* gap between rows, px */
     int radius;                       /* border-radius px (-1: half the box, a pill or circle) */
+    int16_t shx, shy, shblur, shspread; uint32_t shcol;   /* box-shadow (the first one; shcol 0: none) */
     struct len tx, ty;                /* transform: translate(x, y) (percentages are of the box's own size) */
     uint32_t bg2; uint8_t grad;       /* linear-gradient: its last colour, and direction (1 down, 2 right, 3 up, 4 left) */
     int16_t fgrow, fshrink;           /* flex-grow, flex-shrink, * 100 */
@@ -148,7 +149,7 @@ const struct font *web_font(int px, bool bold, bool italic);
 #define MONO_H 16
 
 /* ---------------- display list ---------------- */
-enum { DI_RECT, DI_TEXT, DI_MONO, DI_IMG, DI_CTRL, DI_MARK, DI_FRAME, DI_BGIMG, DI_RFRAME };   /* DI_RFRAME: a rounded border */
+enum { DI_RECT, DI_TEXT, DI_MONO, DI_IMG, DI_CTRL, DI_MARK, DI_FRAME, DI_BGIMG, DI_RFRAME, DI_SHADOW };   /* DI_RFRAME: a rounded border; DI_SHADOW: a box-shadow (mark: blur) */
 struct ditem {
     uint8_t kind, deco, mark; int16_t link_hi;
     int16_t layer;                    /* painting order: positioned boxes and z-index (items are sorted by it) */

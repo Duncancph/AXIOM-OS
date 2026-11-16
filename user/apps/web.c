@@ -1736,6 +1736,22 @@ static void draw_items(struct canvas *c, struct layout *ly, int oy, int top, int
             else gfx_fill(c, x, y, it->w, it->h, it->col & 0xFFFFFF);
             break;
         }
+        case DI_SHADOW: {                               /* a soft shadow: rounded rects from wide and faint to the box itself */
+            int b = it->mark, A = (int)(it->col >> 24); uint32_t col = it->col & 0xFFFFFF;
+            if (it->w <= 0 || it->h <= 0 || A <= 0) break;
+            if (b <= 0) { gfx_rrect(c, x, y, it->w, it->h, it->asc, col, A); break; }
+            int n = b < 10 ? b : 10;
+            for (int k = 0; k < n; k++) {
+                int e = b / 2 - b * k / n;                  /* from b/2 outside the box to b/2 inside: half strength at its edge */
+                int w2 = it->w + 2 * e, h2 = it->h + 2 * e, r = it->asc + e;
+                if (w2 <= 0 || h2 <= 0) continue;
+                if (r < 0) r = 0;
+                if (r > w2 / 2) r = w2 / 2;
+                if (r > h2 / 2) r = h2 / 2;
+                gfx_rrect(c, x - e, y - e, w2, h2, r, col, A / n + 1);
+            }
+            break;
+        }
         case DI_RFRAME:
             for (int k = 0; k < it->mark; k++) gfx_rrect_outline(c, x + k, y + k, it->w - 2 * k, it->h - 2 * k, it->asc - k > 1 ? it->asc - k : 1, it->col & 0xFFFFFF, 255);
             break;

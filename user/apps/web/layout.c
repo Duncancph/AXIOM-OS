@@ -1326,6 +1326,7 @@ static void layout_block_(struct fctx *c, struct node *n, struct ictx ic, int fo
         int nl = cur_layer + (st->z > 0 ? 100 + (st->z > 5000 ? 5000 : st->z) : 1);
         cur_layer = nl > 30000 ? 30000 : nl;
     }
+    int shi = st->shcol && st->vis ? push(DI_SHADOW) : -1;              /* box-shadow, under the background */
     int bgi = st->bg && n != canvas_node && st->vis ? push(DI_RECT) : -1;
     int bgimg = -1;
     if (st->bgimage && st->vis) {
@@ -1364,6 +1365,11 @@ static void layout_block_(struct fctx *c, struct node *n, struct ictx ic, int fo
     int rad = st->radius < 0 ? 100000 : st->radius;
     if (rad > (w + frame) / 2) rad = (w + frame) / 2;
     if (rad > (bottom - top) / 2) rad = (bottom - top) / 2;
+    if (shi >= 0) {
+        struct ditem *b = IT(shi); int sp2 = st->shspread;
+        b->x = x0 + st->shx - sp2; b->y = top + st->shy - sp2; b->w = w + frame + 2 * sp2; b->h = bottom - top + 2 * sp2;
+        b->col = st->shcol; b->asc = rad + sp2 > 0 ? rad + sp2 : 0; b->mark = (uint8_t)st->shblur;
+    }
     if (bgi >= 0) {
         struct ditem *b = IT(bgi); b->x = x0; b->y = top; b->w = w + frame; b->h = bottom - top; b->col = st->bg; b->asc = rad;
         if (st->grad) { b->mark = st->grad; b->off = st->bg2; }

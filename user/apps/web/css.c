@@ -1227,6 +1227,28 @@ static void apply(struct style *st, const struct style *ps, const char *prop, co
         return;
     }
     if (P("row-gap") || P("grid-row-gap")) { struct len l; if (parse_len(v, vl, st->fsize, &l, false) && l.t == L_PX) st->rgap = l.v < 0 ? 0 : l.v > 200 ? 200 : l.v; return; }
+    if (P("box-shadow") || P("-webkit-box-shadow")) {            /* x y [blur [spread]] colour (the first shadow; not inset) */
+        st->shcol = 0;
+        int nums[4], nn = 0; uint32_t col = 0x40000000; bool inset = false, any = false;
+        for (int i = 0; i < vl;) {
+            while (i < vl && sp(v[i])) i++;
+            if (i >= vl || v[i] == ',') break;                         /* only the first shadow */
+            int s0 = i, depth = 0;
+            while (i < vl && (depth || (!sp(v[i]) && v[i] != ','))) { if (v[i] == '(') depth++; else if (v[i] == ')') depth--; i++; }
+            int tl2 = i - s0; struct len l;
+            if (tl2 == 5 && pre_ci(v + s0, 5, "inset")) inset = true;
+            else if (tl2 == 4 && pre_ci(v + s0, 4, "none")) return;
+            else if (((v[s0] >= '0' && v[s0] <= '9') || v[s0] == '-' || v[s0] == '.') && parse_len(v + s0, tl2, st->fsize, &l, false)) { if (nn < 4) nums[nn++] = l.t == L_PX ? l.v : 0; }
+            else { uint32_t cc; if (color_val(v + s0, tl2, &cc)) { col = cc; any = true; } }
+        }
+        (void)any;
+        if (inset || nn < 2 || !(col >> 24)) return;                 /* (inset shadows: not drawn) */
+        st->shx = (int16_t)nums[0]; st->shy = (int16_t)nums[1];
+        st->shblur = (int16_t)(nn > 2 && nums[2] > 0 ? (nums[2] > 60 ? 60 : nums[2]) : 0);
+        st->shspread = (int16_t)(nn > 3 ? (nums[3] > 60 ? 60 : nums[3] < -60 ? -60 : nums[3]) : 0);
+        st->shcol = col;
+        return;
+    }
     if (P("border-radius") || P("border-top-left-radius")) {
         int k = tokens(v, vl, t, tl, 2); struct len l;
         if (k && tl[0] && t[0][tl[0] - 1] == '%') st->radius = num100(t[0], tl[0] - 1) >= 4000 ? -1 : 0;
