@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 134
-notes The browser has a new name: Vertex (it was Arc). Open it from the dock or with 'open vertex'.
-file kernel b134/thane.elf.gz 18823232 a597cca2284e2c835a0ce1afe9030487fc7ed488007781125cdf928ad7b2a5fe
-file initrd b134/initrd.tar.gz 1310720 ddc865a8c4afb2208cf0b252eca2f072fd322d46d8bae3b4b06297d25ca91e44
-file bootx64 b134/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b134/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 304402204855a7155b9592d9b8e87c7d2cb511b859bafed8344d091806cd587841aa052f022053457105418f83a4db9608ab48594a4d03a86d4a68009064ccc004a0bd53a270
+build 135
+notes Installer: choose how much of a disk AXIOM uses (16-256 GB or all of it), leaving the rest free for Linux or Windows. Fixes installing to another disk on systems updated from older builds.
+file kernel b135/thane.elf.gz 18825192 1a3371a30088d71890876b9f83e0c1dee58e3e582d3f889e941562c78d7c15b5
+file initrd b135/initrd.tar.gz 1310720 a6d0fa69a801f33bc20567e1f0b0e71fde5a2c9b4840545ec951a66170462f75
+file bootx64 b135/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b135/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304302203822b9a6ef21be08a99fdc0200435bc100aa06ad530cbc522754cf2dbcafa57f021f578c1802a7f1ada1046dec66e214166d8ba04427911a1e312f77932233817c
