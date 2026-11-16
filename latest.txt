@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 135
-notes Installer: choose how much of a disk AXIOM uses (16-256 GB or all of it), leaving the rest free for Linux or Windows. Fixes installing to another disk on systems updated from older builds.
-file kernel b135/thane.elf.gz 18825192 1a3371a30088d71890876b9f83e0c1dee58e3e582d3f889e941562c78d7c15b5
-file initrd b135/initrd.tar.gz 1310720 a6d0fa69a801f33bc20567e1f0b0e71fde5a2c9b4840545ec951a66170462f75
-file bootx64 b135/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b135/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 304302203822b9a6ef21be08a99fdc0200435bc100aa06ad530cbc522754cf2dbcafa57f021f578c1802a7f1ada1046dec66e214166d8ba04427911a1e312f77932233817c
+build 136
+notes Bluetooth speakers and headphones: in the Bluetooth app, press 'Play sound here' next to a paired speaker and all of AXIOM's sound plays on it (or switch the speaker on and it connects by itself).
+file kernel b136/thane.elf.gz 18889912 492d9417840d4d825e42a293ed0589a3f5d405135999bde2a0b26ed1879cad79
+file initrd b136/initrd.tar.gz 1331200 942aa7ae76b63a534f3d3344abacb3455d8b8a2976a4f491eccc61ab816c3aad
+file bootx64 b136/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b136/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 30460221009657f570d5b58947c7008c9eb10633f16cc1a0eae18842df118bc77316afbdec022100b74f81964db8faa53fddd51c47e40600372c1739a725b5eb4c86f479bea4338a
