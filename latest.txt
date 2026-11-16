@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 133
-notes AXIOM uses all your memory (programs get the memory above 4 GB). Linux programs can pass files to each other, which fixes Chromium's crash on exit. Timers are exact across all cores.
-file kernel b133/thane.elf.gz 18823168 99d4bd11de48808a4eac6f9d106169ff0721b5715941a211a8e6ca8ba0134047
-file initrd b133/initrd.tar.gz 1310720 25fad0d3464c0abbeed51ebae818b36db52c7e324a5dcfe6b989b95ea93c82ce
-file bootx64 b133/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b133/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 304502202f519d164ed995e9727d91244e83eb31dc8ad3a8a6d7f2c2d2e08aabd9924e330221008259a37a5656716f25b9231727de77252c743ebeba380a86b62f1234d17488b1
+build 134
+notes The browser has a new name: Vertex (it was Arc). Open it from the dock or with 'open vertex'.
+file kernel b134/thane.elf.gz 18823232 a597cca2284e2c835a0ce1afe9030487fc7ed488007781125cdf928ad7b2a5fe
+file initrd b134/initrd.tar.gz 1310720 ddc865a8c4afb2208cf0b252eca2f072fd322d46d8bae3b4b06297d25ca91e44
+file bootx64 b134/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b134/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304402204855a7155b9592d9b8e87c7d2cb511b859bafed8344d091806cd587841aa052f022053457105418f83a4db9608ab48594a4d03a86d4a68009064ccc004a0bd53a270
