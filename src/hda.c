@@ -345,7 +345,7 @@ static int play(const int16_t *pcm, uint32_t frames) {
 
 /* ---- streaming: the DMA buffer is a ring that the app keeps filling ahead of the sound chip ---- */
 static int srate = RATE;
-static uint64_t wtotal, rtotal; static uint32_t last_lpib;
+static uint64_t wtotal, rtotal, clear_to; static uint32_t last_lpib;
 static void set_format(int rate) {
     uint16_t fmt = rate == 44100 ? 0x4011 : 0x0011;          /* 44.1 or 48 kHz, 16 bits, 2 channels */
     w16(sd_off + 0x12, fmt);
@@ -356,14 +356,20 @@ static void update_read(void) {                              /* how far the chip
     rtotal += (lp + BUF_BYTES - last_lpib) % BUF_BYTES;
     last_lpib = lp;
 }
-static void stream_fill_silence(void) {                      /* never let it play old samples again */
+/* Never let it play old samples again: the part of the buffer ahead of what's written is cleared to silence (a
+ * quarter of the buffer ahead of the play position). It isn't counted as written, so the next samples follow
+ * straight on (no added delay) and "queued" is only what the app wrote. If the app falls behind, the hardware
+ * plays this silence and the next write starts at the play position. */
+static void stream_fill_silence(void) {
     update_read();
-    uint64_t want = rtotal + BUF_BYTES / 4;
-    while (wtotal < want) {
-        uint32_t at = (uint32_t)(wtotal % BUF_BYTES), n = BUF_BYTES - at;
-        if (n > want - wtotal) n = (uint32_t)(want - wtotal);
-        memset(buf + at, 0, n); wtotal += n;
+    uint64_t from = wtotal > rtotal ? wtotal : rtotal, want = rtotal + BUF_BYTES / 4;
+    if (clear_to > from) from = clear_to;
+    while (from < want) {
+        uint32_t at = (uint32_t)(from % BUF_BYTES), n = BUF_BYTES - at;
+        if (n > want - from) n = (uint32_t)(want - from);
+        memset(buf + at, 0, n); from += n;
     }
+    if (want > clear_to) clear_to = want;
 }
 static int stream_start(int rate) {
     if (!ready || (rate != 44100 && rate != 48000)) return -1;
@@ -378,13 +384,18 @@ static int stream_start(int rate) {
     w8(sd_off + 2, 1 << 4);
     srate = rate; set_format(rate);
     memset(buf, 0, BUF_BYTES);
-    wtotal = (uint64_t)rate * 4 / 10; rtotal = 0; last_lpib = 0;    /* start with 0.1 s of silence */
+    wtotal = (uint64_t)rate * 4 / 10; rtotal = 0; last_lpib = 0; clear_to = wtotal;   /* start with 0.1 s of silence */
     streaming = true; paused = false; last_write = uptime_ms();
     w8(sd_off, r8(sd_off) | 2);
     return 0;
 }
+static long stream_write_k(const void *src_, uint64_t n);
 static long stream_write(uint64_t ua, uint64_t n) {
     if (!streaming || (n && !user_ok(current->pml4, (const void *)ua, n, false))) return -1;
+    return stream_write_k((const void *)ua, n);
+}
+static long stream_write_k(const void *src_, uint64_t n) {     /* (the samples are already checked / in the kernel) */
+    if (!streaming) return -1;
     update_read();
     if (wtotal < rtotal) wtotal = rtotal;                  /* it ran dry: carry on from where it is */
     uint64_t space = BUF_BYTES - (wtotal - rtotal) - 4096;
@@ -393,7 +404,7 @@ static long stream_write(uint64_t ua, uint64_t n) {
     n &= ~3ull;
     int vol = settings_int("sound.volume"); if (vol < 0) vol = 0; if (vol > 100) vol = 100;
     int scale = vol * vol;
-    const int16_t *src = (const int16_t *)ua;
+    const int16_t *src = (const int16_t *)src_;
     for (uint64_t i = 0; i < n / 2; i++) {
         uint32_t at = (uint32_t)((wtotal + i * 2) % BUF_BYTES);
         *(int16_t *)(buf + at) = (int16_t)((int32_t)src[i] * scale / 10000);
@@ -469,5 +480,22 @@ long sound_syscall(int op, uint64_t a, uint64_t b) {
     }
     return -1;
 }
+
+/* For the kernel's own users (Linux programs' sound device, linux_snd.c): the same stream as SOUND_STREAM_*,
+ * with samples already in kernel memory. */
+long sound_kwrite(const void *pcm, uint64_t bytes) {
+    if (bt_streaming) {
+        if (!bta_active()) { bt_streaming = false; return -1; }
+        return bt_write((const int16_t *)pcm, (long)(bytes / 4), bt_rate) * 4;
+    }
+    return stream_write_k(pcm, bytes);
+}
+long sound_queued_frames(void) {                           /* what's written but not yet played */
+    if (bt_streaming) return (long)bta_queued_ms() * bt_rate / 1000;
+    if (!streaming) return 0;
+    update_read();
+    return wtotal > rtotal ? (long)((wtotal - rtotal) / 4) : 0;
+}
+bool sound_ready(void) { return ready || bta_active(); }
 
 void sound_notify(void) { if (ready && uptime_ms() > 15000) chime(1); }

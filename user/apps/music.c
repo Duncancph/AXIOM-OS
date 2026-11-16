@@ -113,7 +113,7 @@ static void feed(void) {                                  /* keep the sound card
     for (int guard = 0; guard < 64; guard++) {
         if (ppos >= npend) {
             if (!decode_more()) {                             /* the song ended: let what's queued play, then the next one */
-                if (snd(SOUND_STREAM_STATUS, 0, 0) <= 50) next(1);
+                if (snd(SOUND_STREAM_STATUS, 0, 0) <= 50) { if (cur + 1 < nsongs) next(1); else stop(); }   /* (after the last one: stop) */
                 return;
             }
         }

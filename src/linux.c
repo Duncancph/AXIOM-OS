@@ -18,7 +18,12 @@ void linux_cpu_init(void) {
 }
 
 /* ---------------- a Linux program's state ---------------- */
-enum { FD_NONE, FD_TTY_IN, FD_TTY_OUT, FD_FILE, FD_DIR, FD_CHAN, FD_EVENT, FD_EPOLL, FD_SHM, FD_DEV, FD_WIN };
+enum { FD_NONE, FD_TTY_IN, FD_TTY_OUT, FD_FILE, FD_DIR, FD_CHAN, FD_EVENT, FD_EPOLL, FD_SHM, FD_DEV, FD_WIN, FD_SND };
+/* sound devices (linux_snd.c): /dev/snd/controlC0 and pcmC0D0p */
+void *snd_open(int kind); void snd_put(void *o); long snd_ioctl(void *o, uint32_t cmd, uint64_t arg, bool nonblock);
+long snd_write(void *o, uint64_t ubuf, uint64_t bytes, bool nonblock); int snd_ready(void *o, bool *waiting);
+void *snd_mmap_obj(void *o, uint64_t off);
+static bool snd_waiting;                                      /* a poll found a sound device not ready: look again soon */
 struct chan;
 /* FD_CHAN: a pipe end or a socket-pair end. It reads from rx and writes to tx (either may be 0: a pipe's
  * other end, or after shutdown) and holds a reader count on rx and a writer count on tx. */
@@ -372,6 +377,7 @@ static void fd_close(struct lfd *f) {
     if ((f->kind == FD_EVENT || f->kind == FD_EPOLL) && f->obj && --*(int *)f->obj <= 0) { kfree(f->obj); chan_wake(); }   /* (refs come first in both) */
     if (f->kind == FD_SHM) shm_put(f->obj);
     if (f->kind == FD_WIN) axwin_put(f->obj);
+    if (f->kind == FD_SND) snd_put(f->obj);
     memset(f, 0, sizeof *f);
 }
 static void fd_copy(struct lfd *dst, const struct lfd *src) {      /* dup: one more reference to the same ends */
@@ -379,7 +385,7 @@ static void fd_copy(struct lfd *dst, const struct lfd *src) {      /* dup: one m
     fd_close(dst);
     *dst = *src;
     if (dst->kind == FD_CHAN) { if (dst->rx) dst->rx->readers++; if (dst->tx) dst->tx->writers++; }
-    if ((dst->kind == FD_EVENT || dst->kind == FD_EPOLL || dst->kind == FD_SHM || dst->kind == FD_WIN) && dst->obj) (*(int *)dst->obj)++;
+    if ((dst->kind == FD_EVENT || dst->kind == FD_EPOLL || dst->kind == FD_SHM || dst->kind == FD_WIN || dst->kind == FD_SND) && dst->obj) (*(int *)dst->obj)++;
 }
 /* move bytes in or out of the ring (to / from a kernel buffer) */
 static void ring_put(struct chan *c, const uint8_t *s, uint32_t n) {
@@ -496,6 +502,7 @@ static int fd_ready(struct lxproc *lx, int fd) {
     case FD_EVENT: { struct evfd *ev = f->obj; return (ev->count ? POLLIN_ : 0) | (ev->count < ~0ULL - 1 ? POLLOUT_ : 0); }
     case FD_EPOLL: return epoll_scan(lx, f->obj, 0, 1) ? POLLIN_ : 0;
     case FD_WIN: { struct axwin *x = f->obj; return (x->qh != x->qt ? POLLIN_ : 0) | POLLOUT_; }
+    case FD_SND: return snd_ready(f->obj, &snd_waiting);
     default: return POLLIN_ | POLLOUT_;                          /* files are always ready */
     }
 }
@@ -516,6 +523,7 @@ static uint64_t do_poll(struct lxproc *lx, uint64_t ufds, uint64_t nfds, int64_t
         if (count || ms == 0) return count;
         int64_t left = -1;
         if (ms > 0) { uint64_t now = uptime_ms(); if (now >= end) return 0; left = (int64_t)(end - now); }
+        if (snd_waiting) { snd_waiting = false; if (left < 0 || left > 5) left = 5; }   /* (sound plays without waking anyone) */
         chan_wait(left);
     }
 }
@@ -571,6 +579,7 @@ static uint64_t do_epoll_wait(struct lxproc *lx, uint64_t epfd, uint64_t uev, in
         if (k || ms == 0) return (uint64_t)k;
         int64_t left = -1;
         if (ms > 0) { uint64_t now = uptime_ms(); if (now >= end) return 0; left = (int64_t)(end - now); }
+        if (snd_waiting) { snd_waiting = false; if (left < 0 || left > 5) left = 5; }
         chan_wait(left);
     }
 }
@@ -626,6 +635,16 @@ static int64_t shm_rw(struct shm *o, uint64_t off, uint8_t *buf, uint64_t n, boo
     }
     return (int64_t)n;
 }
+/* for linux_snd.c: a sound device's ring, shared with the program through mmap */
+void *lx_shm_make(uint64_t size) {
+    struct shm *o = kmalloc(sizeof *o);
+    if (!o) return 0;
+    memset(o, 0, sizeof *o); o->refs = 1;
+    if (!shm_resize(o, size)) { kfree(o); return 0; }
+    return o;
+}
+void lx_shm_put(void *o) { shm_put(o); }
+void lx_shm_rw(void *o, uint64_t off, void *buf, uint64_t n, bool write) { shm_rw(o, off, buf, n, write); }
 /* [s, e) of the program's memory is going away (munmap, MAP_FIXED over it): forget the shared mappings there */
 static void shm_unmapped(struct lxproc *lx, uint64_t s, uint64_t e) {
     for (int i = 0; i < lx->nmaps;) {
@@ -675,10 +694,11 @@ static int chan_fds(struct lxproc *lx, struct chan *r0, struct chan *w0, struct 
     return 0;
 }
 /* ---------------- /dev: the few devices every Linux program expects ---------------- */
-enum { DEV_NULL = 1, DEV_ZERO, DEV_FULL, DEV_RANDOM, DEV_URANDOM, DEV_WINDOW };
+enum { DEV_NULL = 1, DEV_ZERO, DEV_FULL, DEV_RANDOM, DEV_URANDOM, DEV_WINDOW, DEV_SNDCTL, DEV_SNDPCM };
 static const struct { const char *name; int minor; } devs[] = {
     { 0, 0 }, { "null", 3 }, { "zero", 5 }, { "full", 7 }, { "random", 8 }, { "urandom", 9 },
     { "axiom/window", 0 },                                       /* (char device 240:0, a "local use" number) */
+    { "snd/controlC0", 0 }, { "snd/pcmC0D0p", 16 },             /* sound (ALSA: char devices 116:0 and 116:16) */
 };
 static int dev_of(const char *full) {                           /* full: a joined path (/system/linux/dev/...) */
     if (strncmp(full, "/system/linux/dev/", 18)) return 0;
@@ -687,7 +707,7 @@ static int dev_of(const char *full) {                           /* full: a joine
 }
 static void dev_stat(struct lstat *st, int dev) {
     fill_stat(st, false, 0, false, devs[dev].name);
-    st->mode = 0020666; st->rdev = dev == DEV_WINDOW ? 240 << 8 : (1 << 8) | (uint64_t)devs[dev].minor; st->blocks = 0;
+    st->mode = 0020666; st->rdev = dev == DEV_WINDOW ? 240 << 8 : dev >= DEV_SNDCTL ? (116 << 8) | (uint64_t)devs[dev].minor : (1 << 8) | (uint64_t)devs[dev].minor; st->blocks = 0;
 }
 
 /* ---------------- AXIOM windows (common/axiom_window.h) ----------------
@@ -886,6 +906,11 @@ static uint64_t do_open(struct lxproc *lx, int dirfd, uint64_t upath, int flags)
             x->next = axwins; axwins = x;
             f->kind = FD_WIN; f->obj = x;
         }
+        if (dv == DEV_SNDCTL || dv == DEV_SNDPCM) {
+            void *o = snd_open(dv == DEV_SNDPCM);
+            if (!o) { f->kind = FD_NONE; return E(ENODEV_); }        /* (no sound hardware) */
+            f->kind = FD_SND; f->obj = o;
+        }
         strncpy0(f->path, full, sizeof f->path);
         return fd;
     }
@@ -1032,6 +1057,7 @@ static uint64_t linux_syscall_(struct frame *f) {
         struct lfd *fd = &lx->fd[a];
         if (fd->kind == FD_TTY_OUT) { out_write(lx, (const char *)b, c); return c; }
         if (fd->kind == FD_WIN) return E(EINVAL_);
+        if (fd->kind == FD_SND) { long r = snd_write(fd->obj, b, c, fd->flags & 04000); return r < 0 ? E(-r) : (uint64_t)r; }
         if (fd->kind == FD_DEV) return fd->dev == DEV_FULL ? E(ENOSPC_) : c;   /* (written to random: mixed in on Linux; here, dropped) */
         if (fd->kind == FD_EVENT) {
             struct evfd *ev = fd->obj;
@@ -1106,6 +1132,7 @@ static uint64_t linux_syscall_(struct frame *f) {
         fill_stat((struct lstat *)b, fd->kind == FD_DIR, st.size, fd->kind == FD_TTY_IN || fd->kind == FD_TTY_OUT, fd->kind == FD_FILE || fd->kind == FD_DIR ? fd->path : (a == 0 ? "<stdin>" : "<tty>"));
         if (fd->kind == FD_DEV) dev_stat((struct lstat *)b, fd->dev);
         if (fd->kind == FD_WIN) dev_stat((struct lstat *)b, DEV_WINDOW);
+        if (fd->kind == FD_SND) dev_stat((struct lstat *)b, fd->dev);
         if (fd->kind == FD_SHM) {                              /* a file in memory */
             struct lstat *ls = (struct lstat *)b;
             ls->mode = 0100600; ls->size = (int64_t)((struct shm *)fd->obj)->size; ls->blocks = (ls->size + 511) / 512;
@@ -1195,6 +1222,7 @@ static uint64_t linux_syscall_(struct frame *f) {
             uint16_t *w = (uint16_t *)c; w[0] = 40; w[1] = 100; w[2] = w[3] = 0; return 0;
         }
         if (a < NFD && lx->fd[a].kind == FD_WIN) return axwin_ioctl(lx, &lx->fd[a], (uint32_t)b, c);
+        if (a < NFD && lx->fd[a].kind == FD_SND) { long r = snd_ioctl(lx->fd[a].obj, (uint32_t)b, c, lx->fd[a].flags & 04000); return r < 0 ? E(-r) : (uint64_t)r; }
         if (a < NFD && lx->fd[a].kind == FD_CHAN) {
             struct lfd *fd = &lx->fd[a];
             if (b == 0x541B && uok(c, 4, true)) { *(int32_t *)c = fd->rx ? (int32_t)(fd->rx->packet && fd->rx->mcount ? fd->rx->msg[fd->rx->mhead] : fd->rx->len) : 0; return 0; }   /* FIONREAD */
@@ -1535,8 +1563,10 @@ static uint64_t linux_syscall_(struct frame *f) {
         }
         if (dfl) { shm_unmapped(lx, a & ~4095ULL, (a + b + 4095) & ~4095ULL); fmap_cut(lx, a & ~4095ULL, (a + b + 4095) & ~4095ULL); }   /* (whatever was there goes) */
         if (!(fl & 0x20) && fd >= 0 && fd < NFD && lx->fd[fd].kind == FD_WIN && !((struct axwin *)lx->fd[fd].obj)->pix) return E(ENODEV_);   /* (no window yet) */
-        if (!(fl & 0x20) && fd >= 0 && fd < NFD && (lx->fd[fd].kind == FD_SHM || lx->fd[fd].kind == FD_WIN)) {   /* shared memory, a window's pixels */
-            struct shm *o = lx->fd[fd].kind == FD_WIN ? ((struct axwin *)lx->fd[fd].obj)->pix : lx->fd[fd].obj;
+        if (!(fl & 0x20) && fd >= 0 && fd < NFD && lx->fd[fd].kind == FD_SND && !snd_mmap_obj(lx->fd[fd].obj, off)) return E(ENODEV_);   /* (status/control pages: SYNC_PTR instead) */
+        if (!(fl & 0x20) && fd >= 0 && fd < NFD && (lx->fd[fd].kind == FD_SHM || lx->fd[fd].kind == FD_WIN || lx->fd[fd].kind == FD_SND)) {   /* shared memory, a window's pixels, a sound ring */
+            struct shm *o = lx->fd[fd].kind == FD_WIN ? ((struct axwin *)lx->fd[fd].obj)->pix : lx->fd[fd].kind == FD_SND ? snd_mmap_obj(lx->fd[fd].obj, off) : lx->fd[fd].obj;
+            if (lx->fd[fd].kind == FD_SND) off = 0;
             if (off & 4095) return E(EINVAL_);
             if ((lx->fd[fd].flags & 3) == 1) return E(EACCES_);   /* opened only for writing */
             if ((fl & 3) != 2 && (prot & DPROT_WRITE) && (lx->fd[fd].flags & 3) == 0) return E(EACCES_);   /* shared and writable, from a read-only file */
