@@ -15,8 +15,8 @@ static char text[LINES][MAXCOLS + 1];
 static uint8_t color[LINES][MAXCOLS];
 static int nlines = 1, cx;
 static int fetch_line = -100;   /* line where the pixel crown is drawn */              /* cursor column on the last line */
-static char input[128]; static int ilen;
-static char hist[16][128]; static int nhist, hpos;
+static char input[400];   /* (a Linux program with its options can be long; the line still fits one row) */ static int ilen;
+static char hist[16][400]; static int nhist, hpos;
 static bool cursor_on = true;
 static int cur_col = 0;
 static int view;                                   /* lines scrolled back from the bottom */
@@ -631,7 +631,7 @@ int main(void) {
         if (k == '\n') {
             input[ilen] = 0;
             putch('\n');
-            if (ilen) { strncpy0(hist[nhist % 16], input, 128); nhist++; }
+            if (ilen) { strncpy0(hist[nhist % 16], input, sizeof hist[0]); nhist++; }
             hpos = nhist;
             run(input);
             ilen = 0;
@@ -643,7 +643,7 @@ int main(void) {
             if (np >= 0 && np <= nhist && np >= nhist - 16) {
                 hpos = np;
                 if (np == nhist) ilen = 0;
-                else { strncpy0(input, hist[np % 16], 128); ilen = strlen(input); }
+                else { strncpy0(input, hist[np % 16], sizeof input); ilen = strlen(input); }
                 show_input();
             }
         } else if (k == 12) { nlines = 1; memset(text, 0, sizeof text); cx = 0; fetch_line = -100; prompt(); }   /* Ctrl+L */

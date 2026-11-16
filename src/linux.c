@@ -17,11 +17,12 @@ void linux_cpu_init(void) {
 }
 
 /* ---------------- a Linux program's state ---------------- */
-enum { FD_NONE, FD_TTY_IN, FD_TTY_OUT, FD_FILE, FD_DIR, FD_CHAN, FD_EVENT, FD_EPOLL, FD_SHM };
+enum { FD_NONE, FD_TTY_IN, FD_TTY_OUT, FD_FILE, FD_DIR, FD_CHAN, FD_EVENT, FD_EPOLL, FD_SHM, FD_DEV };
 struct chan;
 /* FD_CHAN: a pipe end or a socket-pair end. It reads from rx and writes to tx (either may be 0: a pipe's
  * other end, or after shutdown) and holds a reader count on rx and a writer count on tx. */
 struct lfd { int kind; int flags; uint64_t off; char path[200]; struct chan *rx, *tx; bool sock; uint8_t stype;
+             uint8_t dev;    /* FD_DEV: which of devs[] */
              void *obj; };   /* FD_EVENT: a struct evfd, FD_EPOLL: a struct epoll, FD_SHM: a struct shm (shared by duplicates) */
 struct shmmap;
 #define NFD 128
@@ -38,7 +39,7 @@ struct lxproc {
 uint64_t linux_now_ns(void);
 #define E(x) ((uint64_t)-(long)(x))
 enum { EPERM_ = 1, ENOENT_ = 2, EBADF_ = 9, EAGAIN_ = 11, ENOMEM_ = 12, EFAULT_ = 14, EEXIST_ = 17, ENOTDIR_ = 20, EISDIR_ = 21,
-       EACCES_ = 13, EBUSY_ = 16, EINVAL_ = 22, EMFILE_ = 24, ENOTTY_ = 25, ESPIPE_ = 29, EPIPE_ = 32, ERANGE_ = 34, ENOSYS_ = 38, ENOTSOCK_ = 88,
+       EACCES_ = 13, EBUSY_ = 16, ENODEV_ = 19, ENOSPC_ = 28, EINVAL_ = 22, EMFILE_ = 24, ENOTTY_ = 25, ESPIPE_ = 29, EPIPE_ = 32, ERANGE_ = 34, ENOSYS_ = 38, ENOTSOCK_ = 88,
        EMSGSIZE_ = 90, ENOPROTOOPT_ = 92, EOPNOTSUPP_ = 95, EAFNOSUPPORT_ = 97, ETIMEDOUT_ = 110 };
 
 static bool uok(uint64_t p, uint64_t n, bool w) { return n == 0 || user_ok(current->pml4, (const void *)p, n, w); }
@@ -583,6 +584,21 @@ static int chan_fds(struct lxproc *lx, struct chan *r0, struct chan *w0, struct 
     out[0] = a; out[1] = b;
     return 0;
 }
+/* ---------------- /dev: the few devices every Linux program expects ---------------- */
+enum { DEV_NULL = 1, DEV_ZERO, DEV_FULL, DEV_RANDOM, DEV_URANDOM };
+static const struct { const char *name; int minor; } devs[] = {
+    { 0, 0 }, { "null", 3 }, { "zero", 5 }, { "full", 7 }, { "random", 8 }, { "urandom", 9 },
+};
+static int dev_of(const char *full) {                           /* full: a joined path (/system/linux/dev/...) */
+    if (strncmp(full, "/system/linux/dev/", 18)) return 0;
+    for (int i = 1; i < (int)(sizeof devs / sizeof devs[0]); i++) if (!strcmp(full + 18, devs[i].name)) return i;
+    return 0;
+}
+static void dev_stat(struct lstat *st, int dev) {
+    fill_stat(st, false, 0, false, devs[dev].name);
+    st->mode = 0020666; st->rdev = (1 << 8) | (uint64_t)devs[dev].minor; st->blocks = 0;
+}
+
 static uint64_t do_open(struct lxproc *lx, int dirfd, uint64_t upath, int flags) {
     char p[200], full[200];
     if (!ustr(p, upath, sizeof p)) return E(EFAULT_);
@@ -600,6 +616,15 @@ static uint64_t do_open(struct lxproc *lx, int dirfd, uint64_t upath, int flags)
         return fd;
     }
     path_join(lx->cwd, p, full, sizeof full);
+    int dv = dev_of(full);
+    if (dv) {
+        int fd = fd_new(lx, 0);
+        if (fd < 0) return E(EMFILE_);
+        struct lfd *f = &lx->fd[fd]; memset(f, 0, sizeof *f);
+        f->kind = FD_DEV; f->dev = (uint8_t)dv; f->flags = flags & (3 | 04000 | 02000);
+        strncpy0(f->path, full, sizeof f->path);
+        return fd;
+    }
     struct dunc_stat st;
     bool exists = vfs_stat(full, &st) == 0;
     int acc = flags & 3;
@@ -646,6 +671,12 @@ static uint64_t linux_syscall_(struct frame *f) {
         if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
         struct lfd *fd = &lx->fd[a];
         if (fd->kind == FD_TTY_IN) return 0;                     /* (no input yet: end of file) */
+        if (fd->kind == FD_DEV) {
+            if (fd->dev == DEV_NULL) return 0;
+            if (!uok(b, c, true)) return E(EFAULT_);
+            if (fd->dev == DEV_RANDOM || fd->dev == DEV_URANDOM) random_bytes((void *)b, c); else memset((void *)b, 0, c);
+            return c;
+        }
         if (fd->kind == FD_EVENT) {
             struct evfd *ev = fd->obj;
             if (n == 17) return E(ESPIPE_);
@@ -681,6 +712,7 @@ static uint64_t linux_syscall_(struct frame *f) {
         if (!uok(b, c, false)) return E(EFAULT_);
         struct lfd *fd = &lx->fd[a];
         if (fd->kind == FD_TTY_OUT) { out_write(lx, (const char *)b, c); return c; }
+        if (fd->kind == FD_DEV) return fd->dev == DEV_FULL ? E(ENOSPC_) : c;   /* (written to random: mixed in on Linux; here, dropped) */
         if (fd->kind == FD_EVENT) {
             struct evfd *ev = fd->obj;
             if (n == 18) return E(ESPIPE_);
@@ -739,6 +771,7 @@ static uint64_t linux_syscall_(struct frame *f) {
     case 8: {                                                  /* lseek */
         if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
         struct lfd *fd = &lx->fd[a];
+        if (fd->kind == FD_DEV) return 0;
         if (fd->kind != FD_FILE && fd->kind != FD_SHM) return E(ESPIPE_);
         struct dunc_stat st; uint64_t size = fd->kind == FD_SHM ? ((struct shm *)fd->obj)->size : vfs_stat(fd->path, &st) == 0 ? st.size : 0;
         int64_t no = c == 0 ? (int64_t)b : c == 1 ? (int64_t)fd->off + (int64_t)b : c == 2 ? (int64_t)size + (int64_t)b : -1;
@@ -751,6 +784,7 @@ static uint64_t linux_syscall_(struct frame *f) {
         struct lfd *fd = &lx->fd[a]; struct dunc_stat st = { 0 };
         if (fd->kind == FD_FILE || fd->kind == FD_DIR) vfs_stat(fd->path, &st);
         fill_stat((struct lstat *)b, fd->kind == FD_DIR, st.size, fd->kind == FD_TTY_IN || fd->kind == FD_TTY_OUT, fd->kind == FD_FILE || fd->kind == FD_DIR ? fd->path : (a == 0 ? "<stdin>" : "<tty>"));
+        if (fd->kind == FD_DEV) dev_stat((struct lstat *)b, fd->dev);
         if (fd->kind == FD_SHM) {                              /* a file in memory */
             struct lstat *ls = (struct lstat *)b;
             ls->mode = 0100600; ls->size = (int64_t)((struct shm *)fd->obj)->size; ls->blocks = (ls->size + 511) / 512;
@@ -771,6 +805,7 @@ static uint64_t linux_syscall_(struct frame *f) {
         }
         if (!ustr(p, up, sizeof p) || !uok(us, sizeof(struct lstat), true)) return E(EFAULT_);
         path_join(lx->cwd, p, full, sizeof full);
+        if (dev_of(full)) { dev_stat((struct lstat *)us, dev_of(full)); return 0; }
         struct dunc_stat st;
         if (vfs_stat(full, &st) != 0) return E(ENOENT_);
         fill_stat((struct lstat *)us, st.is_dir, st.size, false, full);
@@ -797,7 +832,7 @@ static uint64_t linux_syscall_(struct frame *f) {
         if (!ustr(p, n == 21 ? a : b, sizeof p)) return E(EFAULT_);
         path_join(lx->cwd, p, full, sizeof full);
         struct dunc_stat st;
-        return vfs_stat(full, &st) == 0 ? 0 : E(ENOENT_);
+        return dev_of(full) || vfs_stat(full, &st) == 0 ? 0 : E(ENOENT_);
     }
     case 79: {                                                 /* getcwd */
         uint64_t l = strlen(lx->cwd) + 1;
@@ -1132,6 +1167,10 @@ static uint64_t linux_syscall_(struct frame *f) {
             long r = mm_mmap(t->mm, a, b, prot, 0, &t->proc->pages);
             if (r >= 0 && (uint64_t)r != (a & ~4095ULL)) { mm_munmap(t->mm, r, b, &t->proc->pages); return E(EEXIST_); }
             return r < 0 ? E(ENOMEM_) : (uint64_t)r;
+        }
+        if (!(fl & 0x20) && fd >= 0 && fd < NFD && lx->fd[fd].kind == FD_DEV) {
+            if (lx->fd[fd].dev != DEV_ZERO) return E(ENODEV_);
+            fl |= 0x20;                                        /* /dev/zero: fresh zeroed memory */
         }
         if (dfl) shm_unmapped(lx, a & ~4095ULL, (a + b + 4095) & ~4095ULL);   /* (whatever was there goes) */
         if (!(fl & 0x20) && fd >= 0 && fd < NFD && lx->fd[fd].kind == FD_SHM) {   /* shared memory */

@@ -1,4 +1,4 @@
-/* Linux compatibility check: pipes, socket pairs, poll, eventfd, epoll and shared memory (memfd). Build it on Linux as a static PIE and run it on
+/* Linux compatibility check: pipes, socket pairs, poll, eventfd, epoll, shared memory (memfd) and /dev. Build it on Linux as a static PIE and run it on
  * AXIOM ('run test_chan' with the program in /home); it also runs on Linux itself, which must print the same.
  *   gcc -O1 -static-pie -pthread -o test_chan tests/linux/test_chan.c */
 #define _GNU_SOURCE
@@ -15,6 +15,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #include <sys/socket.h>
@@ -284,6 +285,25 @@ int main(void) {
     close(mf);
     CHECK(mb[0] == 'a' && mb[3 * 4096] == 'd');
     munmap(mb, 4096); munmap(mb + 3 * 4096, 4096);
+
+    /* /dev */
+    int dn = open("/dev/null", O_RDWR | O_CLOEXEC);
+    CHECK(dn > 2 && write(dn, "gone", 4) == 4 && read(dn, buf, sizeof buf) == 0);
+    struct stat dst; CHECK(fstat(dn, &dst) == 0 && S_ISCHR(dst.st_mode) && major(dst.st_rdev) == 1 && minor(dst.st_rdev) == 3);
+    close(dn);
+    CHECK(stat("/dev/urandom", &dst) == 0 && S_ISCHR(dst.st_mode) && access("/dev/null", W_OK) == 0);
+    int du = open("/dev/urandom", O_RDONLY);
+    uint64_t u1 = 0, u2 = 0;
+    CHECK(read(du, &u1, 8) == 8 && read(du, &u2, 8) == 8 && u1 != u2);
+    close(du);
+    int dz = open("/dev/zero", O_RDONLY);
+    memset(buf, 1, 16); CHECK(read(dz, buf, 16) == 16 && buf[0] == 0 && buf[15] == 0);
+    char *zm = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE, dz, 0);
+    CHECK(zm != MAP_FAILED && zm[100] == 0);
+    munmap(zm, 4096); close(dz);
+    int df = open("/dev/full", O_WRONLY);
+    CHECK(write(df, "x", 1) == -1 && errno == ENOSPC);
+    close(df);
 
     printf("%s: %d checks, %d failed\n", fails ? "FAILED" : "PASSED", checks, fails);
     return fails != 0;
