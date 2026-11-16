@@ -1,0 +1,38 @@
+diff --git a/build/config/ozone.gni b/build/config/ozone.gni
+index f75adeef2d..28928ba063 100644
+--- a/build/config/ozone.gni
++++ b/build/config/ozone.gni
+@@ -47,6 +47,9 @@ declare_args() {
+   # Compile the 'headless' platform.
+   ozone_platform_headless = false
+ 
++  # Compile the 'axiom' platform (AXIOM windows, software rendering).
++  ozone_platform_axiom = false
++
+   # Compile the 'flatland' platform.
+   ozone_platform_flatland = false
+ 
+@@ -106,6 +109,7 @@ if (is_a_target_toolchain) {
+   assert(
+       use_ozone || !(ozone_platform_cast || ozone_platform_drm ||
+                          ozone_platform_flatland || ozone_platform_headless ||
++                         ozone_platform_axiom ||
+                          ozone_platform_x11 || ozone_platform_wayland),
+       "Must set use_ozone to select ozone platforms")
+ }
+diff --git a/ui/ozone/BUILD.gn b/ui/ozone/BUILD.gn
+index 44442dbdb5..95ee0bcad8 100644
+--- a/ui/ozone/BUILD.gn
++++ b/ui/ozone/BUILD.gn
+@@ -34,6 +34,11 @@ ozone_platform_ui_test_support_deps =
+ ozone_platform_interactive_ui_tests_sources =
+     ozone_external_interactive_ui_tests_deps
+ 
++if (ozone_platform_axiom) {
++  ozone_platforms += [ "axiom" ]
++  ozone_platform_deps += [ "platform/axiom" ]
++}
++
+ if (ozone_platform_headless) {
+   ozone_platforms += [ "headless" ]
+   ozone_platform_deps += [ "platform/headless" ]

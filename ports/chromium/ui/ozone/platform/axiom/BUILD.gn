@@ -1,0 +1,46 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Ozone platform for AXIOM (https://github.com/Duncancph/axiom-os): Chromium
+# runs there through AXIOM's Linux compatibility layer and draws into an AXIOM
+# window (/dev/axiom/window, see axiom_window_abi.h). Software rendering only.
+
+visibility = [ "//ui/ozone/*" ]
+
+source_set("axiom") {
+  sources = [
+    "axiom_pixels.cc",
+    "axiom_pixels.h",
+    "axiom_surface_factory.cc",
+    "axiom_surface_factory.h",
+    "axiom_window.cc",
+    "axiom_window.h",
+    "axiom_window_abi.h",
+    "client_native_pixmap_factory_axiom.cc",
+    "client_native_pixmap_factory_axiom.h",
+    "ozone_platform_axiom.cc",
+    "ozone_platform_axiom.h",
+  ]
+
+  defines = [ "OZONE_IMPLEMENTATION" ]
+
+  public_deps = [ "//ui/ozone:platform_headers" ]
+
+  deps = [
+    "//base",
+    "//skia",
+    "//ui/base",
+    "//ui/base/cursor",
+    "//ui/base/ime",
+    "//ui/display",
+    "//ui/events",
+    "//ui/events/ozone/layout",
+    "//ui/events/platform",
+    "//ui/gfx/geometry",
+    "//ui/ozone:ozone_base",
+    "//ui/ozone/common",
+    "//ui/ozone/platform/headless",
+    "//ui/platform_window",
+  ]
+}
