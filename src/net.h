@@ -35,3 +35,20 @@ int  tcp_connect(const struct ipaddr *ip, uint16_t port, uint32_t timeout_ms);
 long tcp_send(int h, const void *buf, uint32_t len);
 long tcp_recv(int h, void *buf, uint32_t len, int64_t timeout_ms);
 int  tcp_close(int h);
+/* sockets for Linux programs: nothing waits, linux_net_wake() is called when something changes */
+struct tcp_sock_info { int state;                 /* 0 connecting, 1 connected, 2 closed, 3 we've sent FIN */
+                       int err; uint32_t rlen, sfree; bool eof; struct ipaddr lip, rip; uint16_t lport, rport; };
+int  tcp_sock_open(const struct ipaddr *ip, uint16_t port, const void *who);
+int  tcp_sock_info(int h, const void *who, struct tcp_sock_info *i);
+long tcp_sock_send(int h, const void *who, const void *buf, uint32_t len);
+long tcp_sock_recv(int h, const void *who, void *buf, uint32_t len, bool peek);
+void tcp_sock_shutdown(int h, const void *who);
+void tcp_sock_close(int h, const void *who);
+int  udp_sock_open(const void *who, uint16_t port);
+int  udp_sock_port(int h, const void *who);
+long udp_sock_send(int h, const void *who, const struct ipaddr *dst, uint16_t dport, const void *buf, uint32_t len);
+long udp_sock_recv(int h, const void *who, void *buf, uint32_t len, struct ipaddr *from, uint16_t *fport, bool peek, uint32_t *full);
+int  udp_sock_pending(int h, const void *who);
+void udp_sock_close(int h, const void *who);
+int  net_local_addr(const struct ipaddr *dst, struct ipaddr *out);
+void linux_net_wake(void);                          /* (linux.c) */

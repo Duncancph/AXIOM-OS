@@ -5,6 +5,7 @@
 #include "kernel.h"
 #include "vfs.h"
 #include "axiom_window.h"
+#include "net.h"
 
 /* ---------------- the syscall instruction ---------------- */
 extern void syscall_entry(void);
@@ -18,7 +19,7 @@ void linux_cpu_init(void) {
 }
 
 /* ---------------- a Linux program's state ---------------- */
-enum { FD_NONE, FD_TTY_IN, FD_TTY_OUT, FD_FILE, FD_DIR, FD_CHAN, FD_EVENT, FD_EPOLL, FD_SHM, FD_DEV, FD_WIN, FD_SND };
+enum { FD_NONE, FD_TTY_IN, FD_TTY_OUT, FD_FILE, FD_DIR, FD_CHAN, FD_EVENT, FD_EPOLL, FD_SHM, FD_DEV, FD_WIN, FD_SND, FD_INET };
 /* sound devices (linux_snd.c): /dev/snd/controlC0 and pcmC0D0p */
 void *snd_open(int kind); void snd_put(void *o); long snd_ioctl(void *o, uint32_t cmd, uint64_t arg, bool nonblock);
 long snd_write(void *o, uint64_t ubuf, uint64_t bytes, bool nonblock); int snd_ready(void *o, bool *waiting);
@@ -30,7 +31,7 @@ struct chan;
 struct lfd { int kind; int flags; uint64_t off; char path[200]; struct chan *rx, *tx; bool sock; uint8_t stype;
              uint8_t dev;    /* FD_DEV: which of devs[] */
              void *obj; };   /* FD_EVENT: a struct evfd, FD_EPOLL: a struct epoll, FD_SHM: a struct shm,
-                                FD_WIN: a struct axwin (shared by duplicates); FD_CHAN after shutdown: its
+                                FD_WIN: a struct axwin (shared by duplicates), FD_INET: a struct isock; FD_CHAN after shutdown: its
                                 identity from before (compared only, never used) */
 struct shmmap;
 #define NFD 128
@@ -80,7 +81,9 @@ uint64_t linux_now_ns(void);
 #define E(x) ((uint64_t)-(long)(x))
 enum { EPERM_ = 1, ENOENT_ = 2, EBADF_ = 9, EAGAIN_ = 11, ENOMEM_ = 12, EFAULT_ = 14, EEXIST_ = 17, ENOTDIR_ = 20, EISDIR_ = 21,
        EACCES_ = 13, EBUSY_ = 16, ENODEV_ = 19, ENOSPC_ = 28, EINVAL_ = 22, EMFILE_ = 24, ENOTTY_ = 25, ESPIPE_ = 29, EPIPE_ = 32, ERANGE_ = 34, ENOSYS_ = 38, ENOTSOCK_ = 88,
-       EMSGSIZE_ = 90, ENOPROTOOPT_ = 92, EOPNOTSUPP_ = 95, EAFNOSUPPORT_ = 97, ETIMEDOUT_ = 110 };
+       EMSGSIZE_ = 90, ENOPROTOOPT_ = 92, EOPNOTSUPP_ = 95, EAFNOSUPPORT_ = 97, ETIMEDOUT_ = 110, EINTR_ = 4, EPROTONOSUPPORT_ = 93,
+       EADDRINUSE_ = 98, ENETDOWN_ = 100, ENETUNREACH_ = 101, ECONNRESET_ = 104, ENOBUFS_ = 105, EISCONN_ = 106, ENOTCONN_ = 107,
+       ECONNREFUSED_ = 111, EHOSTUNREACH_ = 113, EALREADY_ = 114, EINPROGRESS_ = 115, EDESTADDRREQ_ = 89 };
 
 static bool uok(uint64_t p, uint64_t n, bool w) { return n == 0 || user_ok(current->pml4, (const void *)p, n, w); }
 static bool ustr(char *dst, uint64_t src, size_t max) {
@@ -198,7 +201,9 @@ static bool load_elf(struct mm *m, struct lxproc *lx, const char *path, uint64_t
 #define INTERP_BASE 0xC800000000ULL
 #define STACK_SIZE  (8ULL << 20)
 
+static void lx_net_files(void);
 int linux_spawn(const char *path, int argc, char **argv, struct task *out) {
+    lx_net_files();                                              /* /etc/resolv.conf: the DNS server AXIOM uses now */
     struct mm *m = mm_new();
     struct lxproc *lx = kmalloc(sizeof *lx);
     if (!m || !lx) { if (m) mm_put(m); kfree(lx); return -1; }
@@ -370,6 +375,9 @@ struct axwin {
     struct axwin *next;
 };
 static void axwin_put(struct axwin *x);
+struct isock;
+static void isock_put(struct isock *s);
+static int isock_ready(struct isock *s);
 struct epitem { int fd; uint32_t events; uint64_t data; const void *id; bool off; };
 struct epoll { int refs, n, next; struct epitem it[NFD]; };
 static void fd_close(struct lfd *f) {
@@ -378,6 +386,7 @@ static void fd_close(struct lfd *f) {
     if (f->kind == FD_SHM) shm_put(f->obj);
     if (f->kind == FD_WIN) axwin_put(f->obj);
     if (f->kind == FD_SND) snd_put(f->obj);
+    if (f->kind == FD_INET) isock_put(f->obj);
     memset(f, 0, sizeof *f);
 }
 static void fd_copy(struct lfd *dst, const struct lfd *src) {      /* dup: one more reference to the same ends */
@@ -385,7 +394,7 @@ static void fd_copy(struct lfd *dst, const struct lfd *src) {      /* dup: one m
     fd_close(dst);
     *dst = *src;
     if (dst->kind == FD_CHAN) { if (dst->rx) dst->rx->readers++; if (dst->tx) dst->tx->writers++; }
-    if ((dst->kind == FD_EVENT || dst->kind == FD_EPOLL || dst->kind == FD_SHM || dst->kind == FD_WIN || dst->kind == FD_SND) && dst->obj) (*(int *)dst->obj)++;
+    if ((dst->kind == FD_EVENT || dst->kind == FD_EPOLL || dst->kind == FD_SHM || dst->kind == FD_WIN || dst->kind == FD_SND || dst->kind == FD_INET) && dst->obj) (*(int *)dst->obj)++;
 }
 /* move bytes in or out of the ring (to / from a kernel buffer) */
 static void ring_put(struct chan *c, const uint8_t *s, uint32_t n) {
@@ -503,6 +512,7 @@ static int fd_ready(struct lxproc *lx, int fd) {
     case FD_EPOLL: return epoll_scan(lx, f->obj, 0, 1) ? POLLIN_ : 0;
     case FD_WIN: { struct axwin *x = f->obj; return (x->qh != x->qt ? POLLIN_ : 0) | POLLOUT_; }
     case FD_SND: return snd_ready(f->obj, &snd_waiting);
+    case FD_INET: return isock_ready(f->obj);
     default: return POLLIN_ | POLLOUT_;                          /* files are always ready */
     }
 }
@@ -536,7 +546,7 @@ static uint64_t do_poll(struct lxproc *lx, uint64_t ufds, uint64_t nfds, int64_t
 #define EPOLLET_      (1u << 31)
 static const void *fd_id(const struct lfd *f) {               /* which open file an fd number refers to */
     if (f->kind == FD_CHAN) return f->obj ? f->obj : f->rx ? (const void *)f->rx : (const void *)f->tx;   /* (obj: kept from before shutdown) */
-    if (f->kind == FD_EVENT || f->kind == FD_EPOLL || f->kind == FD_SHM || f->kind == FD_WIN) return f->obj;
+    if (f->kind == FD_EVENT || f->kind == FD_EPOLL || f->kind == FD_SHM || f->kind == FD_WIN || f->kind == FD_INET) return f->obj;
     return f;
 }
 /* ready entries into out (12-byte struct epoll_event, packed), up to max; out 0: just count (no one-shot change) */
@@ -583,6 +593,173 @@ static uint64_t do_epoll_wait(struct lxproc *lx, uint64_t epfd, uint64_t uev, in
         chan_wait(left);
     }
 }
+/* ---------------- internet sockets: TCP and UDP through AXIOM's network stack (net.c) ----------------
+ * AF_INET and AF_INET6 (an IPv6 socket also reaches IPv4 addresses, written ::ffff:a.b.c.d). Nothing in net.c
+ * waits: a socket that would block waits here (chan_wait) and net.c's thread wakes the waiters whenever a
+ * connection or a UDP port of a Linux program changes (linux_net_wake). No listening (accept) yet. */
+struct isock { int refs; int type; int fam;          /* type 1 SOCK_STREAM, 2 SOCK_DGRAM; fam 2 AF_INET, 10 AF_INET6 */
+               int h;                                /* the net.c handle, or -1 */
+               bool peer_set; struct ipaddr peer; uint16_t pport;   /* connected to (UDP: the default destination) */
+               uint16_t bport; int err; bool rd_shut, wr_shut, connecting; };
+void linux_net_wake(void) { chan_wake(); }
+static uint64_t neterr(long r) {
+    switch (r) {
+    case NET_EAGAIN: return E(EAGAIN_);
+    case NET_EREFUSED: return E(ECONNREFUSED_);
+    case NET_ERESET: return E(ECONNRESET_);
+    case NET_ETIMEDOUT: return E(ETIMEDOUT_);
+    case NET_EUNREACH: return E(EHOSTUNREACH_);
+    case NET_ENOTCONN: case NET_ENODEV: return E(ENETUNREACH_);
+    case NET_ENOMEM: return E(ENOBUFS_);
+    default: return E(EINVAL_);
+    }
+}
+static void isock_put(struct isock *s) {
+    if (!s || --s->refs > 0) return;
+    if (s->h >= 0) { if (s->type == 1) tcp_sock_close(s->h, s); else udp_sock_close(s->h, s); }
+    kfree(s);
+}
+static int isock_ready(struct isock *s) {
+    if (s->type == 2) return (s->h >= 0 && udp_sock_pending(s->h, s) ? POLLIN_ : 0) | POLLOUT_;
+    if (s->h < 0) return s->err ? POLLERR_ | POLLHUP_ | POLLOUT_ : POLLOUT_ | POLLHUP_;   /* (as Linux says for a socket never connected) */
+    struct tcp_sock_info i;
+    if (tcp_sock_info(s->h, s, &i)) return POLLERR_ | POLLHUP_;
+    if (i.state == 0) return 0;                                  /* still connecting */
+    int r = 0;
+    if (i.rlen || i.eof || s->rd_shut) r |= POLLIN_;
+    if (i.eof || s->rd_shut) r |= POLLRDHUP_;
+    if (i.state == 1 && i.sfree) r |= POLLOUT_;
+    if (i.state == 2) r |= POLLIN_ | POLLOUT_ | POLLHUP_ | (i.err ? POLLERR_ : 0);
+    if (i.state == 3 && i.eof) r |= POLLHUP_;
+    return r;
+}
+/* a user sockaddr: AF_INET (16 bytes) or AF_INET6 (28); ::ffff:a.b.c.d becomes the IPv4 address.
+ * Returns 0, 1 for AF_UNSPEC, or an error */
+static int64_t sa_get(uint64_t ua, uint64_t len, struct ipaddr *ip, uint16_t *port) {
+    if (len < 2 || !uok(ua, len, false)) return (int64_t)E(EFAULT_);
+    const uint8_t *a = (const uint8_t *)ua;
+    uint16_t fam = *(const uint16_t *)a;
+    memset(ip, 0, sizeof *ip);
+    if (fam == 0) return 1;
+    if (fam == 2) { if (len < 16) return (int64_t)E(EINVAL_); *port = (uint16_t)(a[2] << 8 | a[3]); memcpy(ip->b, a + 4, 4); return 0; }
+    if (fam == 10) {
+        if (len < 24) return (int64_t)E(EINVAL_);
+        *port = (uint16_t)(a[2] << 8 | a[3]);
+        static const uint8_t mapped[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF };
+        if (!memcmp(a + 8, mapped, 12)) { memcpy(ip->b, a + 20, 4); return 0; }
+        ip->v6 = 1; memcpy(ip->b, a + 8, 16); return 0;
+    }
+    return (int64_t)E(EAFNOSUPPORT_);
+}
+/* write an address back in the socket's family (ulen: the user's socklen_t, in and out) */
+static void sa_put(const struct isock *s, uint64_t ua, uint64_t ulen, const struct ipaddr *ip, uint16_t port) {
+    if (!ua || !ulen || !uok(ulen, 4, true)) return;
+    uint8_t b[28]; memset(b, 0, sizeof b);
+    uint32_t n;
+    b[2] = (uint8_t)(port >> 8); b[3] = (uint8_t)port;
+    if (s->fam == 2) { *(uint16_t *)b = 2; if (!ip->v6) memcpy(b + 4, ip->b, 4); n = 16; }
+    else {
+        *(uint16_t *)b = 10; n = 28;
+        if (ip->v6) memcpy(b + 8, ip->b, 16);
+        else if (ip->b[0] | ip->b[1] | ip->b[2] | ip->b[3]) { b[18] = b[19] = 0xFF; memcpy(b + 20, ip->b, 4); }
+    }
+    uint32_t have = *(uint32_t *)ulen, k = have < n ? have : n;
+    if (k && uok(ua, k, true)) memcpy((void *)ua, b, k);
+    *(uint32_t *)ulen = n;
+}
+static int64_t isock_connect(struct isock *s, const struct ipaddr *ip, uint16_t port, bool nb) {
+    if (s->fam == 2 && ip->v6) return (int64_t)E(EAFNOSUPPORT_);
+    if (s->type == 2) {
+        if (s->h < 0) { int h = udp_sock_open(s, s->bport); if (h < 0) return (int64_t)neterr(h); s->h = h; }
+        s->peer = *ip; s->pport = port; s->peer_set = true;
+        return 0;
+    }
+    if (s->h >= 0) return (int64_t)E(s->connecting ? EALREADY_ : EISCONN_);
+    int h = tcp_sock_open(ip, port, s);
+    if (h < 0) return (int64_t)neterr(h);
+    s->h = h; s->peer = *ip; s->pport = port; s->peer_set = true; s->connecting = true;
+    if (nb) return (int64_t)E(EINPROGRESS_);
+    struct tcp_sock_info i;
+    while (!tcp_sock_info(s->h, s, &i) && i.state == 0) chan_wait(-1);
+    s->connecting = false;
+    if (i.state == 2 && i.err) { s->err = 0; return (int64_t)neterr(i.err); }
+    return 0;
+}
+/* the result of a connect started without waiting (SO_ERROR), once */
+static int isock_soerror(struct isock *s) {
+    if (s->err) { int e = s->err; s->err = 0; return e; }
+    if (s->type != 1 || s->h < 0 || !s->connecting) return 0;
+    struct tcp_sock_info i;
+    if (tcp_sock_info(s->h, s, &i) || i.state == 0) return 0;
+    s->connecting = false;
+    return i.state == 2 && i.err ? (int)-(int64_t)neterr(i.err) : 0;
+}
+static int64_t isock_send(struct isock *s, const uint8_t *buf, uint64_t n, const struct ipaddr *to, uint16_t tport, bool nb) {
+    if (s->type == 2) {
+        if (!to) { if (!s->peer_set) return (int64_t)E(EDESTADDRREQ_); to = &s->peer; tport = s->pport; }
+        if (s->fam == 2 && to->v6) return (int64_t)E(EAFNOSUPPORT_);
+        if (s->h < 0) { int h = udp_sock_open(s, s->bport); if (h < 0) return (int64_t)neterr(h); s->h = h; }
+        if (n > 1440) return (int64_t)E(EMSGSIZE_);
+        long r = udp_sock_send(s->h, s, to, tport, buf, (uint32_t)n);
+        return r < 0 ? (int64_t)neterr(r) : r;
+    }
+    if (s->h < 0) return (int64_t)E(ENOTCONN_);
+    if (s->wr_shut) return (int64_t)E(EPIPE_);
+    uint64_t done = 0;
+    for (;;) {                                                   /* blocking: all of it; O_NONBLOCK: what fits */
+        long r = done < n ? tcp_sock_send(s->h, s, buf + done, (uint32_t)(n - done > (1u << 20) ? 1u << 20 : n - done)) : 0;
+        if (r > 0) { done += (uint64_t)r; continue; }
+        if (done == n) break;
+        if (r == NET_EAGAIN) { if (nb) break; chan_wait(-1); continue; }   /* (also while still connecting) */
+        if (done) break;
+        return (int64_t)(r == NET_ERESET ? E(EPIPE_) : neterr(r));
+    }
+    return done || !n ? (int64_t)done : (int64_t)E(EAGAIN_);
+}
+static int64_t isock_recv(struct isock *s, uint8_t *buf, uint64_t n, bool nb, bool peek, struct ipaddr *from, uint16_t *fport, uint32_t *full) {
+    if (n > (1u << 30)) n = 1u << 30;
+    for (;;) {
+        long r;
+        if (s->type == 2) {
+            if (s->h < 0) r = NET_EAGAIN;
+            else r = udp_sock_recv(s->h, s, buf, (uint32_t)n, from, fport, peek, full);
+        } else {
+            if (s->rd_shut) return 0;
+            if (s->h < 0) return (int64_t)E(ENOTCONN_);
+            r = tcp_sock_recv(s->h, s, buf, (uint32_t)n, peek);
+            if (r == NET_EAGAIN) { struct tcp_sock_info i; if (!tcp_sock_info(s->h, s, &i) && i.state == 3 && i.eof) r = 0; }
+            if (from && r >= 0) { *from = s->peer; *fport = s->pport; }
+        }
+        if (r != NET_EAGAIN || nb) return r < 0 ? (int64_t)neterr(r) : r;
+        chan_wait(-1);
+    }
+}
+static uint64_t isock_new(struct lxproc *lx, int fam, int type, int flags) {
+    struct isock *s = kmalloc(sizeof *s);
+    if (!s) return E(ENOMEM_);
+    int k = fd_new(lx, 0);
+    if (k < 0) { kfree(s); return E(EMFILE_); }
+    memset(s, 0, sizeof *s); s->refs = 1; s->type = type; s->fam = fam; s->h = -1;
+    struct lfd *fd = &lx->fd[k]; memset(fd, 0, sizeof *fd);
+    fd->kind = FD_INET; fd->obj = s; fd->sock = true; fd->stype = (uint8_t)type; fd->flags = 2 | (flags & 04000);
+    return (uint64_t)k;
+}
+/* /etc/resolv.conf and /etc/hosts for the C library's name lookups: the DNS server AXIOM uses now */
+static void lx_net_files(void) {
+    struct dunc_netinfo ni; net_get_info(&ni);
+    char txt[128], ip[IP_STRLEN];
+    bool have = ni.dns_now.v6 || ni.dns_now.b[0] || ni.dns_now.b[1] || ni.dns_now.b[2] || ni.dns_now.b[3];
+    if (have) ip_format(&ni.dns_now, ip); else strncpy0(ip, "10.0.2.3", sizeof ip);
+    int n = ksnprintf(txt, sizeof txt, "# made by AXIOM: the DNS server it uses now\nnameserver %s\n", ip);
+    char old[128]; long k = vfs_read("/system/linux/etc/resolv.conf", old, 0, sizeof old - 1);
+    if (k != n || memcmp(old, txt, n)) vfs_write("/system/linux/etc/resolv.conf", txt, n);
+    struct dunc_stat st;
+    if (vfs_stat("/system/linux/etc/hosts", &st) != 0) {
+        static const char hosts[] = "127.0.0.1 localhost\n::1 localhost ip6-localhost ip6-loopback\n";
+        vfs_write("/system/linux/etc/hosts", hosts, sizeof hosts - 1);
+    }
+}
+
 /* ---------------- shared memory: memfd_create ----------------
  * A memfd is a list of pages, given as they're first needed. Mapping it MAP_SHARED puts those same pages in
  * the program's page tables (as SHARED: page tables never free them). It lives while an fd or a mapping
@@ -981,7 +1158,7 @@ uint64_t linux_syscall(struct frame *f) {
     switch (f->rax) {
     case 0: case 1: case 3: case 5: case 8: case 16: case 17: case 18: case 19: case 20: case 32: case 33: case 72:
     case 77: case 138: case 217: case 285: case 292: case 44: case 45: case 46: case 47: case 48: case 232: case 281: case 54: case 55:
-    case 441: case 74: case 75: case 81:
+    case 441: case 74: case 75: case 81: case 41: case 42: case 43: case 49: case 50: case 51: case 52: case 288: case 299: case 307:
         f->rdi = (uint32_t)f->rdi; break;                        /* the first argument is a file */
     case 233: f->rdi = (uint32_t)f->rdi; f->rdx = (uint32_t)f->rdx; break;   /* epoll_ctl: two */
     case 9: f->r8 = (uint64_t)(int64_t)(int32_t)f->r8; f->rdx = (uint32_t)f->rdx; f->r10 = (uint32_t)f->r10; break;   /* mmap: fd (-1 for none), prot, flags */
@@ -1003,6 +1180,11 @@ static uint64_t linux_syscall_(struct frame *f) {
         if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
         struct lfd *fd = &lx->fd[a];
         if (fd->kind == FD_TTY_IN) return 0;                     /* (no input yet: end of file) */
+        if (fd->kind == FD_INET) {
+            if (n == 17) return E(ESPIPE_);
+            if (!uok(b, c, true)) return E(EFAULT_);
+            return (uint64_t)isock_recv(fd->obj, (uint8_t *)b, c, fd->flags & 04000, false, 0, 0, 0);
+        }
         if (fd->kind == FD_WIN) {                               /* window events: whole records */
             struct axwin *x = fd->obj;
             if (n == 17) return E(ESPIPE_);
@@ -1058,6 +1240,7 @@ static uint64_t linux_syscall_(struct frame *f) {
         if (fd->kind == FD_TTY_OUT) { out_write(lx, (const char *)b, c); return c; }
         if (fd->kind == FD_WIN) return E(EINVAL_);
         if (fd->kind == FD_SND) { long r = snd_write(fd->obj, b, c, fd->flags & 04000); return r < 0 ? E(-r) : (uint64_t)r; }
+        if (fd->kind == FD_INET) return n == 18 ? E(ESPIPE_) : (uint64_t)isock_send(fd->obj, (const uint8_t *)b, c, 0, 0, fd->flags & 04000);
         if (fd->kind == FD_DEV) return fd->dev == DEV_FULL ? E(ENOSPC_) : c;   /* (written to random: mixed in on Linux; here, dropped) */
         if (fd->kind == FD_EVENT) {
             struct evfd *ev = fd->obj;
@@ -1223,6 +1406,17 @@ static uint64_t linux_syscall_(struct frame *f) {
         }
         if (a < NFD && lx->fd[a].kind == FD_WIN) return axwin_ioctl(lx, &lx->fd[a], (uint32_t)b, c);
         if (a < NFD && lx->fd[a].kind == FD_SND) { long r = snd_ioctl(lx->fd[a].obj, (uint32_t)b, c, lx->fd[a].flags & 04000); return r < 0 ? E(-r) : (uint64_t)r; }
+        if (a < NFD && lx->fd[a].kind == FD_INET) {
+            struct lfd *fd = &lx->fd[a]; struct isock *so = fd->obj;
+            if (b == 0x541B && uok(c, 4, true)) {                /* FIONREAD */
+                struct tcp_sock_info i; uint32_t full = 0; uint8_t one;
+                if (so->type == 1) *(int32_t *)c = so->h >= 0 && !tcp_sock_info(so->h, so, &i) ? (int32_t)i.rlen : 0;
+                else *(int32_t *)c = so->h >= 0 && udp_sock_recv(so->h, so, &one, 1, 0, 0, true, &full) >= 0 ? (int32_t)full : 0;
+                return 0;
+            }
+            if (b == 0x5421 && uok(c, 4, false)) { if (*(int32_t *)c) fd->flags |= 04000; else fd->flags &= ~04000; return 0; }   /* FIONBIO */
+            return E(ENOTTY_);
+        }
         if (a < NFD && lx->fd[a].kind == FD_CHAN) {
             struct lfd *fd = &lx->fd[a];
             if (b == 0x541B && uok(c, 4, true)) { *(int32_t *)c = fd->rx ? (int32_t)(fd->rx->packet && fd->rx->mcount ? fd->rx->msg[fd->rx->mhead] : fd->rx->len) : 0; return 0; }   /* FIONREAD */
@@ -1293,6 +1487,22 @@ static uint64_t linux_syscall_(struct frame *f) {
     case 54: case 55: {                                        /* setsockopt, getsockopt: socket pairs */
         if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
         struct lfd *fd = &lx->fd[a];
+        if (fd->kind == FD_INET) {                             /* options are taken and mostly ignored (net.c has fixed buffers) */
+            struct isock *so = fd->obj;
+            if (n == 54) return uok(d, e < 4 ? 4 : e, false) ? 0 : E(EFAULT_);
+            if (!uok(e, 4, true) || *(uint32_t *)e < 4 || !uok(d, *(uint32_t *)e, true)) return E(EFAULT_);
+            uint32_t v = 0;
+            if (b == 1) switch (c) {                           /* SOL_SOCKET */
+                case 3: v = (uint32_t)so->type; break;         /* SO_TYPE */
+                case 4: v = (uint32_t)isock_soerror(so); break;   /* SO_ERROR */
+                case 7: case 8: v = 65536; break;              /* SO_SNDBUF, SO_RCVBUF */
+                case 39: v = (uint32_t)so->fam; break;         /* SO_DOMAIN */
+                case 38: v = so->type == 1 ? 6 : 17; break;    /* SO_PROTOCOL */
+                default: v = 0;
+            } else if (b == 6 && c == 2) v = 1460;             /* TCP_MAXSEG */
+            *(uint32_t *)d = v; *(uint32_t *)e = 4;
+            return 0;
+        }
         if (fd->kind != FD_CHAN || !fd->sock) return E(ENOTSOCK_);
         if (n == 54) {
             if (!uok(d, e < 4 ? 4 : e, false)) return E(EFAULT_);
@@ -1317,9 +1527,85 @@ static uint64_t linux_syscall_(struct frame *f) {
         *(uint32_t *)d = v; *(uint32_t *)e = 4;
         return 0;
     }
+    case 41: {                                                 /* socket: internet sockets (AF_UNIX: use socketpair) */
+        int type = (int)(b & 0xF);
+        if (a != 2 && a != 10) return a == 1 ? E(ENOSYS_) : E(EAFNOSUPPORT_);
+        if ((b & ~(uint64_t)0xF) & ~(uint64_t)(04000 | 02000000)) return E(EINVAL_);   /* SOCK_NONBLOCK, SOCK_CLOEXEC */
+        if (type != 1 && type != 2) return E(EPROTONOSUPPORT_);
+        if (c && c != (type == 1 ? 6u : 17u)) return E(EPROTONOSUPPORT_);
+        return isock_new(lx, (int)a, type, (int)b);
+    }
+    case 42: case 49: {                                        /* connect, bind */
+        if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
+        struct lfd *fd = &lx->fd[a];
+        if (fd->kind != FD_INET) return E(ENOTSOCK_);
+        struct isock *so = fd->obj;
+        struct ipaddr ip; uint16_t port = 0;
+        int64_t r = sa_get(b, c, &ip, &port);
+        if (r < 0) return (uint64_t)r;
+        if (n == 49) {                                         /* bind: only the port matters (one address per machine here) */
+            if (so->h >= 0 || so->bport) return E(EINVAL_);
+            so->bport = port;
+            if (so->type == 2) { int h = udp_sock_open(so, port); if (h < 0) return h == NET_EINVAL ? E(EADDRINUSE_) : neterr(h); so->h = h; so->bport = (uint16_t)udp_sock_port(h, so); }
+            return 0;
+        }
+        if (r == 1) { if (so->type == 2) so->peer_set = false; return 0; }   /* AF_UNSPEC: forget the peer (UDP) */
+        return (uint64_t)isock_connect(so, &ip, port, fd->flags & 04000);
+    }
+    case 50: case 43: case 288:                                /* listen, accept, accept4: no servers yet */
+        if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
+        return lx->fd[a].kind == FD_INET ? E(EOPNOTSUPP_) : E(ENOTSOCK_);
+    case 51: case 52: {                                        /* getsockname, getpeername */
+        if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
+        struct lfd *fd = &lx->fd[a];
+        if (fd->kind == FD_CHAN && fd->sock) {                 /* a socket pair: an unnamed AF_UNIX address */
+            if (!uok(c, 4, true)) return E(EFAULT_);
+            if (*(uint32_t *)c >= 2 && uok(b, 2, true)) *(uint16_t *)b = 1;
+            *(uint32_t *)c = 2; return 0;
+        }
+        if (fd->kind != FD_INET) return E(ENOTSOCK_);
+        struct isock *so = fd->obj;
+        struct ipaddr ip; memset(&ip, 0, sizeof ip); uint16_t port = 0;
+        if (n == 52) {
+            if (!so->peer_set) return E(ENOTCONN_);
+            if (so->type == 1) { struct tcp_sock_info i; if (so->h < 0 || tcp_sock_info(so->h, so, &i) || i.state == 0) return E(ENOTCONN_); }
+            ip = so->peer; port = so->pport;
+        } else if (so->type == 1) {
+            struct tcp_sock_info i;
+            if (so->h >= 0 && !tcp_sock_info(so->h, so, &i)) { ip = i.lip; port = i.lport; } else port = so->bport;
+        } else {
+            if (so->peer_set) net_local_addr(&so->peer, &ip);
+            port = so->h >= 0 ? (uint16_t)udp_sock_port(so->h, so) : so->bport;
+        }
+        if (so->fam == 10 && !ip.v6 && !(ip.b[0] | ip.b[1] | ip.b[2] | ip.b[3])) ip.v6 = 0;
+        sa_put(so, b, c, &ip, port);
+        return 0;
+    }
+    case 307: case 299: {                                      /* sendmmsg, recvmmsg: several sendmsg / recvmsg */
+        if (c > 1024) c = 1024;
+        if (!uok(b, c * 64, true)) return E(EFAULT_);
+        uint64_t k = 0;
+        for (; k < c; k++) {
+            struct frame g = *f; g.rax = n == 307 ? 46 : 47; g.rdi = a; g.rsi = b + k * 64;
+            g.rdx = (d & ~(uint64_t)0x10000) | (k && n == 299 ? 0x40 : 0);   /* (MSG_WAITFORONE: wait for the first only) */
+            uint64_t r = linux_syscall_(&g);
+            if ((int64_t)r < 0) { if (k) break; return r; }
+            *(uint32_t *)(b + k * 64 + 56) = (uint32_t)r;
+        }
+        return k;
+    }
     case 48: {                                                 /* shutdown */
         if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
         struct lfd *fd = &lx->fd[a];
+        if (fd->kind == FD_INET) {
+            struct isock *so = fd->obj;
+            if (b > 2) return E(EINVAL_);
+            if (so->type == 1 && so->h < 0) return E(ENOTCONN_);
+            if (b != 1) so->rd_shut = true;
+            if (b != 0) { so->wr_shut = true; if (so->type == 1) tcp_sock_shutdown(so->h, so); }
+            chan_wake();
+            return 0;
+        }
         if (fd->kind != FD_CHAN || !fd->sock) return E(ENOTSOCK_);
         if (b > 2) return E(EINVAL_);
         if (!fd->obj) fd->obj = (void *)fd_id(fd);             /* the same open file to epoll after this (Mojo shuts a socket down, then stops watching it) */
@@ -1420,6 +1706,21 @@ static uint64_t linux_syscall_(struct frame *f) {
     case 44: case 45: {                                        /* sendto, recvfrom: on a socket pair (no addresses) */
         if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
         struct lfd *fd = &lx->fd[a];
+        if (fd->kind == FD_INET) {
+            struct isock *so = fd->obj;
+            bool nb = (fd->flags & 04000) || (d & 0x40);       /* MSG_DONTWAIT */
+            if (!uok(b, c, n == 45)) return E(EFAULT_);
+            if (n == 44) {
+                struct ipaddr to; uint16_t tp = 0;
+                if (e && so->type == 2) { int64_t r = sa_get(e, f->r9, &to, &tp); if (r < 0) return (uint64_t)r; if (r == 1) e = 0; }
+                else e = 0;
+                return (uint64_t)isock_send(so, (const uint8_t *)b, c, e ? &to : 0, tp, nb);
+            }
+            struct ipaddr from; uint16_t fp = 0;
+            int64_t r = isock_recv(so, (uint8_t *)b, c, nb, d & 2, &from, &fp, 0);   /* MSG_PEEK */
+            if (r >= 0 && e) sa_put(so, e, f->r9, &from, fp);
+            return (uint64_t)r;
+        }
         if (fd->kind != FD_CHAN || !fd->sock) return E(ENOTSOCK_);
         bool nb = (fd->flags & 04000) || (d & 0x40);           /* MSG_DONTWAIT */
         if (!uok(b, c, n == 45)) return E(EFAULT_);
@@ -1430,6 +1731,49 @@ static uint64_t linux_syscall_(struct frame *f) {
     case 46: case 47: {                                        /* sendmsg, recvmsg: gathered / scattered, one message */
         if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
         struct lfd *fd = &lx->fd[a];
+        if (fd->kind == FD_INET) {
+            struct isock *so = fd->obj;
+            if (!uok(b, 56, n == 47)) return E(EFAULT_);
+            uint8_t *mh = (uint8_t *)b;
+            uint64_t name = *(uint64_t *)mh, iov = *(uint64_t *)(mh + 16), niov = *(uint64_t *)(mh + 24);
+            uint32_t namelen = *(uint32_t *)(mh + 8);
+            if (niov > 1024 || !uok(iov, niov * 16, false)) return E(EFAULT_);
+            uint64_t total = 0, cap = so->type == 2 ? 65536 : 1u << 20;
+            for (uint64_t i = 0; i < niov; i++) total += ((uint64_t *)iov)[i * 2 + 1];
+            if (total > cap) total = cap;
+            uint8_t *kb = kmalloc(total ? total : 1); if (!kb) return E(ENOMEM_);
+            bool nb = (fd->flags & 04000) || (c & 0x40);
+            int64_t r;
+            if (n == 46) {
+                uint64_t at = 0;
+                for (uint64_t i = 0; i < niov && at < total; i++) {
+                    uint64_t base = ((uint64_t *)iov)[i * 2], len = ((uint64_t *)iov)[i * 2 + 1];
+                    if (len > total - at) len = total - at;
+                    if (!uok(base, len, false)) { kfree(kb); return E(EFAULT_); }
+                    memcpy(kb + at, (const void *)base, len); at += len;
+                }
+                struct ipaddr to; uint16_t tp = 0; bool has = false;
+                if (name && namelen && so->type == 2) { r = sa_get(name, namelen, &to, &tp); if (r < 0) { kfree(kb); return (uint64_t)r; } has = r == 0; }
+                r = isock_send(so, kb, total, has ? &to : 0, tp, nb);
+            } else {
+                struct ipaddr from; uint16_t fp = 0; uint32_t full = 0;
+                r = isock_recv(so, kb, total, nb, c & 2, &from, &fp, &full);
+                if (r >= 0) {
+                    uint64_t at = 0;
+                    for (uint64_t i = 0; i < niov && at < (uint64_t)r; i++) {
+                        uint64_t base = ((uint64_t *)iov)[i * 2], len = ((uint64_t *)iov)[i * 2 + 1];
+                        if (len > (uint64_t)r - at) len = (uint64_t)r - at;
+                        if (!uok(base, len, true)) { kfree(kb); return E(EFAULT_); }
+                        memcpy((void *)base, kb + at, len); at += len;
+                    }
+                    if (name) sa_put(so, name, b + 8, &from, fp);
+                    *(uint64_t *)(mh + 40) = 0;                /* no control messages */
+                    *(int32_t *)(mh + 48) = so->type == 2 && full > (uint64_t)r ? 0x20 : 0;   /* MSG_TRUNC */
+                }
+            }
+            kfree(kb);
+            return (uint64_t)r;
+        }
         if (fd->kind != FD_CHAN || !fd->sock) return E(ENOTSOCK_);
         if (!uok(b, 56, n == 47)) return E(EFAULT_);
         uint8_t *mh = (uint8_t *)b;
@@ -1716,6 +2060,13 @@ static uint64_t linux_syscall_(struct frame *f) {
         if (!uok(a, b, true)) return E(EFAULT_);
         random_bytes((void *)a, b); return b;
     }
+    case 90: case 91: case 268: case 92: case 93: case 94: case 260:   /* chmod, fchmod, fchmodat, chown, fchown, lchown, fchownat: */
+        return 0;                                              /* AXIOM's files have no owners or modes (everything is the user's) */
+    case 95: return 022;                                       /* umask: the usual one */
+    case 143:                                                  /* sched_getparam: priority 0 (SCHED_OTHER) */
+        if (!uok(b, 4, true)) return E(EFAULT_);
+        *(int32_t *)b = 0; return 0;
+    case 145: return 0;                                        /* sched_getscheduler: SCHED_OTHER */
     case 334: case 324: case 273: case 332: return E(ENOSYS_); /* rseq, membarrier, set_robust_list, statx */
     case 444: return E(EOPNOTSUPP_);                           /* landlock_create_ruleset: no Landlock (as a kernel without it) */
     case 157: return 0;                                        /* prctl */
