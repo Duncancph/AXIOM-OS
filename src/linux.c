@@ -370,6 +370,7 @@ static void shm_put(struct shm *o);
 struct axwin {
     int refs;                         /* (first: fd_close/fd_copy count duplicates like the others) */
     struct task *owner; int id; bool resizable;
+    int px, py;                       /* AXWIN_MOVE before AXWIN_CREATE: where it will appear (WM_ANYWHERE: not said) */
     struct shm *pix;                  /* the window holds one reference; each mapping one more */
     struct axwin_event q[AXQ]; int qh, qt;
     struct axwin *next;
@@ -935,10 +936,17 @@ static uint64_t axwin_ioctl(struct lxproc *lx, struct lfd *fd, uint64_t req, uin
         struct axwin_create *c = (struct axwin_create *)arg;
         char title[64]; memcpy(title, c->title, 63); title[63] = 0;
         uint32_t *buf; int pages;
-        struct window *w = wm_create(P, c->w, c->h, title, &buf, &pages, 0, (c->flags & AXWIN_RESIZABLE) ? WIN_RESIZABLE : 0);
+        int fl = ((c->flags & AXWIN_RESIZABLE) ? WIN_RESIZABLE : 0) | ((c->flags & AXWIN_POPUP) ? WIN_POPUP : 0) |
+                 ((c->flags & AXWIN_MOVE_EVENTS) ? WIN_MOVE_EVENTS : 0) | ((c->flags & AXWIN_HIDDEN) ? WIN_HIDDEN : 0);
+        bool placed = x->px != 0 || x->py != 0;
+        struct window *w = wm_create_at(P, c->w, c->h, title, &buf, &pages, 0, fl, placed ? x->px - 1 : WM_ANYWHERE, placed ? x->py - 1 : WM_ANYWHERE);
         if (!w) return E(EINVAL_);                               /* (too big or small for the screen, or too many) */
         x->owner = P; x->id = wm_id(w); x->resizable = c->flags & AXWIN_RESIZABLE;
         if (!(x->pix = axwin_pixels(P, x->id))) { wm_close(P, x->id); x->id = 0; return E(ENOMEM_); }
+        if (!(fl & (WIN_POPUP | WIN_HIDDEN))) {                 /* it has the focus: the desktop said so before it had an id here */
+            struct dunc_event fe = { EV_FOCUS, x->id, 0, 0, 0, 0 };
+            linux_window_event(P, &fe);
+        }
         return (uint64_t)x->id;
     }
     case AXWIN_INFO: {                                          /* (before AXWIN_CREATE: just the screen's size) */
@@ -960,6 +968,27 @@ static uint64_t axwin_ioctl(struct lxproc *lx, struct lfd *fd, uint64_t req, uin
         char title[64];
         if (!uok(arg, 1, false) || !ustr(title, arg, sizeof title)) return E(EFAULT_);
         return wm_set_title(x->owner, x->id, title) ? 0 : E(ENOENT_);
+    }
+    case AXWIN_MOVE: {
+        if (!uok(arg, sizeof(struct axwin_rect), false)) return E(EFAULT_);
+        struct axwin_rect *r = (struct axwin_rect *)arg;
+        if (!x->id) { x->px = r->x + 1; x->py = r->y + 1; return 0; }   /* (+1: 0 means not said) */
+        return wm_move(x->owner, x->id, r->x, r->y) ? 0 : E(ENOENT_);
+    }
+    case AXWIN_SHOW: case AXWIN_CURSOR: {
+        if (!x->id) return E(ENOENT_);
+        if (!uok(arg, 4, false)) return E(EFAULT_);
+        int v = *(int32_t *)arg;
+        bool ok = req == AXWIN_SHOW ? wm_show(x->owner, x->id, v != 0) : wm_set_cursor(x->owner, x->id, v);
+        return ok ? 0 : E(ENOENT_);
+    }
+    case AXWIN_POS: {
+        if (!x->id) return E(ENOENT_);
+        if (!uok(arg, sizeof(struct axwin_rect), true)) return E(EFAULT_);
+        int px, py, pages, w, h;
+        if (!wm_pos(x->owner, x->id, &px, &py) || !wm_buffer(x->owner, x->id, &pages, &w, &h)) return E(ENOENT_);
+        *(struct axwin_rect *)arg = (struct axwin_rect){ px, py, w, h };
+        return 0;
     }
     case AXWIN_RESIZE: {
         if (!x->id) return E(ENOENT_);
