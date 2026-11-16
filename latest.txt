@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 137
-notes Vertex draws shadows under cards, buttons and menus (CSS box-shadow).
-file kernel b137/thane.elf.gz 18898104 e4c5aa44e8243bd41fdabb5f6c770daad533a9752673a4c65e09ec7b4b71a5d9
-file initrd b137/initrd.tar.gz 1331200 942aa7ae76b63a534f3d3344abacb3455d8b8a2976a4f491eccc61ab816c3aad
-file bootx64 b137/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b137/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022058bd92e0ff80b41b0094d6320d7ccdf0141342c881f58556db135322a5134ca6022100e372dcc3cf3902b5eae3156d404c429e979684eef8d2b5f93640d78db45cd1d9
+build 138
+notes Files: Cut (Ctrl+X) and Paste to move; drag items onto folders or places in the sidebar (moves on the same drive, copies to another); Search (Ctrl+F) through a folder and the ones in it.
+file kernel b138/thane.elf.gz 18918584 e3d2c20b8ae6bc2db46d19bd4081bf1f02eda657dd16ef1bfc4afce5d733b6ae
+file initrd b138/initrd.tar.gz 1331200 942aa7ae76b63a534f3d3344abacb3455d8b8a2976a4f491eccc61ab816c3aad
+file bootx64 b138/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b138/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304502207f02e71d41fc94bf9dc2ee36f0695913eeb9ae6b998845790d2c0086eb486bd10221009809493d9fe9550c1610e5f460eae7b4c2967b611262d57946a71e2ae4746187
