@@ -262,7 +262,20 @@ struct chan {
     uint32_t msg[CHAN_MSGS]; int mhead, mcount;   /* packet sockets: message lengths, oldest first */
     bool packet;
     int readers, writers;                         /* ends that can still read / write it */
+    uint64_t wpos, rpos;                          /* bytes ever written / read: where attached files sit */
+    struct anc *anc, *anc_tail;                   /* files sent along (SCM_RIGHTS), oldest first */
 };
+/* Files passed over a socket pair (sendmsg with SCM_RIGHTS) travel with the first byte they were sent with:
+ * they're copies of the sender's (holding their own references) until recvmsg gives them to the receiver.
+ * As on Linux, a stream read ends with the bytes that were sent with files (and gets those files once it
+ * reaches them); read() without recvmsg drops them. */
+#define ANC_MAX 32
+struct anc { struct anc *next; uint64_t pos, len; int n; struct lfd fd[ANC_MAX]; };   /* pos, len: the bytes sent with them */
+static void anc_free(struct anc *a) {
+    if (!a) return;
+    for (int i = 0; i < a->n; i++) fd_close(&a->fd[i]);
+    kfree(a);
+}
 static int io_tag;
 #define IO_MM   ((struct mm *)&io_tag)
 #define IO_ADDR ((uint64_t)&io_tag)
@@ -291,7 +304,11 @@ static struct chan *chan_new(bool packet) {
 static void chan_drop(struct chan *c, bool reader) {
     if (!c) return;
     if (reader) c->readers--; else c->writers--;
-    if (c->readers <= 0 && c->writers <= 0) { kfree(c->data); kfree(c); }
+    if (c->readers <= 0 && c->writers <= 0) {
+        struct anc *a = c->anc;
+        kfree(c->data); kfree(c);
+        while (a) { struct anc *nx = a->next; anc_free(a); a = nx; }   /* (files nobody received) */
+    }
     chan_wake();
 }
 struct evfd { int refs; uint64_t count; bool sem; };
@@ -318,6 +335,7 @@ static void ring_put(struct chan *c, const uint8_t *s, uint32_t n) {
         uint32_t at = (c->head + c->len) % CHAN_CAP, k = CHAN_CAP - at; if (k > n - done) k = n - done;
         memcpy(c->data + at, s + done, k); c->len += k; done += k;
     }
+    c->wpos += n;
 }
 static void ring_get(struct chan *c, uint8_t *d, uint32_t n, bool peek) {
     uint32_t h = c->head;
@@ -326,11 +344,11 @@ static void ring_get(struct chan *c, uint8_t *d, uint32_t n, bool peek) {
         if (d) memcpy(d + done, c->data + h, k);
         h = (h + k) % CHAN_CAP; done += k;
     }
-    if (!peek) { c->head = h; c->len -= n; }
+    if (!peek) { c->head = h; c->len -= n; c->rpos += n; }
 }
 /* read up to n bytes into buf (the running program's memory if user, else a kernel buffer): blocks unless
  * nonblock; 0 = end of file */
-static int64_t chan_read(struct lfd *f, uint8_t *buf, uint64_t n, bool user, bool nonblock, bool peek, bool *trunc) {
+static int64_t chan_read(struct lfd *f, uint8_t *buf, uint64_t n, bool user, bool nonblock, bool peek, bool *trunc, struct anc **got) {
     struct chan *c = f->rx;
     if (trunc) *trunc = false;
     if (!c) return 0;                                           /* shut down for reading */
@@ -340,6 +358,10 @@ static int64_t chan_read(struct lfd *f, uint8_t *buf, uint64_t n, bool user, boo
         chan_wait(-1);
     }
     if (user && !uok((uint64_t)buf, n, true)) return (int64_t)E(EFAULT_);   /* (another thread may have unmapped it meanwhile) */
+    if (got) *got = 0;
+    struct anc *a = c->anc;
+    uint64_t from = c->rpos;
+    if (!c->packet && a && a->pos + a->len > from && a->pos + a->len - from < n) n = a->pos + a->len - from;   /* end with them */
     uint64_t k;
     if (c->packet) {
         uint32_t m = c->msg[c->mhead];
@@ -354,12 +376,23 @@ static int64_t chan_read(struct lfd *f, uint8_t *buf, uint64_t n, bool user, boo
         k = c->len < n ? c->len : n;
         ring_get(c, buf, (uint32_t)k, peek);
     }
+    if (!peek && a && (a->pos < from + k || (c->packet && a->pos == from))) {   /* reached the bytes that have files */
+        c->anc = a->next; if (!c->anc) c->anc_tail = 0;
+        a->next = 0;
+        if (got) *got = a; else anc_free(a);
+    }
     if (!peek) chan_wake();
     return (int64_t)k;
 }
 /* write n bytes from buf (as for chan_read): a stream writes all of it (blocking as needed) unless
  * nonblock; a packet goes in whole or not at all */
-static int64_t chan_write(struct lfd *f, const uint8_t *buf, uint64_t n, bool user, bool nonblock) {
+static void anc_attach(struct chan *c, struct anc **a, uint64_t len) {   /* the files go with the next len bytes written */
+    if (!a || !*a) return;
+    (*a)->pos = c->wpos; (*a)->len = len; (*a)->next = 0;
+    if (c->anc_tail) c->anc_tail->next = *a; else c->anc = *a;
+    c->anc_tail = *a; *a = 0;
+}
+static int64_t chan_write(struct lfd *f, const uint8_t *buf, uint64_t n, bool user, bool nonblock, struct anc **a) {
     struct chan *c = f->tx;
     if (!c || !c->readers) return (int64_t)E(EPIPE_);
     if (c->packet) {
@@ -370,6 +403,7 @@ static int64_t chan_write(struct lfd *f, const uint8_t *buf, uint64_t n, bool us
             if (!c->readers) return (int64_t)E(EPIPE_);
         }
         if (user && !uok((uint64_t)buf, n, false)) return (int64_t)E(EFAULT_);
+        anc_attach(c, a, n);
         ring_put(c, buf, (uint32_t)n);
         c->msg[(c->mhead + c->mcount) % CHAN_MSGS] = (uint32_t)n; c->mcount++;
         chan_wake();
@@ -386,6 +420,7 @@ static int64_t chan_write(struct lfd *f, const uint8_t *buf, uint64_t n, bool us
         }
         uint32_t k = n - done < space ? (uint32_t)(n - done) : space;
         if (user && !uok((uint64_t)buf + done, k, false)) return done ? (int64_t)done : (int64_t)E(EFAULT_);
+        if (!done) anc_attach(c, a, k);
         ring_put(c, buf + done, k); done += k;
         chan_wake();
     }
@@ -690,7 +725,7 @@ static uint64_t linux_syscall_(struct frame *f) {
         if (fd->kind == FD_CHAN) {
             if (n == 17) return E(ESPIPE_);
             if (!uok(b, c, true)) return E(EFAULT_);
-            return (uint64_t)chan_read(fd, (uint8_t *)b, c, true, fd->flags & 04000, false, 0);
+            return (uint64_t)chan_read(fd, (uint8_t *)b, c, true, fd->flags & 04000, false, 0, 0);
         }
         if (fd->kind == FD_EPOLL) return E(EINVAL_);
         if (fd->kind == FD_SHM) {
@@ -734,7 +769,7 @@ static uint64_t linux_syscall_(struct frame *f) {
             if (r > 0 && n == 1) fd->off = off + r;
             return (uint64_t)r;
         }
-        if (fd->kind == FD_CHAN) return n == 18 ? E(ESPIPE_) : (uint64_t)chan_write(fd, (const uint8_t *)b, c, true, fd->flags & 04000);
+        if (fd->kind == FD_CHAN) return n == 18 ? E(ESPIPE_) : (uint64_t)chan_write(fd, (const uint8_t *)b, c, true, fd->flags & 04000, 0);
         if (fd->kind != FD_FILE || !(fd->flags & 3)) return E(EBADF_);
         struct dunc_stat st; uint64_t off = n == 18 ? d : fd->off;
         if (vfs_stat(fd->path, &st) == 0 && off == st.size) { if (vfs_append(fd->path, (const void *)b, c) < 0) return E(EINVAL_); }
@@ -1069,9 +1104,9 @@ static uint64_t linux_syscall_(struct frame *f) {
         if (fd->kind != FD_CHAN || !fd->sock) return E(ENOTSOCK_);
         bool nb = (fd->flags & 04000) || (d & 0x40);           /* MSG_DONTWAIT */
         if (!uok(b, c, n == 45)) return E(EFAULT_);
-        if (n == 44) return (uint64_t)chan_write(fd, (const uint8_t *)b, c, true, nb);
+        if (n == 44) return (uint64_t)chan_write(fd, (const uint8_t *)b, c, true, nb, 0);
         if (e && uok(f->r9, 4, true)) *(uint32_t *)f->r9 = 0;   /* (no sender address) */
-        return (uint64_t)chan_read(fd, (uint8_t *)b, c, true, nb, d & 2, 0);   /* MSG_PEEK */
+        return (uint64_t)chan_read(fd, (uint8_t *)b, c, true, nb, d & 2, 0, 0);   /* MSG_PEEK */
     }
     case 46: case 47: {                                        /* sendmsg, recvmsg: gathered / scattered, one message */
         if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
@@ -1081,11 +1116,28 @@ static uint64_t linux_syscall_(struct frame *f) {
         uint8_t *mh = (uint8_t *)b;
         uint64_t iov = *(uint64_t *)(mh + 16), niov = *(uint64_t *)(mh + 24), ctl = *(uint64_t *)(mh + 32), ctllen = *(uint64_t *)(mh + 40);
         if (niov > 1024 || !uok(iov, niov * 16, false)) return E(EFAULT_);
-        if (n == 46 && ctl && ctllen) return E(EOPNOTSUPP_);   /* passing files (SCM_RIGHTS) isn't there yet */
+        struct anc *anc = 0;
+        if (n == 46 && ctl && ctllen) {                        /* control messages: files to pass (SCM_RIGHTS) */
+            if (ctllen > 4096 || !uok(ctl, ctllen, false)) return E(EFAULT_);
+            for (uint64_t off = 0; off + 16 <= ctllen;) {
+                uint64_t len = *(uint64_t *)(ctl + off); int lvl = *(int32_t *)(ctl + off + 8), typ = *(int32_t *)(ctl + off + 12);
+                if (len < 16 || off + len > ctllen) { anc_free(anc); return E(EINVAL_); }
+                if (lvl == 1 && typ == 1) {                    /* SOL_SOCKET, SCM_RIGHTS */
+                    if (!anc) { anc = kmalloc(sizeof *anc); if (!anc) return E(ENOMEM_); memset(anc, 0, sizeof *anc); }
+                    for (uint64_t i = 0; i < (len - 16) / 4; i++) {
+                        uint32_t sfd = *(uint32_t *)(ctl + off + 16 + i * 4);
+                        if (sfd >= NFD || !lx->fd[sfd].kind) { anc_free(anc); return E(EBADF_); }
+                        if (anc->n == ANC_MAX) { anc_free(anc); return E(EINVAL_); }
+                        fd_copy(&anc->fd[anc->n++], &lx->fd[sfd]);
+                    }
+                }                                              /* (SCM_CREDENTIALS: the receiver can't ask for them here) */
+                off += (len + 7) & ~7ULL;
+            }
+        }
         uint64_t total = 0;
         for (uint64_t i = 0; i < niov; i++) total += ((uint64_t *)iov)[i * 2 + 1];
         if (total > CHAN_CAP) total = CHAN_CAP;
-        uint8_t *kb = kmalloc(total ? total : 1); if (!kb) return E(ENOMEM_);
+        uint8_t *kb = kmalloc(total ? total : 1); if (!kb) { anc_free(anc); return E(ENOMEM_); }
         bool nb = (fd->flags & 04000) || (c & 0x40);
         int64_t r;
         if (n == 46) {
@@ -1093,24 +1145,42 @@ static uint64_t linux_syscall_(struct frame *f) {
             for (uint64_t i = 0; i < niov && at < total; i++) {
                 uint64_t base = ((uint64_t *)iov)[i * 2], len = ((uint64_t *)iov)[i * 2 + 1];
                 if (len > total - at) len = total - at;
-                if (!uok(base, len, false)) { kfree(kb); return E(EFAULT_); }
+                if (!uok(base, len, false)) { kfree(kb); anc_free(anc); return E(EFAULT_); }
                 memcpy(kb + at, (const void *)base, len); at += len;
             }
-            r = chan_write(fd, kb, total, false, nb);
+            r = chan_write(fd, kb, total, false, nb, &anc);
+            anc_free(anc);                                     /* (not sent: nothing was written) */
         } else {
-            bool trunc;
-            r = chan_read(fd, kb, total, false, nb, c & 2, &trunc);
+            bool trunc; struct anc *got = 0;
+            r = chan_read(fd, kb, total, false, nb, c & 2, &trunc, &got);
             if (r >= 0) {
                 uint64_t at = 0;
                 for (uint64_t i = 0; i < niov && at < (uint64_t)r; i++) {
                     uint64_t base = ((uint64_t *)iov)[i * 2], len = ((uint64_t *)iov)[i * 2 + 1];
                     if (len > (uint64_t)r - at) len = (uint64_t)r - at;
-                    if (!uok(base, len, true)) { kfree(kb); return E(EFAULT_); }
+                    if (!uok(base, len, true)) { kfree(kb); anc_free(got); return E(EFAULT_); }
                     memcpy((void *)base, kb + at, len); at += len;
                 }
+                int fl = trunc ? 0x20 : 0;                       /* MSG_TRUNC */
+                uint64_t used = 0;
+                if (got) {                                       /* the files: new numbers in this program */
+                    int m = 0;
+                    if (ctl && ctllen >= 20 && uok(ctl, ctllen, true)) {
+                        int room = (int)((ctllen - 16) / 4);
+                        for (; m < got->n && m < room; m++) {
+                            int k = fd_new(lx, 0);
+                            if (k < 0) break;
+                            lx->fd[k] = got->fd[m]; memset(&got->fd[m], 0, sizeof got->fd[m]);   /* (moved: its references go too) */
+                            *(int32_t *)(ctl + 16 + m * 4) = k;
+                        }
+                        if (m) { *(uint64_t *)ctl = 16 + 4 * (uint64_t)m; *(int32_t *)(ctl + 8) = 1; *(int32_t *)(ctl + 12) = 1; used = (16 + 4 * (uint64_t)m + 7) & ~7ULL; }
+                    }
+                    if (m < got->n) fl |= 0x8;                   /* MSG_CTRUNC: the rest are closed */
+                    anc_free(got);
+                }
                 *(uint32_t *)(mh + 8) = 0;                       /* msg_namelen: no sender address */
-                *(uint64_t *)(mh + 40) = 0;                      /* msg_controllen: no files */
-                *(int32_t *)(mh + 48) = trunc ? 0x20 : 0;        /* msg_flags: MSG_TRUNC */
+                *(uint64_t *)(mh + 40) = used;                   /* msg_controllen */
+                *(int32_t *)(mh + 48) = fl;
             }
         }
         kfree(kb);
