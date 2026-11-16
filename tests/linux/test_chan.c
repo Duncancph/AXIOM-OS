@@ -1,4 +1,4 @@
-/* Linux compatibility check: pipes, socket pairs, poll, eventfd, epoll, shared memory (memfd) and /dev. Build it on Linux as a static PIE and run it on
+/* Linux compatibility check: pipes, socket pairs, poll, eventfd, epoll, shared memory (memfd), /dev and passing files (SCM_RIGHTS). Build it on Linux as a static PIE and run it on
  * AXIOM ('run test_chan' with the program in /home); it also runs on Linux itself, which must print the same.
  *   gcc -O1 -static-pie -pthread -o test_chan tests/linux/test_chan.c */
 #define _GNU_SOURCE
@@ -25,6 +25,33 @@
 static int fails, checks;
 #define CHECK(c) do { checks++; if (!(c)) { fails++; printf("FAIL line %d: %s (errno %d)\n", __LINE__, #c, errno); } } while (0)
 
+static long long ns_now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1000000000LL + t.tv_nsec; }
+static int send_fds(int s, const char *data, int n, const int *fds, int nfds) {
+    char cbuf[CMSG_SPACE(8 * sizeof(int))]; memset(cbuf, 0, sizeof cbuf);
+    struct iovec io = { (void *)data, (size_t)n };
+    struct msghdr m = { 0 }; m.msg_iov = &io; m.msg_iovlen = 1;
+    if (nfds) {
+        m.msg_control = cbuf; m.msg_controllen = CMSG_SPACE(nfds * sizeof(int));
+        struct cmsghdr *c = CMSG_FIRSTHDR(&m); c->cmsg_level = SOL_SOCKET; c->cmsg_type = SCM_RIGHTS;
+        c->cmsg_len = CMSG_LEN(nfds * sizeof(int)); memcpy(CMSG_DATA(c), fds, nfds * sizeof(int));
+    }
+    return (int)sendmsg(s, &m, 0);
+}
+static int recv_fds(int s, char *data, int n, int *fds, int *nfds, int room, int *flags) {
+    char cbuf[CMSG_SPACE(8 * sizeof(int))];
+    struct iovec io = { data, (size_t)n };
+    struct msghdr m = { 0 }; m.msg_iov = &io; m.msg_iovlen = 1;
+    m.msg_control = room ? cbuf : 0; m.msg_controllen = room ? CMSG_SPACE(room * sizeof(int)) : 0;
+    int r = (int)recvmsg(s, &m, 0);
+    *nfds = 0;
+    for (struct cmsghdr *c = CMSG_FIRSTHDR(&m); r >= 0 && c; c = CMSG_NXTHDR(&m, c))
+        if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS) {
+            int k = (int)((c->cmsg_len - CMSG_LEN(0)) / sizeof(int));
+            memcpy(fds + *nfds, CMSG_DATA(c), k * sizeof(int)); *nfds += k;
+        }
+    *flags = m.msg_flags;
+    return r;
+}
 static long ms_now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1000 + t.tv_nsec / 1000000; }
 
 static int wake_fd;
@@ -304,6 +331,71 @@ int main(void) {
     int df = open("/dev/full", O_WRONLY);
     CHECK(write(df, "x", 1) == -1 && errno == ENOSPC);
     close(df);
+
+    /* passing files over a socket pair (SCM_RIGHTS), as Mojo does */
+    {
+        int sp2[2], pp[2], got[8], ng, fl;
+        CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sp2) == 0 && pipe(pp) == 0);
+        CHECK(send_fds(sp2[0], "A", 1, &pp[1], 1) == 1);
+        close(pp[1]);                                       /* the copy in flight keeps the write end open */
+        CHECK(recv_fds(sp2[1], buf, sizeof buf, got, &ng, 4, &fl) == 1 && buf[0] == 'A' && ng == 1 && fl == 0);
+        CHECK(ng == 1 && got[0] > 2 && write(got[0], "via passed fd", 13) == 13);
+        CHECK(read(pp[0], buf, sizeof buf) == 13 && !memcmp(buf, "via passed fd", 13));
+        close(got[0]);
+        CHECK(read(pp[0], buf, sizeof buf) == 0);           /* that was the last write end */
+        close(pp[0]);
+        int mfd = memfd_create("passed", 0);                /* shared memory across the socket */
+        CHECK(ftruncate(mfd, 4096) == 0 && pwrite(mfd, "shm!", 4, 0) == 4);
+        CHECK(send_fds(sp2[0], "B", 1, &mfd, 1) == 1);
+        CHECK(recv_fds(sp2[1], buf, sizeof buf, got, &ng, 4, &fl) == 1 && ng == 1);
+        char *pm = ng == 1 ? mmap(0, 4096, PROT_READ, MAP_SHARED, got[0], 0) : MAP_FAILED;
+        CHECK(pm != MAP_FAILED && !memcmp(pm, "shm!", 4));
+        if (pm != MAP_FAILED) munmap(pm, 4096);
+        if (ng == 1) close(got[0]);
+        close(mfd);
+        /* where a stream read stops when files were sent along */
+        int e1 = eventfd(0, 0), e2 = eventfd(0, 0);
+        CHECK(write(sp2[0], "xy", 2) == 2 && send_fds(sp2[0], "zw", 2, &e1, 1) == 2 && send_fds(sp2[0], "q", 1, &e2, 1) == 1);
+        CHECK(write(sp2[0], "t", 1) == 1);
+        CHECK(recv_fds(sp2[1], buf, sizeof buf, got, &ng, 4, &fl) == 4 && !memcmp(buf, "xyzw", 4) && ng == 1);   /* as Linux: */
+        if (ng == 1) close(got[0]);                         /* plain bytes, then the ones sent with files, then stop */
+        CHECK(recv_fds(sp2[1], buf, sizeof buf, got, &ng, 0, &fl) == 1 && buf[0] == 'q' && ng == 0 && (fl & MSG_CTRUNC));   /* no room: dropped */
+        CHECK(recv_fds(sp2[1], buf, sizeof buf, got, &ng, 4, &fl) == 1 && buf[0] == 't' && ng == 0);
+        CHECK(send_fds(sp2[0], "r", 1, &e2, 1) == 1 && read(sp2[1], buf, sizeof buf) == 1);              /* read(): dropped */
+        close(e1); close(e2);
+        CHECK(send_fds(sp2[0], "s", 1, (int[]){ 99 }, 1) == -1 && errno == EBADF);
+        close(sp2[0]); close(sp2[1]);
+        int sq[2];                                          /* packet sockets: files with their message */
+        CHECK(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sq) == 0 && pipe(pp) == 0);
+        int two[2] = { pp[0], pp[1] };
+        CHECK(send_fds(sq[0], "msg", 3, two, 2) == 3);
+        CHECK(recv_fds(sq[1], buf, sizeof buf, got, &ng, 4, &fl) == 3 && ng == 2);
+        if (ng == 2) { CHECK(write(got[1], "k", 1) == 1 && read(pp[0], buf, 1) == 1 && buf[0] == 'k'); close(got[0]); close(got[1]); }
+        close(pp[0]); close(pp[1]); close(sq[0]); close(sq[1]);
+    }
+
+    /* timed waits never end early (Linux guarantees it; Chromium's timers count on it) */
+    long long early_ns = 0, t1;
+    int ep2 = epoll_create1(0); struct epoll_event eo;
+    pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER; pthread_cond_t cv; pthread_condattr_t ca;
+    pthread_condattr_init(&ca); pthread_condattr_setclock(&ca, CLOCK_MONOTONIC); pthread_cond_init(&cv, &ca);
+    for (int i = 0; i < 200; i++) {
+        struct timespec one = { 0, 1000000 };
+        t1 = ns_now(); nanosleep(&one, 0);
+        if (ns_now() - t1 < 1000000 && 1000000 - (ns_now() - t1) > early_ns) early_ns = 1000000 - (ns_now() - t1);
+        t1 = ns_now(); poll(0, 0, 1);
+        if (ns_now() - t1 < 1000000 && 1000000 - (ns_now() - t1) > early_ns) early_ns = 1000000 - (ns_now() - t1);
+        t1 = ns_now(); epoll_wait(ep2, &eo, 1, 1);
+        if (ns_now() - t1 < 1000000 && 1000000 - (ns_now() - t1) > early_ns) early_ns = 1000000 - (ns_now() - t1);
+        struct timespec dl; clock_gettime(CLOCK_MONOTONIC, &dl);
+        t1 = dl.tv_sec * 1000000000LL + dl.tv_nsec + 1500000;
+        dl.tv_nsec += 1500000; if (dl.tv_nsec >= 1000000000) { dl.tv_sec++; dl.tv_nsec -= 1000000000; }
+        pthread_mutex_lock(&mu); pthread_cond_timedwait(&cv, &mu, &dl); pthread_mutex_unlock(&mu);
+        if (ns_now() < t1 && t1 - ns_now() > early_ns) early_ns = t1 - ns_now();
+    }
+    close(ep2);
+    if (early_ns) printf("timed waits ended up to %lld ns early\n", early_ns);
+    CHECK(early_ns == 0);
 
     printf("%s: %d checks, %d failed\n", fails ? "FAILED" : "PASSED", checks, fails);
     return fails != 0;
