@@ -36,7 +36,39 @@ struct lxproc {
     int out_pid;
     char line[256]; int linelen;   /* output waiting for its end of line (for the log) */
     struct shmmap *maps; int nmaps, capmaps;   /* where shared memory (memfd) is mapped */
+    struct fmap *fmaps; int nfmaps, capfmaps;  /* which parts of memory came from which file (/proc/self/maps) */
 };
+/* a range of a program's memory read from a file (its own segments, its loader's, mmap'd libraries): only
+ * for /proc/self/maps, which Chromium (and debuggers) read to find code and print stack traces */
+struct fmap { uint64_t s, e, off; char path[120]; };
+static void fmap_add(struct lxproc *lx, uint64_t s, uint64_t e, uint64_t off, const char *path) {
+    if (!lx) return;
+    if (lx->nfmaps == lx->capfmaps) {
+        int nc = lx->capfmaps ? lx->capfmaps * 2 : 64;
+        struct fmap *n = kmalloc(nc * sizeof *n);
+        if (!n) return;
+        if (lx->fmaps) memcpy(n, lx->fmaps, lx->nfmaps * sizeof *n);
+        kfree(lx->fmaps); lx->fmaps = n; lx->capfmaps = nc;
+    }
+    struct fmap *f = &lx->fmaps[lx->nfmaps++];
+    f->s = s; f->e = e; f->off = off;
+    strncpy0(f->path, !strncmp(path, "/system/linux/", 14) ? path + 13 : path, sizeof f->path);   /* (as Linux paths see it) */
+}
+static void fmap_cut(struct lxproc *lx, uint64_t s, uint64_t e) {   /* [s, e) unmapped or mapped over */
+    for (int i = 0; i < lx->nfmaps;) {
+        struct fmap *f = &lx->fmaps[i];
+        if (f->e <= s || f->s >= e) { i++; continue; }
+        if (f->s >= s && f->e <= e) { lx->fmaps[i] = lx->fmaps[--lx->nfmaps]; continue; }
+        if (f->s < s && f->e > e) {                               /* a hole: keep the first part, add the rest */
+            struct fmap r = *f; r.off += e - f->s; r.s = e; f->e = s;
+            fmap_add(lx, r.s, r.e, r.off, r.path);
+            i++; continue;
+        }
+        if (f->s < s) f->e = s; else { f->off += e - f->s; f->s = e; }
+        i++;
+    }
+}
+
 
 uint64_t linux_now_ns(void);
 #define E(x) ((uint64_t)-(long)(x))
@@ -113,7 +145,7 @@ static bool copy_to(struct mm *m, uint64_t va, const void *src, uint64_t n) {
     return true;
 }
 /* map a position-independent ELF file at base, reading it part by part: its segments become memory areas */
-static bool load_elf(struct mm *m, const char *path, uint64_t base, uint64_t *entry, uint64_t *phdr, int *phnum, char *interp, size_t ilen, bool *fixed) {
+static bool load_elf(struct mm *m, struct lxproc *lx, const char *path, uint64_t base, uint64_t *entry, uint64_t *phdr, int *phnum, char *interp, size_t ilen, bool *fixed) {
     static uint8_t hdr[8192];
     if (fixed) *fixed = false;
     long hl = vfs_read(path, hdr, 0, sizeof hdr);
@@ -148,6 +180,7 @@ static bool load_elf(struct mm *m, const char *path, uint64_t base, uint64_t *en
         }
         int prot = (ph[i].flags & 4 ? DPROT_READ : 0) | (ph[i].flags & 2 ? DPROT_WRITE : 0) | (ph[i].flags & 1 ? DPROT_EXEC : 0);
         mm_mprotect(m, s, end - s, prot);
+        fmap_add(lx, s, end, ph[i].offset & ~4095ULL, path);
         if (!*phdr && ph[i].offset == 0) *phdr = base + ph[i].vaddr + phoff;
     }
     kfree(buf);
@@ -165,17 +198,17 @@ int linux_spawn(const char *path, int argc, char **argv, struct task *out) {
     if (!m || !lx) { if (m) mm_put(m); kfree(lx); return -1; }
     memset(lx, 0, sizeof *lx);
     uint64_t entry, phdr; int phnum; char interp[128]; bool fixed;
-    if (!load_elf(m, path, MAIN_BASE, &entry, &phdr, &phnum, interp, sizeof interp, &fixed)) {
+    if (!load_elf(m, lx, path, MAIN_BASE, &entry, &phdr, &phnum, interp, sizeof interp, &fixed)) {
         struct dunc_stat st;
         if (vfs_stat(path, &st) != 0) kprintf("run: can't find %s\n", path);
         else kprintf("run: %s isn't a program AXIOM can run%s\n", path, fixed ? " (built at a fixed address: build it position-independent, e.g. -static-pie)" : "");
-        mm_put(m); kfree(lx); return -1;
+        mm_put(m); kfree(lx->fmaps); kfree(lx); return -1;
     }
     uint64_t start = entry, ibase = 0;
     if (interp[0]) {                                           /* a dynamically linked program: its loader first */
         char ip[200]; path_join("/", interp, ip, sizeof ip);
         uint64_t ie, iph; int ipn;
-        if (!load_elf(m, ip, INTERP_BASE, &ie, &iph, &ipn, 0, 0, 0)) { kprintf("run: needs %s, which isn't there\n", interp); mm_put(m); kfree(lx); return -1; }
+        if (!load_elf(m, lx, ip, INTERP_BASE, &ie, &iph, &ipn, 0, 0, 0)) { kprintf("run: needs %s, which isn't there\n", interp); mm_put(m); kfree(lx->fmaps); kfree(lx); return -1; }
         start = ie; ibase = INTERP_BASE;
     }
     /* the stack: 8 MiB at the top of the map area, then argc, argv, envp and the auxiliary vector */
@@ -222,6 +255,7 @@ void linux_task_exit(struct task *t) {
     if (lx->linelen) { lx->line[lx->linelen] = 0; kprintf("[%s] %s\n", t->name, lx->line); }
     for (int i = 0; i < NFD; i++) if (lx->fd[i].kind) fd_close(&lx->fd[i]);   /* (the other ends see end of file) */
     shm_forget_all(lx);
+    kfree(lx->fmaps);
     for (int i = 0; i < MAX_TASKS; i++) if (tasks[i].lx == lx) tasks[i].lx = 0;
     kfree(lx);
 }
@@ -741,10 +775,48 @@ static uint64_t axwin_ioctl(struct lxproc *lx, struct lfd *fd, uint64_t req, uin
     return E(ENOTTY_);
 }
 
+/* /proc/self/maps: the program's memory areas, with the file each part came from; a snapshot in memory */
+static struct shm *proc_maps(struct lxproc *lx, struct mm *m) {
+    struct shm *o = kmalloc(sizeof *o);
+    char *txt = kmalloc(65536);
+    if (!o || !txt) { kfree(o); kfree(txt); return 0; }
+    memset(o, 0, sizeof *o); o->refs = 1;
+    uint64_t n = 0, stack = USER_MMAP_END - STACK_SIZE;
+    for (int i = 0; i < m->nv && n + 300 < 65536; i++) {
+        uint64_t cur = m->v[i].s, end = m->v[i].e; int prot = m->v[i].prot;
+        while (cur < end && n + 300 < 65536) {
+            const struct fmap *in = 0; uint64_t next = end;
+            for (int k = 0; k < lx->nfmaps; k++) {
+                const struct fmap *f = &lx->fmaps[k];
+                if (f->s <= cur && f->e > cur) { in = f; break; }
+                if (f->s > cur && f->s < next) next = f->s;
+            }
+            uint64_t pe = in ? (in->e < end ? in->e : end) : next;
+            const char *name = in ? in->path : cur >= stack ? "[stack]" : "";
+            n += (uint64_t)ksnprintf(txt + n, 65536 - n, "%lx-%lx %c%c%cp %08lx 00:00 %lu %s\n", cur, pe,
+                                     prot & DPROT_READ ? 'r' : '-', prot & DPROT_WRITE ? 'w' : '-', prot & DPROT_EXEC ? 'x' : '-',
+                                     in ? in->off + (cur - in->s) : 0, in ? path_ino(in->path) & 0xFFFFFFF : 0, name);
+            cur = pe;
+        }
+    }
+    shm_rw(o, 0, (uint8_t *)txt, n, true);
+    kfree(txt);
+    return o;
+}
+
 static uint64_t do_open(struct lxproc *lx, int dirfd, uint64_t upath, int flags) {
     char p[200], full[200];
     if (!ustr(p, upath, sizeof p)) return E(EFAULT_);
     (void)dirfd;
+    char selfmaps[40]; ksnprintf(selfmaps, sizeof selfmaps, "/proc/%d/maps", current->proc ? current->proc->pid : current->pid);
+    if (!strcmp(p, "/proc/self/maps") || !strcmp(p, selfmaps)) {   /* a snapshot, read like a file */
+        struct shm *o = proc_maps(lx, current->mm);
+        int fd = o ? fd_new(lx, 0) : -1;
+        if (fd < 0) { if (o) shm_put(o); return o ? E(EMFILE_) : E(ENOMEM_); }
+        struct lfd *f = &lx->fd[fd]; memset(f, 0, sizeof *f);
+        f->kind = FD_SHM; f->obj = o; f->flags = 0;            /* (O_RDONLY) */
+        return fd;
+    }
     if (!strncmp(p, "/proc/self/fd/", 14) || !strncmp(p, "/dev/fd/", 8)) {   /* an open file again, with its own access mode */
         const char *num = p + (p[1] == 'p' ? 14 : 8);
         if (*num < '0' || *num > '9') return E(ENOENT_);
@@ -1371,7 +1443,7 @@ static uint64_t linux_syscall_(struct frame *f) {
             if (lx->fd[fd].dev != DEV_ZERO) return E(ENODEV_);
             fl |= 0x20;                                        /* /dev/zero: fresh zeroed memory */
         }
-        if (dfl) shm_unmapped(lx, a & ~4095ULL, (a + b + 4095) & ~4095ULL);   /* (whatever was there goes) */
+        if (dfl) { shm_unmapped(lx, a & ~4095ULL, (a + b + 4095) & ~4095ULL); fmap_cut(lx, a & ~4095ULL, (a + b + 4095) & ~4095ULL); }   /* (whatever was there goes) */
         if (!(fl & 0x20) && fd >= 0 && fd < NFD && lx->fd[fd].kind == FD_WIN && !((struct axwin *)lx->fd[fd].obj)->pix) return E(ENODEV_);   /* (no window yet) */
         if (!(fl & 0x20) && fd >= 0 && fd < NFD && (lx->fd[fd].kind == FD_SHM || lx->fd[fd].kind == FD_WIN)) {   /* shared memory, a window's pixels */
             struct shm *o = lx->fd[fd].kind == FD_WIN ? ((struct axwin *)lx->fd[fd].obj)->pix : lx->fd[fd].obj;
@@ -1418,6 +1490,7 @@ static uint64_t linux_syscall_(struct frame *f) {
             }
             kfree(tmp);
             if (prot != (DPROT_READ | DPROT_WRITE)) mm_mprotect(t->mm, r, b, prot);
+            fmap_add(lx, (uint64_t)r, ((uint64_t)r + b + 4095) & ~4095ULL, off, lx->fd[fd].path);
             return r;
         }
         long r = mm_mmap(t->mm, a, b, prot, dfl, &t->proc->pages);
@@ -1425,7 +1498,7 @@ static uint64_t linux_syscall_(struct frame *f) {
     }
     case 11: {                                                 /* munmap */
         long r = mm_munmap(t->mm, a, b, &t->proc->pages);
-        if (r >= 0) shm_unmapped(lx, a, (a + b + 4095) & ~4095ULL);
+        if (r >= 0) { shm_unmapped(lx, a, (a + b + 4095) & ~4095ULL); fmap_cut(lx, a, (a + b + 4095) & ~4095ULL); }
         return r < 0 ? (uint64_t)r : 0;
     }
     case 10: { long r = mm_mprotect(t->mm, a, b, (int)c & 7); return r < 0 ? (uint64_t)r : 0; }       /* mprotect */

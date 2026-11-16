@@ -1,4 +1,5 @@
-/* Linux compatibility check: pipes, socket pairs, poll, eventfd, epoll, shared memory (memfd), /dev and passing files (SCM_RIGHTS). Build it on Linux as a static PIE and run it on
+/* Linux compatibility check: pipes, socket pairs, poll, eventfd, epoll, shared memory (memfd), /dev, passing files (SCM_RIGHTS)
+ * and /proc/self/maps. Build it on Linux as a static PIE and run it on
  * AXIOM ('run test_chan' with the program in /home); it also runs on Linux itself, which must print the same.
  *   gcc -O1 -static-pie -pthread -o test_chan tests/linux/test_chan.c */
 #define _GNU_SOURCE
@@ -372,6 +373,24 @@ int main(void) {
         CHECK(recv_fds(sq[1], buf, sizeof buf, got, &ng, 4, &fl) == 3 && ng == 2);
         if (ng == 2) { CHECK(write(got[1], "k", 1) == 1 && read(pp[0], buf, 1) == 1 && buf[0] == 'k'); close(got[0]); close(got[1]); }
         close(pp[0]); close(pp[1]); close(sq[0]); close(sq[1]);
+    }
+
+    /* /proc/self/maps: main() is in an executable range of this program's own file; the stack is named */
+    {
+        char exe[256] = { 0 }, line[512];
+        CHECK(readlink("/proc/self/exe", exe, sizeof exe - 1) > 0);
+        FILE *mf2 = fopen("/proc/self/maps", "r");
+        CHECK(mf2 != 0);
+        int found_main = 0, found_stack = 0, lines = 0;
+        while (mf2 && fgets(line, sizeof line, mf2)) {
+            unsigned long lo, hi; char perms[8] = { 0 }, path[300] = { 0 };
+            lines++;
+            if (sscanf(line, "%lx-%lx %7s %*s %*s %*s %299s", &lo, &hi, perms, path) < 3) continue;
+            if ((unsigned long)(uintptr_t)&main >= lo && (unsigned long)(uintptr_t)&main < hi && perms[2] == 'x' && !strcmp(path, exe)) found_main = 1;
+            if (!strcmp(path, "[stack]")) found_stack = 1;
+        }
+        if (mf2) fclose(mf2);
+        CHECK(lines > 3 && found_main && found_stack);
     }
 
     /* timed waits never end early (Linux guarantees it; Chromium's timers count on it) */
