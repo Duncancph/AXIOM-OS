@@ -25,7 +25,8 @@ struct chan;
 struct lfd { int kind; int flags; uint64_t off; char path[200]; struct chan *rx, *tx; bool sock; uint8_t stype;
              uint8_t dev;    /* FD_DEV: which of devs[] */
              void *obj; };   /* FD_EVENT: a struct evfd, FD_EPOLL: a struct epoll, FD_SHM: a struct shm,
-                                FD_WIN: a struct axwin (shared by duplicates) */
+                                FD_WIN: a struct axwin (shared by duplicates); FD_CHAN after shutdown: its
+                                identity from before (compared only, never used) */
 struct shmmap;
 #define NFD 128
 struct lxproc {
@@ -315,7 +316,12 @@ static void anc_free(struct anc *a) {
 static int io_tag;
 #define IO_MM   ((struct mm *)&io_tag)
 #define IO_ADDR ((uint64_t)&io_tag)
-static void chan_wake(void) { futex_wake(IO_MM, IO_ADDR, 1 << 30); }
+/* Like Linux's wakeup preemption: a system call that woke a waiter gives up the core when it's done (see
+ * linux_syscall), so the woken threads run, in the order they were woken, before the waker goes on. Chromium
+ * counts on that order: on one core, a thread that wrote a message to another thread and then posted more work
+ * could otherwise run that work first (the browser's InvalidateFrameSinkId reached viz after its teardown). */
+static bool chan_woke;
+static void chan_wake(void) { if (futex_wake(IO_MM, IO_ADDR, 1 << 30)) chan_woke = true; }
 /* sleep until some chan changes or ms pass (ms < 0: no time limit); false if the time ran out */
 static bool chan_wait(int64_t ms) {
     struct task *t = current;
@@ -497,7 +503,7 @@ static int fd_ready(struct lxproc *lx, int fd) {
 static uint64_t do_poll(struct lxproc *lx, uint64_t ufds, uint64_t nfds, int64_t ms) {
     if (nfds > NFD * 8) return E(EINVAL_);
     if (!uok(ufds, nfds * 8, true)) return E(EFAULT_);
-    uint64_t end = ms > 0 ? uptime_ms() + (uint64_t)ms : 0;
+    uint64_t end = ms > 0 ? uptime_ms() + (uint64_t)ms + 1 : 0;   /* (+1: a whole ms, never early) */
     for (;;) {
         int count = 0;
         for (uint64_t i = 0; i < nfds; i++) {
@@ -521,7 +527,7 @@ static uint64_t do_poll(struct lxproc *lx, uint64_t ufds, uint64_t nfds, int64_t
 #define EPOLLONESHOT_ (1u << 30)
 #define EPOLLET_      (1u << 31)
 static const void *fd_id(const struct lfd *f) {               /* which open file an fd number refers to */
-    if (f->kind == FD_CHAN) return f->rx ? (const void *)f->rx : (const void *)f->tx;
+    if (f->kind == FD_CHAN) return f->obj ? f->obj : f->rx ? (const void *)f->rx : (const void *)f->tx;   /* (obj: kept from before shutdown) */
     if (f->kind == FD_EVENT || f->kind == FD_EPOLL || f->kind == FD_SHM || f->kind == FD_WIN) return f->obj;
     return f;
 }
@@ -557,7 +563,7 @@ static uint64_t do_epoll_wait(struct lxproc *lx, uint64_t epfd, uint64_t uev, in
     if (epfd >= NFD || lx->fd[epfd].kind != FD_EPOLL) return epfd < NFD && lx->fd[epfd].kind ? E(EINVAL_) : E(EBADF_);
     if (max <= 0 || max > 4096) return E(EINVAL_);
     if (!uok(uev, (uint64_t)max * 12, true)) return E(EFAULT_);
-    uint64_t end = ms > 0 ? uptime_ms() + (uint64_t)ms : 0;
+    uint64_t end = ms > 0 ? uptime_ms() + (uint64_t)ms + 1 : 0;   /* (+1: a whole ms, never early) */
     for (;;) {
         struct epoll *ep = lx->fd[epfd].obj;
         if (lx->fd[epfd].kind != FD_EPOLL) return E(EBADF_);   /* (closed by another thread while waiting) */
@@ -804,13 +810,50 @@ static struct shm *proc_maps(struct lxproc *lx, struct mm *m) {
     return o;
 }
 
+/* /proc/cpuinfo and /proc/meminfo: generated text, read like a file (Chromium reads both at start-up) */
+static struct shm *proc_text(const char *which) {
+    struct shm *o = kmalloc(sizeof *o);
+    char *txt = kmalloc(32768);
+    if (!o || !txt) { kfree(o); kfree(txt); return 0; }
+    memset(o, 0, sizeof *o); o->refs = 1;
+    int n = 0;
+    if (!strcmp(which, "cpuinfo")) {
+        uint32_t r[12] = { 0 }, a, b, c, d, v[3]; char brand[49] = { 0 }, vendor[13] = { 0 };
+        cpuid(0, 0, &a, &v[0], &v[2], &v[1]); memcpy(vendor, v, 12);
+        cpuid(1, 0, &a, &b, &c, &d);
+        uint32_t family = (a >> 8) & 15, model = (a >> 4) & 15, stepping = a & 15;
+        if (family == 15) family += (a >> 20) & 255;
+        if (family >= 6) model |= ((a >> 16) & 15) << 4;
+        cpuid(0x80000000, 0, &a, &b, &c, &d);
+        if (a >= 0x80000004) for (int i = 0; i < 3; i++) cpuid(0x80000002 + i, 0, &r[i * 4], &r[i * 4 + 1], &r[i * 4 + 2], &r[i * 4 + 3]);
+        memcpy(brand, r, 48);
+        const char *bp = brand; while (*bp == ' ') bp++;
+        for (int i = 0; i < ncpus_on && n < 30000; i++)
+            n += ksnprintf(txt + n, 32768 - n, "processor\t: %d\nvendor_id\t: %s\ncpu family\t: %u\nmodel\t\t: %u\n"
+                           "model name\t: %s\nstepping\t: %u\ncpu MHz\t\t: %lu.000\nphysical id\t: 0\nsiblings\t: %d\n"
+                           "core id\t\t: %d\ncpu cores\t: %d\nflags\t\t: fpu tsc msr pae cx8 apic sep cmov pat clflush mmx fxsr sse sse2 ht syscall nx lm sse3 ssse3 sse4_1 sse4_2 popcnt\n\n",
+                           i, vendor, family, model, *bp ? bp : "x86-64 processor", stepping, tsc_hz() / 1000000,
+                           ncpus_on, i, ncpus_on);
+    } else {
+        uint64_t tot = mem_total() / 1024, fr = (mem_total() - mem_used()) / 1024;
+        n = ksnprintf(txt, 32768, "MemTotal:       %lu kB\nMemFree:        %lu kB\nMemAvailable:   %lu kB\nBuffers:               0 kB\n"
+                      "Cached:                0 kB\nSwapCached:            0 kB\nActive:                0 kB\nInactive:              0 kB\n"
+                      "Active(file):          0 kB\nInactive(file):        0 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\n"
+                      "Dirty:                 0 kB\nShmem:                 0 kB\nSReclaimable:          0 kB\n", tot, fr, fr);
+    }
+    shm_rw(o, 0, (uint8_t *)txt, (uint64_t)n, true);
+    kfree(txt);
+    return o;
+}
+
 static uint64_t do_open(struct lxproc *lx, int dirfd, uint64_t upath, int flags) {
     char p[200], full[200];
     if (!ustr(p, upath, sizeof p)) return E(EFAULT_);
     (void)dirfd;
     char selfmaps[40]; ksnprintf(selfmaps, sizeof selfmaps, "/proc/%d/maps", current->proc ? current->proc->pid : current->pid);
-    if (!strcmp(p, "/proc/self/maps") || !strcmp(p, selfmaps)) {   /* a snapshot, read like a file */
-        struct shm *o = proc_maps(lx, current->mm);
+    bool pt = !strcmp(p, "/proc/cpuinfo") || !strcmp(p, "/proc/meminfo");
+    if (pt || !strcmp(p, "/proc/self/maps") || !strcmp(p, selfmaps)) {   /* a snapshot, read like a file */
+        struct shm *o = pt ? proc_text(p + 6) : proc_maps(lx, current->mm);
         int fd = o ? fd_new(lx, 0) : -1;
         if (fd < 0) { if (o) shm_put(o); return o ? E(EMFILE_) : E(ENOMEM_); }
         struct lfd *f = &lx->fd[fd]; memset(f, 0, sizeof *f);
@@ -866,6 +909,46 @@ static uint64_t do_open(struct lxproc *lx, int dirfd, uint64_t upath, int flags)
     return fd;
 }
 
+
+/* a program ending itself with SIGABRT (abort(), a failed CHECK): signal handlers don't run here, so Chromium
+ * can't print its own stack trace; log the return addresses found on its stack instead (file + offset, for
+ * llvm-symbolizer / addr2line), so the cause can be found */
+static void lx_abort_trace(struct lxproc *lx, struct frame *f) {
+    kprintf("[linux] %s aborted; addresses on its stack (file offset):\n", current->name);
+    int shown = 0;
+    for (int i = -1; i < 2048 && shown < 48; i++) {
+        uint64_t v;
+        if (i < 0) v = f->rip;
+        else { uint64_t p = f->rsp + 8 * (uint64_t)i; if (!uok(p, 8, false)) break; v = *(uint64_t *)p; }
+        for (int k = 0; k < lx->nfmaps; k++) {
+            struct fmap *m = &lx->fmaps[k];
+            if (v >= m->s && v < m->e) { kprintf("[linux]   #%d %s+0x%lx\n", shown++, m->path, v - m->s + m->off); break; }
+        }
+    }
+}
+
+/* Debugging a Linux program that hangs: Ctrl+\ (0x1C) on the serial line lists each Linux thread, the system
+ * call it's in (vector 0x81) or where it was stopped, and the return addresses on its stack (file + offset) */
+void linux_dump_threads(void) {
+    for (int i = 0; i < MAX_TASKS; i++) {
+        struct task *t = &tasks[i];
+        if (!t->state || !t->lx || !t->user || !t->kstack) continue;
+        struct frame *f = (struct frame *)(t->kstack_top - sizeof *f);
+        kprintf("[dump] pid %d '%s' state %d: %s %lu (%lx, %lx, %lx) futex %lx rip %lx\n", t->pid, t->name, t->state,
+                f->vec == 0x81 ? "system call" : "interrupt", f->vec == 0x81 ? f->rax : f->vec, f->rdi, f->rsi, f->rdx,
+                t->futex_addr, f->rip);
+        struct lxproc *lx = t->lx; int shown = 0;
+        for (int k = -1; k < 1024 && shown < 16; k++) {
+            uint64_t v;
+            if (k < 0) v = f->rip;
+            else { uint64_t a = f->rsp + 8 * (uint64_t)k, ph = vm_phys(t->pml4, a); if (!ph) break; v = *(uint64_t *)ph; }
+            for (int j = 0; j < lx->nfmaps; j++) {
+                struct fmap *m = &lx->fmaps[j];
+                if (v >= m->s && v < m->e) { kprintf("[dump]   %s+0x%lx\n", m->path, v - m->s + m->off); shown++; break; }
+            }
+        }
+    }
+}
 static uint64_t linux_syscall_(struct frame *f);
 /* Linux reads int arguments (file numbers, flags) from the low 32 bits of their registers; programs that make
  * system calls themselves may leave anything in the upper half, so those are cut off here */
@@ -880,7 +963,10 @@ uint64_t linux_syscall(struct frame *f) {
     case 257: case 262: case 269: case 267: case 258: case 263: case 264: case 316: case 265:
         f->rdi = (uint64_t)(int64_t)(int32_t)f->rdi; break;      /* *at: a directory file or AT_FDCWD (-100) */
     }
-    return linux_syscall_(f);
+    chan_woke = false;
+    uint64_t r = linux_syscall_(f);
+    if (chan_woke) { chan_woke = false; task_yield(); }
+    return r;
 }
 static uint64_t linux_syscall_(struct frame *f) {
     uint64_t n = f->rax, a = f->rdi, b = f->rsi, c = f->rdx, d = f->r10, e = f->r8;
@@ -1047,17 +1133,20 @@ static uint64_t linux_syscall_(struct frame *f) {
         return 0;
     }
     case 137: case 138: {                                      /* statfs, fstatfs */
+        bool mem = false;                                      /* /dev, /dev/shm: memory (tmpfs) */
         if (n == 137) {
             char p[200], full[200]; struct dunc_stat st;
             if (!ustr(p, a, sizeof p)) return E(EFAULT_);
             path_join(lx->cwd, p, full, sizeof full);
-            if (vfs_stat(full, &st) != 0) return E(ENOENT_);
+            mem = !strcmp(full, "/system/linux/dev") || !strcmp(full, "/system/linux/dev/shm") || dev_of(full);
+            if (!mem && vfs_stat(full, &st) != 0) return E(ENOENT_);
         } else if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
         if (!uok(b, 120, true)) return E(EFAULT_);
         uint64_t *sf = (uint64_t *)b; memset(sf, 0, 120);
-        bool file = n == 137 || lx->fd[a].kind == FD_FILE || lx->fd[a].kind == FD_DIR;
+        bool file = !mem && (n == 137 || lx->fd[a].kind == FD_FILE || lx->fd[a].kind == FD_DIR);
         sf[0] = file ? 0x4d44 : 0x01021994;                    /* f_type: MSDOS_SUPER_MAGIC (FAT), else TMPFS_MAGIC */
         sf[1] = 4096; sf[2] = 1 << 20; sf[3] = sf[4] = 1 << 19; /* f_bsize, f_blocks, f_bfree, f_bavail (nominal) */
+        if (!file) { sf[2] = mem_total() / 4096; sf[3] = sf[4] = (mem_total() - mem_used()) / 4096; }   /* (Chromium checks /dev/shm has room) */
         sf[5] = 1 << 20; sf[6] = 1 << 19;                       /* f_files, f_ffree */
         sf[8] = 255; sf[9] = 4096;                              /* f_namelen, f_frsize */
         return 0;
@@ -1205,6 +1294,7 @@ static uint64_t linux_syscall_(struct frame *f) {
         struct lfd *fd = &lx->fd[a];
         if (fd->kind != FD_CHAN || !fd->sock) return E(ENOTSOCK_);
         if (b > 2) return E(EINVAL_);
+        if (!fd->obj) fd->obj = (void *)fd_id(fd);             /* the same open file to epoll after this (Mojo shuts a socket down, then stops watching it) */
         if (b != 1 && fd->rx) { chan_drop(fd->rx, true); fd->rx = 0; }    /* SHUT_RD, SHUT_RDWR */
         if (b != 0 && fd->tx) { chan_drop(fd->tx, false); fd->tx = 0; }   /* SHUT_WR, SHUT_RDWR */
         return 0;
@@ -1554,8 +1644,8 @@ static uint64_t linux_syscall_(struct frame *f) {
         *(uint32_t *)a = *(uint32_t *)b = *(uint32_t *)c = 1000; return 0;
     case 112: return t->proc->pid;                             /* setsid */
     case 62: case 200: case 234:                               /* kill, tkill, tgkill: ending itself */
-        if (n == 62 && a == (uint64_t)t->proc->pid && (b == 6 || b == 9 || b == 15)) task_exit(128 + (int)b);
-        if (n != 62 && (c == 6 || c == 9)) task_exit(128 + (int)c);
+        if (n == 62 && a == (uint64_t)t->proc->pid && (b == 6 || b == 9 || b == 15)) { if (b == 6) lx_abort_trace(lx, f); task_exit(128 + (int)b); }
+        if (n != 62 && (c == 6 || c == 9)) { if (c == 6) lx_abort_trace(lx, f); task_exit(128 + (int)c); }
         return 0;
     case 13: case 14: case 131: case 127: return 0;            /* rt_sigaction, rt_sigprocmask, sigaltstack, rt_sigpending */
     case 15: return 0;                                         /* rt_sigreturn */

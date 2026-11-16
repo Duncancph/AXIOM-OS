@@ -18,6 +18,7 @@
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 #include <sys/resource.h>
+#include <sys/statfs.h>
 #include <sys/syscall.h>
 #include <sys/socket.h>
 #include <time.h>
@@ -226,6 +227,16 @@ int main(void) {
     CHECK(poll(&epf, 1, 0) == 1 && epf.revents == POLLIN);
     CHECK(epoll_ctl(ep, EPOLL_CTL_DEL, p[0], 0) == 0);
     CHECK(epoll_ctl(ep, EPOLL_CTL_DEL, p[0], 0) == -1 && errno == ENOENT);
+    {                                                            /* a socket shut down is still the same watched file (Mojo) */
+        int sp[2]; CHECK(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sp) == 0);
+        struct epoll_event se = { EPOLLIN, { .u64 = 9 } };
+        CHECK(epoll_ctl(ep, EPOLL_CTL_ADD, sp[0], &se) == 0);
+        CHECK(shutdown(sp[0], SHUT_RDWR) == 0);
+        struct epoll_event got; CHECK(epoll_wait(ep, &got, 1, 0) == 1 && got.data.u64 == 9);   /* (end of file: readable) */
+        CHECK(epoll_ctl(ep, EPOLL_CTL_MOD, sp[0], &se) == 0);
+        CHECK(epoll_ctl(ep, EPOLL_CTL_DEL, sp[0], 0) == 0);
+        close(sp[0]); close(sp[1]);
+    }
     CHECK(epoll_wait(ep, out, 8, 0) == 0);
     v = 1; CHECK(write(ev, &v, 8) == 8);
     close(ev);                                             /* closed: gone from the epoll */
@@ -320,6 +331,17 @@ int main(void) {
     struct stat dst; CHECK(fstat(dn, &dst) == 0 && S_ISCHR(dst.st_mode) && major(dst.st_rdev) == 1 && minor(dst.st_rdev) == 3);
     close(dn);
     CHECK(stat("/dev/urandom", &dst) == 0 && S_ISCHR(dst.st_mode) && access("/dev/null", W_OK) == 0);
+    struct statfs sfs;                                           /* /dev/shm: memory, with room (Chromium checks) */
+    CHECK(statfs("/dev/shm", &sfs) == 0 && sfs.f_type == 0x01021994 && sfs.f_bavail > 0 && sfs.f_bsize > 0);
+    {                                                            /* /proc/cpuinfo, /proc/meminfo (Chromium reads both) */
+        static char pb[8192]; int pf = open("/proc/cpuinfo", O_RDONLY | O_CLOEXEC); long pn = pf >= 0 ? read(pf, pb, sizeof pb - 1) : -1;
+        CHECK(pn > 0 && (pb[pn] = 0, strstr(pb, "processor\t: 0") && strstr(pb, "model name\t: ")));
+        if (pf >= 0) close(pf);
+        pf = open("/proc/meminfo", O_RDONLY | O_CLOEXEC); pn = pf >= 0 ? read(pf, pb, sizeof pb - 1) : -1;
+        unsigned long mt = 0;
+        CHECK(pn > 0 && (pb[pn] = 0, sscanf(pb, "MemTotal: %lu kB", &mt) == 1) && mt > 1000 && strstr(pb, "MemAvailable:"));
+        if (pf >= 0) close(pf);
+    }
     int du = open("/dev/urandom", O_RDONLY);
     uint64_t u1 = 0, u2 = 0;
     CHECK(read(du, &u1, 8) == 8 && read(du, &u2, 8) == 8 && u1 != u2);

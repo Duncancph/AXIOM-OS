@@ -271,6 +271,7 @@ void linux_cpu_init(void);                 /* the syscall instruction (each core
 uint64_t linux_syscall(struct frame *f);
 int linux_spawn(const char *path, int argc, char **argv, struct task *out);   /* -> pid */
 void linux_task_exit(struct task *t);
+void linux_dump_threads(void);            /* Ctrl+\ on the serial line: where each Linux thread is (debugging) */
 bool task_alive(int pid);
 void task_thread_exit(void) __attribute__((noreturn));
 long elf_load(uint64_t *pml4, const uint8_t *img, uint64_t size, uint64_t *entry);
@@ -299,6 +300,7 @@ struct task {
     uint32_t alarm_ticks;      /* SYS_ALARM: timer ticks of the app's own running time left, 0 = none */
     uint64_t alarm_fn;
     int cpu;                   /* the core it last ran on */
+    uint64_t rq;               /* when it last became ready (schedule runs the oldest first) */
     /* threads (SYS_THREAD): every thread of a program shares its memory (mm); proc is the program's first thread */
     struct mm *mm;
     struct task *proc;

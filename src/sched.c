@@ -10,6 +10,7 @@ volatile uint64_t sched_ticks;
 bool sched_running;
 static struct task *idle_task;
 static int next_pid = 1;
+static uint64_t rq_seq;          /* stamps tasks as they become ready (first in, first out: see schedule) */
 extern uint64_t boot_pml4[];
 void switch_to(uint64_t *save, uint64_t rsp);
 void thread_entry(void);
@@ -48,7 +49,7 @@ struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg)
     *--sp = (uint64_t)arg;    /* r12 */
     *--sp = 0; *--sp = 0; *--sp = 0;   /* r13 r14 r15 */
     t->rsp = (uint64_t)sp;
-    t->state = PS_READY;
+    t->state = PS_READY; t->rq = ++rq_seq;
     return t;
 }
 
@@ -101,7 +102,7 @@ int task_spawn_arg(const char *app, const char *arg) {
     *--s = (uint64_t)user_entry;
     for (int i = 0; i < 6; i++) *--s = 0;
     t->rsp = (uint64_t)s;
-    t->state = PS_READY;
+    t->state = PS_READY; t->rq = ++rq_seq;
     kprintf("[sched] started '%s' (pid %d, %lu KiB)\n", t->name, t->pid, t->pages * 4);
     return t->pid;
 }
@@ -127,7 +128,7 @@ long task_thread(uint64_t rip, uint64_t rsp, uint64_t fs, uint64_t clear_tid) {
     *--s = (uint64_t)user_entry;
     for (int i = 0; i < 6; i++) *--s = 0;
     t->rsp = (uint64_t)s;
-    t->state = PS_READY;
+    t->state = PS_READY; t->rq = ++rq_seq;
     return t->pid;
 }
 
@@ -146,7 +147,7 @@ struct task *task_new_user(const char *name, struct mm *mm, struct task *proc, u
     *--s = (uint64_t)user_entry;
     for (int i = 0; i < 6; i++) *--s = 0;
     t->rsp = (uint64_t)s;
-    t->state = PS_READY;
+    t->state = PS_READY; t->rq = ++rq_seq;
     return t;
 }
 void frame_entry(void);
@@ -167,7 +168,7 @@ long task_clone(const struct frame *f, uint64_t rsp, uint64_t fs, uint64_t clear
     *--s = (uint64_t)frame_entry;
     for (int i = 0; i < 6; i++) *--s = 0;
     t->rsp = (uint64_t)s;
-    t->state = PS_READY;
+    t->state = PS_READY; t->rq = ++rq_seq;
     return t->pid;
 }
 bool task_alive(int pid) {
@@ -196,7 +197,7 @@ long futex_wake(struct mm *m, uint64_t addr, int n) {
         struct task *t = &tasks[i];
         if (t->state != PS_BLOCKED || t->futex_mm != m || t->futex_addr != addr || !m) continue;
         t->futex_woken = true; t->futex_mm = 0;
-        t->state = PS_READY; t->wake_at = 0;
+        t->state = PS_READY; t->wake_at = 0; t->rq = ++rq_seq;
         k++;
     }
     return k;
@@ -281,16 +282,21 @@ void schedule(void) {
     for (int i = 0; i < MAX_TASKS; i++) {
         struct task *t = &tasks[i];
         if ((t->state == PS_SLEEPING || t->state == PS_BLOCKED) && t->wake_at && now >= t->wake_at) {
-            t->state = PS_READY; t->wake_at = 0;
+            t->state = PS_READY; t->wake_at = 0; t->rq = ++rq_seq;
         }
     }
     int cur = current - tasks;
+    /* first in, first out: the ready task that was woken (or stopped) longest ago, so threads run in the order
+     * they were woken, as Linux programs expect (a thread woken by a message runs before one woken after it:
+     * Chromium's shutdown relies on that); the one running now goes after every ready one */
     struct task *next = 0;
+    uint64_t best = ~0ULL;
     for (int i = 1; i <= MAX_TASKS; i++) {
         struct task *t = &tasks[(cur + i) % MAX_TASKS];
         if (t->idle || (me->id && !t->user)) continue;      /* kernel threads stay on core 0 */
-        if (t->state == PS_READY || (t == current && t->state == PS_RUNNING)) { next = t; break; }
+        if (t->state == PS_READY && t->rq < best) { best = t->rq; next = t; }
     }
+    if (!next && current->state == PS_RUNNING && !current->idle && !(me->id && !current->user)) next = current;
     if (!next) next = me->idle;
     account();
     if (next == current) { current->state = PS_RUNNING; if (!current->user) __asm__ volatile("sti"); return; }
@@ -300,7 +306,7 @@ void schedule(void) {
         __asm__ volatile("fxrstor64 %0" :: "m"(next->fx) : "memory");
         __asm__ volatile("wrmsr" :: "c"(0xC0000100), "a"((uint32_t)next->fs_base), "d"((uint32_t)(next->fs_base >> 32)));   /* its %fs (thread-local storage) */
     }
-    if (prev->state == PS_RUNNING) prev->state = PS_READY;
+    if (prev->state == PS_RUNNING) { prev->state = PS_READY; prev->rq = ++rq_seq; }
     next->state = PS_RUNNING;
     next->cpu = me->id;
     current = next;
@@ -416,7 +422,7 @@ void event_push(struct task *t, const struct dunc_event *ev) {
     if (nh == t->evt) return;   /* full: drop */
     t->evq[t->evh] = *ev;
     t->evh = nh;
-    if (t->state == PS_BLOCKED && t->waiting_event) { t->state = PS_READY; t->wake_at = 0; }
+    if (t->state == PS_BLOCKED && t->waiting_event) { t->state = PS_READY; t->wake_at = 0; t->rq = ++rq_seq; }
 }
 
 /* Watchdog: kernel code isn't preempted, so a kernel thread that never yields freezes everything.

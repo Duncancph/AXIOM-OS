@@ -1340,7 +1340,7 @@ void desktop_thread(void *arg) {
         ps2_poll();
         xhci_poll();
         int s;
-        while ((s = serial_getc()) >= 0) input_push(s == '\r' ? '\n' : s == 127 ? '\b' : s);
+        while ((s = serial_getc()) >= 0) { if (s == 0x1C) { linux_dump_threads(); continue; } input_push(s == '\r' ? '\n' : s == 127 ? '\b' : s); }
         int k;
         while ((k = input_pop()) >= 0) handle_key(k);
         int dx, dy, b, wh;
