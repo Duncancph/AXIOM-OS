@@ -53,21 +53,26 @@ const char *fs_error(int e) {
 
 /* ---------------- paths ---------------- */
 #define MAXC 32
-struct path { int n; char c[MAXC][64]; };
+/* a path split into its names: each c[i] points into buf (names up to 255 characters, as on Linux and FAT) */
+struct path { int n; const char *c[MAXC]; char buf[PATH_MAX_]; };
 
 static bool parse(const char *p, struct path *out) {
     out->n = 0;
     if (!p || p[0] != '/') return false;
-    while (*p) {
-        while (*p == '/') p++;
-        if (!*p) break;
-        char comp[64]; int k = 0;
-        while (*p && *p != '/') { if (k >= 63) return false; comp[k++] = *p++; }
-        comp[k] = 0;
+    size_t len = strlen(p);
+    if (len >= sizeof out->buf) return false;
+    memcpy(out->buf, p, len + 1);
+    for (char *q = out->buf; *q;) {
+        while (*q == '/') *q++ = 0;
+        if (!*q) break;
+        char *comp = q;
+        while (*q && *q != '/') q++;
+        if (*q) *q++ = 0;
+        if (strlen(comp) > 255) return false;
         if (!strcmp(comp, ".")) continue;
         if (!strcmp(comp, "..")) { if (out->n) out->n--; continue; }
         if (out->n >= MAXC) return false;
-        strncpy0(out->c[out->n++], comp, 64);
+        out->c[out->n++] = comp;
     }
     return true;
 }
@@ -238,6 +243,7 @@ long vfs_write(const char *path, const void *buf, uint64_t len) {
         struct vnode *d = walk(&p, p.n - 1);
         if (!d) r = FS_ENOENT;
         else if (!d->dir) r = FS_ENOTDIR;
+        else if (strlen(p.c[p.n - 1]) >= sizeof d->name) r = FS_EINVAL;          /* (names in memory: up to 63) */
         else r = ram_write(d, p.c[p.n - 1], buf, len);
     }
     if (r >= 0) { r = (long)len; notify_changed(); }
@@ -285,6 +291,7 @@ int vfs_mkdir(const char *path) {
         if (!d) r = FS_ENOENT;
         else if (!d->dir) r = FS_ENOTDIR;
         else if (child(d, p.c[p.n - 1])) r = FS_EEXIST;
+        else if (strlen(p.c[p.n - 1]) >= sizeof d->name) r = FS_EINVAL;
         else if (!mknode(d, p.c[p.n - 1], true)) r = FS_ENOSPC;
     }
     if (r == FS_OK && root && root->child) notify_changed();
@@ -385,6 +392,7 @@ int vfs_rename(const char *from, const char *to) {
         if (!v) r = FS_ENOENT;
         else if (!d || !d->dir) r = FS_ENOTDIR;
         else if (a.n == 1) r = FS_EROFS;
+        else if (strlen(b.c[b.n - 1]) >= sizeof v->name) r = FS_EINVAL;
         else {
             unlink_node(v);
             strncpy0(v->name, b.c[b.n - 1], sizeof v->name);

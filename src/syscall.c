@@ -137,6 +137,7 @@ uint64_t syscall_dispatch(struct frame *f) {
         strncpy0((char *)a, current->arg, b);
         return strlen(current->arg);
     case SYS_APPS: {
+        if ((int)b == -2) { apps_refresh(); desktop_dock_changed(); return 0; }   /* an app was installed: read /apps again */
         int max = (int)b, n = apps_count();
         if (max < 0 || !UOK(a, (uint64_t)max * sizeof(struct dunc_app), true)) return (uint64_t)-1;
         struct dunc_app *o = (struct dunc_app *)a;

@@ -1,6 +1,7 @@
 /* Settings: keyboard, date & time, display, sound, lock screen, power, updates, storage (install AXIOM), about. */
 #include "../lib/dunc.h"
 #include "../lib/img/img.h"
+#include "../lib/crypto/crypto.h"
 
 #define WW 820
 #define WH 580
@@ -452,6 +453,253 @@ static void install_update(void) {
 out:
     for (int i = 0; i < UPD_FILES; i++) free((void *)u.data[i]);
 }
+/* ---- More apps: packages too big for the system update (the Chromium-based Vertex browser) ----
+ * Next to the update: packages/index.txt (one id per line) and packages/<id>.txt, a signed description:
+ *   AXIOM package 1 / id / name / version / icon / description / min-build / size / sha256 / url /
+ *   installed-size / run <program and arguments, relative to the install folder> / root yes (optional: unpack into
+ *   the Linux folder itself, for a package that brings its own libraries) / signature <hex>
+ * The archive (a tar) downloads straight to /system/linux/.downloads, resuming where it stopped (HTTP Range)
+ * and hashing as it goes; once its SHA-256 matches, it unpacks into /system/linux/opt/<id> and the app gets a
+ * line in /apps (it then opens from the dock and menu as a Linux program). */
+#define MAXPKG 4
+struct pkg { char id[24], name[32], version[16], icon[16], desc[100], url[240], run[160], sha[65]; long size, isize, minb;
+             char have[16]; bool root; };   /* have: the installed version, "" if none; root: unpacks into the Linux
+                                               folder itself (lib/, usr/, opt/... the package brings what it needs) */
+static struct pkg pkgs[MAXPKG]; static int npkg, pk_busy = -1, pk_state; static bool pk_looked;
+static char pk_msg[160]; static uint32_t pk_col;
+static long pk_got, pk_total, pk_t0, pk_got0;
+enum { PK_IDLE, PK_DOWNLOAD, PK_VERIFY, PK_UNPACK, PK_DONE, PK_FAILED };
+static void pk_say(uint32_t col, const char *m) { strncpy0(pk_msg, m, sizeof pk_msg); pk_col = col; }
+static void field_of(const char *t, long n, const char *name, char *out, int max) {
+    out[0] = 0; int nl = (int)strlen(name);
+    for (const char *p = t; p < t + n;) {
+        const char *e = p; while (e < t + n && *e != '\n') e++;
+        if (e - p > nl && !strncmp(p, name, nl) && p[nl] == ' ') { int k = (int)(e - p - nl - 1); if (k >= max) k = max - 1; memcpy(out, p + nl + 1, k); out[k] = 0; return; }
+        p = e + 1;
+    }
+}
+static void installed_version(const char *id, char *out, int max) {
+    char path[64], line[512]; ksnprintf(path, sizeof path, "/apps/%s.info", id);
+    long r = fs_read(path, line, 0, sizeof line - 1); out[0] = 0;
+    if (r <= 0) return;
+    line[r] = 0;
+    int bars = 0; char *v = 0;
+    for (char *q = line; *q; q++) if (*q == '|') { bars++; if (bars == 2) v = q + 1; else if (bars == 3) { *q = 0; break; } }
+    if (v) strncpy0(out, v, max);
+}
+static void look_for_packages(void) {
+    char url[120], base[240], u2[240]; sys_setting_get("update.url", url, sizeof url);
+    pk_looked = true; npkg = 0;
+    if (!url[0]) return;
+    url_of(url, "packages/index.txt", base, sizeof base);
+    struct buf b = { 0, 0, 0, 4096 }; int status = 0;
+    struct http_req rq = { "GET", 0, 0, 0, 0, "Cache-Control: no-cache\r\n", 20000 };
+    long r = http_request(base, &rq, buf_sink, &b, &status, 0, 0, 0, 0, 0);
+    if (r < 0 || status != 200) { free(b.p); if (r < 0) pk_say(UI_RED, "Couldn't look for apps (no connection?)."); return; }
+    for (char *p = b.p; p < b.p + b.n && npkg < MAXPKG;) {
+        char *e = p; while (e < b.p + b.n && *e != '\n') e++;
+        char id[24]; int k = 0; while (p + k < e && p[k] != '\r' && k < 23) { id[k] = p[k]; k++; } id[k] = 0;
+        p = e + 1;
+        if (!id[0] || id[0] == '#') continue;
+        char rel[64]; ksnprintf(rel, sizeof rel, "packages/%s.txt", id); url_of(url, rel, u2, sizeof u2);
+        struct buf m = { 0, 0, 0, 16384 }; status = 0;
+        r = http_request(u2, &rq, buf_sink, &m, &status, 0, 0, 0, 0, 0);
+        if (r >= 0 && status == 200 && sys_call(SYS_UPDATE, UPDATE_PACKAGE_VERIFY, (long)m.p, m.n, 0, 0) == 0) {
+            struct pkg *q = &pkgs[npkg]; memset(q, 0, sizeof *q); char t[40];
+            field_of(m.p, m.n, "id", q->id, sizeof q->id); field_of(m.p, m.n, "name", q->name, sizeof q->name);
+            field_of(m.p, m.n, "version", q->version, sizeof q->version); field_of(m.p, m.n, "icon", q->icon, sizeof q->icon);
+            field_of(m.p, m.n, "description", q->desc, sizeof q->desc); field_of(m.p, m.n, "url", q->url, sizeof q->url);
+            field_of(m.p, m.n, "run", q->run, sizeof q->run); field_of(m.p, m.n, "sha256", q->sha, sizeof q->sha);
+            field_of(m.p, m.n, "size", t, sizeof t); q->size = katoi(t);
+            field_of(m.p, m.n, "installed-size", t, sizeof t); q->isize = katoi(t);
+            field_of(m.p, m.n, "min-build", t, sizeof t); q->minb = katoi(t);
+            field_of(m.p, m.n, "root", t, sizeof t); q->root = !strcmp(t, "yes");
+            bool ok = q->id[0] && q->url[0] && q->run[0] && strlen(q->sha) == 64 && q->size > 0;
+            for (char *c = q->id; *c; c++) if (!((*c >= 'a' && *c <= 'z') || (*c >= '0' && *c <= '9') || *c == '-')) ok = false;   /* (it becomes a folder name) */
+            if (ok) { installed_version(q->id, q->have, sizeof q->have); npkg++; }
+        } else if (r >= 0 && status == 200) pk_say(UI_RED, "A package description wasn't signed with the AXIOM key: it was skipped.");
+        free(m.p);
+    }
+    free(b.p);
+}
+
+/* the download: straight to a file, hashing as it goes */
+struct dl { const char *path; sha256_ctx h; char *buf; long n; long got; bool err; };
+static bool dl_flush(struct dl *d) {
+    if (!d->n) return true;
+    if (fs_append(d->path, d->buf, d->n) != d->n) { d->err = true; return false; }
+    d->n = 0; return true;
+}
+static bool dl_sink(const char *data, long n, void *ctx) {
+    struct dl *d = ctx;
+    sha256_update(&d->h, data, n);
+    while (n) {
+        long k = (1 << 20) - d->n; if (k > n) k = n;
+        memcpy(d->buf + d->n, data, k); d->n += k; data += k; n -= k; d->got += k;
+        if (d->n == (1 << 20) && !dl_flush(d)) return false;
+    }
+    pk_got = d->got;
+    static uint64_t last; uint64_t now = sys_time();
+    if (now - last > 250) { last = now; draw(); }
+    return true;
+}
+static void mkdirs(const char *path) {                       /* every folder on the way to path (not path itself) */
+    char p[300]; strncpy0(p, path, sizeof p);
+    for (char *q = p + 1; *q; q++) if (*q == '/') { *q = 0; fs_mkdir(p); *q = '/'; }
+}
+static long oct(const char *s, int n) { long v = 0; for (int i = 0; i < n && s[i]; i++) if (s[i] >= '0' && s[i] <= '7') v = v * 8 + (s[i] - '0'); return v; }
+/* unpack a tar (ustar/GNU; long names) into dir; returns files written or -1 */
+static char untar_err[160];
+static long untar(const char *tar, long tsize, const char *dir) {
+    static char h[512], lname[256]; char *chunk = malloc(1 << 20);
+    if (!chunk) return -1;
+    long off = 0, files = 0; lname[0] = 0;
+    while (off + 512 <= tsize) {
+        long rr = fs_read(tar, h, off, 512);
+        if (rr != 512) { ksnprintf(untar_err, sizeof untar_err, "reading the archive at %ld: %ld", off, rr); free(chunk); return -1; }
+        off += 512;
+        if (!h[0]) break;                                    /* the end */
+        long size = oct(h + 124, 12); char type = h[156];
+        char name[256];
+        if (lname[0]) { strncpy0(name, lname, sizeof name); lname[0] = 0; }
+        else {                                               /* ustar: an optional prefix (155) and the name (100) */
+            int k = 0;
+            if (!memcmp(h + 257, "ustar", 5) && h[345]) { while (k < 155 && h[345 + k]) { name[k] = h[345 + k]; k++; } name[k++] = '/'; }
+            for (int j = 0; j < 100 && h[j]; j++) name[k++] = h[j];
+            name[k] = 0;
+        }
+        if (type == 'L') {                                   /* GNU long name: the next entry's name */
+            long k = size < 255 ? size : 255;
+            if (fs_read(tar, lname, off, k) != k) { free(chunk); return -1; }
+            lname[k] = 0;
+            off += (size + 511) / 512 * 512; continue;
+        }
+        char *nm = name; while (nm[0] == '.' && nm[1] == '/') nm += 2;
+        bool bad = !nm[0] || nm[0] == '/';
+        for (char *q = nm; *q; q++) if (q[0] == '.' && q[1] == '.' && (q == nm || q[-1] == '/')) bad = true;   /* (no escaping the folder) */
+        char out[300]; ksnprintf(out, sizeof out, "%s/%s", dir, nm);
+        int ol = (int)strlen(out); if (ol && out[ol - 1] == '/') out[--ol] = 0;
+        if (!bad && type == '5') { mkdirs(out); fs_mkdir(out); }
+        else if (!bad && (type == '0' || type == 0)) {
+            mkdirs(out);
+            long w0 = fs_write(out, "", 0);
+            if (w0 < 0) { ksnprintf(untar_err, sizeof untar_err, "creating %s: %ld", out, w0); free(chunk); return -1; }
+            for (long done = 0; done < size;) {
+                long k = size - done; if (k > (1 << 20)) k = 1 << 20;
+                long r1 = fs_read(tar, chunk, off + done, k), r2 = r1 == k ? fs_append(out, chunk, k) : 0;
+                if (r1 != k || r2 != k) { ksnprintf(untar_err, sizeof untar_err, "%s %s: %ld", r1 != k ? "reading for" : "writing", out, r1 != k ? r1 : r2); free(chunk); return -1; }
+                done += k;
+            }
+            files++;
+            if (files % 20 == 0) { char m[120]; ksnprintf(m, sizeof m, "Unpacking: %ld files...", files); pk_say(UI_MUTED, m); draw(); }
+        }                                                    /* (links and devices are skipped) */
+        off += (size + 511) / 512 * 512;
+    }
+    free(chunk);
+    return files;
+}
+static void pkg_install(int i) {
+    struct pkg *q = &pkgs[i];
+    if (q->minb > ubuild_now) { char m[120]; ksnprintf(m, sizeof m, "%s needs AXIOM build %ld or later: update AXIOM first.", q->name, q->minb); pk_say(UI_RED, m); return; }
+    pk_busy = i; pk_state = PK_DOWNLOAD;
+    char tmp[160], dir[120];
+    fs_mkdir("/system/linux/.downloads");
+    ksnprintf(tmp, sizeof tmp, "/system/linux/.downloads/%s-%s.tar", q->id, q->version);
+    if (q->root) strncpy0(dir, "/system/linux", sizeof dir); else ksnprintf(dir, sizeof dir, "/system/linux/opt/%s", q->id);
+    struct dl d; memset(&d, 0, sizeof d); d.path = tmp; d.buf = malloc(1 << 20);
+    if (!d.buf) { pk_say(UI_RED, "Not enough memory to download."); pk_state = PK_FAILED; return; }
+    sha256_init(&d.h);
+    /* resume: hash what's already here */
+    struct dunc_stat st; long have = fs_stat(tmp, &st) == 0 ? (long)st.size : -1;
+    if (have > q->size) { fs_delete(tmp); have = -1; }
+    if (have > 0) {
+        pk_say(UI_MUTED, "Resuming the download..."); draw();
+        for (long off = 0; off < have;) {
+            long k = have - off; if (k > (1 << 20)) k = 1 << 20;
+            if (fs_read(tmp, d.buf, off, k) != k) { have = -1; break; }
+            sha256_update(&d.h, d.buf, k); off += k;
+        }
+        if (have < 0) { fs_delete(tmp); sha256_init(&d.h); }
+    }
+    if (have <= 0) { fs_write(tmp, "", 0); have = 0; }
+    d.got = have; pk_got = have; pk_total = q->size; pk_t0 = (long)sys_time(); pk_got0 = have;
+    if (have < q->size) {
+        pk_say(UI_MUTED, "");
+        char hdr[64]; ksnprintf(hdr, sizeof hdr, "Range: bytes=%ld-\r\n", have);
+        struct http_req rq = { "GET", 0, 0, 0, 0, have ? hdr : 0, 30000 };
+        int status = 0; long total = 0;
+        long r = http_request(q->url, &rq, dl_sink, &d, &status, &total, 0, 0, 0, 0);
+        if (have && status == 200) {                          /* the server sent it all again: start over */
+            fs_write(tmp, "", 0); sha256_init(&d.h); d.n = 0; d.got = 0;
+            r = http_request(q->url, &rq, dl_sink, &d, &status, &total, 0, 0, 0, 0);
+        }
+        dl_flush(&d);
+        if (d.err) { free(d.buf); pk_state = PK_FAILED; pk_say(UI_RED, "Couldn't write the download (is the disk full?)."); pk_busy = -1; return; }
+        if (r < 0 || (status != 200 && status != 206)) {
+            free(d.buf); pk_state = PK_FAILED; pk_busy = -1;
+            char m[160];
+            if (r < 0) ksnprintf(m, sizeof m, "The download stopped: %s. Press Install again to carry on from %ld MB.", http_strerror(r), d.got >> 20);
+            else ksnprintf(m, sizeof m, "The download failed: the server answered %d.", status);
+            pk_say(UI_RED, m); return;
+        }
+    }
+    free(d.buf);
+    if (d.got < q->size) {                                     /* the connection dropped: keep what's here */
+        pk_state = PK_FAILED; pk_busy = -1;
+        char m[160]; ksnprintf(m, sizeof m, "The download stopped at %ld of %ld MB. Press Install to carry on from there.", d.got >> 20, q->size >> 20);
+        pk_say(UI_RED, m); return;
+    }
+    pk_state = PK_VERIFY; pk_say(UI_MUTED, "Checking the download..."); draw();
+    uint8_t h[32]; sha256_final(&d.h, h);
+    char hx[65]; for (int k = 0; k < 32; k++) ksnprintf(hx + 2 * k, 3, "%02x", h[k]);
+    if (d.got != q->size || strcmp(hx, q->sha)) {
+        fs_delete(tmp); pk_state = PK_FAILED; pk_busy = -1;
+        pk_say(UI_RED, "The download doesn't match the signed package (damaged?). It was deleted: press Install to try again.");
+        return;
+    }
+    pk_state = PK_UNPACK; pk_say(UI_MUTED, "Unpacking..."); draw();
+    fs_mkdir("/system/linux/opt"); fs_mkdir(dir);
+    long files = untar(tmp, q->size, dir);
+    if (files < 0) { char m[200]; ksnprintf(m, sizeof m, "Couldn't unpack it: %s", untar_err); pk_state = PK_FAILED; pk_busy = -1; pk_say(UI_RED, m); return; }
+    fs_delete(tmp);
+    /* the app's line in /apps: it runs as a Linux program from its folder */
+    char info[512], ipath[64];
+    ksnprintf(info, sizeof info, "%s|%s|%s|%s|%s|linux:%s/%s\n", q->id, q->name, q->version, q->icon[0] ? q->icon : "gear", q->desc, dir, q->run);
+    ksnprintf(ipath, sizeof ipath, "/apps/%s.info", q->id);
+    fs_write(ipath, info, strlen(info));
+    sys_call(SYS_APPS, 0, -2, 0, 0, 0);                      /* the kernel reads /apps again */
+    strncpy0(q->have, q->version, sizeof q->have);
+    pk_state = PK_DONE; pk_busy = -1;
+    char m[160]; ksnprintf(m, sizeof m, "%s %s is installed (%ld files). Open it from the dock or the AXIOM menu.", q->name, q->version, files);
+    pk_say(UI_GREEN, m);
+}
+static void draw_packages(int y) {
+    int x = SIDE + 32, w = WW - SIDE - 64;
+    char b[200];
+    gfx_text(&a.c, &font_ui_bold, x, y, UI_TEXT, "More apps");
+    if (!pk_looked) { label(x, y + 24, UI_MUTED, "Big apps that aren't part of the system update, like the full Vertex browser."); button(x, y + 40, 160, "Look for apps", BTN_NORMAL, H_BTN + 35, false); }
+    else if (!npkg) label(x, y + 24, pk_msg[0] ? pk_col : UI_MUTED, pk_msg[0] ? pk_msg : "No apps have been published yet.");
+    for (int i = 0; i < npkg; i++) {
+        struct pkg *q = &pkgs[i]; int cy = y + 14 + i * 90;
+        ui_card(&a.c, x, cy, w, 80);
+        ksnprintf(b, sizeof b, "%s %s  -  %ld MB download, %ld MB installed", q->name, q->version, q->size >> 20, (q->isize ? q->isize : q->size) >> 20);
+        gfx_text(&a.c, &font_ui_bold, x + 16, cy + 24, UI_TEXT, b);
+        label(x + 16, cy + 46, UI_MUTED, q->desc);
+        bool busy = pk_busy == i;
+        if (busy && pk_state == PK_DOWNLOAD) {
+            long secs = ((long)sys_time() - pk_t0) / 1000; long rate = secs > 0 ? (pk_got - pk_got0) / secs : 0;
+            int pw = w - 32, fill = pk_total ? (int)((int64_t)pw * pk_got / pk_total) : 0;
+            gfx_rrect(&a.c, x + 16, cy + 56, pw, 8, 4, 0x2A2A28, 255); gfx_rrect(&a.c, x + 16, cy + 56, fill, 8, 4, UI_ACCENT, 255);
+            ksnprintf(b, sizeof b, "%ld of %ld MB  (%ld KB/s)", pk_got >> 20, pk_total >> 20, rate >> 10);
+            label(x + 16, cy + 76, UI_TEXT, b);
+        } else if (!busy) {
+            bool same = q->have[0] && !strcmp(q->have, q->version);
+            if (same) label(WW - 32 - 130, cy + 30, UI_GREEN, "Installed");
+            else button(WW - 32 - 150, cy + 14, 134, q->have[0] ? "Update" : "Install", BTN_PRIMARY, H_BTN + 36 + i, pk_busy >= 0);
+        }
+    }
+    if (npkg && pk_msg[0]) label(x, y + 14 + npkg * 90 + 12, pk_col, pk_msg);
+}
 static void draw_updates(void) {
     char b[200];
     struct sysinfo si; sys_sysinfo(&si);
@@ -484,8 +732,9 @@ static void draw_updates(void) {
         gfx_rrect(&a.c, x, py, w * inst.percent / 100, 10, 5, inst.state == 3 ? UI_RED : UI_ACCENT, 255);
         label(x, py + 30, inst.state == 3 ? UI_RED : UI_TEXT, inst.msg);
     }
+    if (!installing && ustate != U_INSTALLING) draw_packages(y + 186);
     char url[120]; sys_setting_get("update.url", url, sizeof url);
-    if (url[0]) { ksnprintf(b, sizeof b, "Source: %s", url); label(x, WH - 52, HL_TEXT_FAINT, b); }
+    if (url[0]) { ksnprintf(b, sizeof b, "Source: %s", url); label(x, WH - 22, HL_TEXT_FAINT, b); }
 }
 
 static struct dunc_disk disks[8]; static int ndisks, confirm_disk = -1, confirm_mode;
@@ -798,6 +1047,8 @@ static void click(int id, int mx) {
         else { sys_setting_set("user.name", nm); say(UI_GREEN, "Saved. New terminals will show it."); }
     }
     if (id == H_BTN + 31) check_updates();
+    if (id == H_BTN + 35) { pk_msg[0] = 0; look_for_packages(); }
+    if (id >= H_BTN + 36 && id < H_BTN + 36 + MAXPKG && pk_busy < 0) pkg_install(id - H_BTN - 36);
     if (id == H_BTN + 30 && ustate == U_AVAILABLE) install_update();
     if (id == H_BTN + 32) sys_power(1);
     if (id == H_BTN + 21) confirm_disk = -1;

@@ -13,6 +13,10 @@
  *   file initrd <path> <size> <sha256 hex>         gzip-compressed if it ends in .gz; size and hash are
  *   file bootx64 <path> <size> <sha256 hex>        of the uncompressed file)
  *   signature <DER signature, hex>
+ *
+ * Packages too big for the system update (the Chromium-based Vertex) have their own description, signed with
+ * the same key ("AXIOM package 1", see tools/make-package.py); Settings downloads and installs them, and asks
+ * the kernel here whether the description is genuine (UPDATE_PACKAGE_VERIFY).
  */
 #include "kernel.h"
 #include "disk.h"
@@ -71,10 +75,40 @@ static int check_manifest(const char *m, long n, struct manifest *out) {
     return 0;
 }
 
+/* a package description: "AXIOM package 1", then lines, then "signature <hex>" over everything before it */
+static int check_package(const char *m, long n) {
+    if (n < 20 || n > 16384 || memcmp(m, "AXIOM package 1\n", 16)) return UPD_EFORMAT;
+    const char *e = m + n, *sigline = 0;
+    for (const char *p = m; p < e;) {
+        const char *le = p; while (le < e && *le != '\n') le++;
+        const char *we, *w = word(p, le, &we);
+        if (is(w, we, "signature")) { sigline = p; break; }
+        p = le + 1;
+    }
+    if (!sigline) return UPD_EFORMAT;
+    uint8_t sig[80], h[32];
+    const char *we, *w = word(sigline, e, &we); (void)w;
+    const char *le = we; while (le < e && *le != '\n') le++;
+    const char *se, *s = word(we, le, &se);
+    long sl = unhex(s, se, sig, sizeof sig);
+    if (sl < 8) return UPD_EFORMAT;
+    hash(H_SHA256, m, (size_t)(sigline - m), h);
+    return ecdsa_verify(CURVE_P256, update_pubkey, sizeof update_pubkey, h, 32, sig, (size_t)sl) ? UPD_ESIG : 0;
+}
+
 static uint8_t *staged[UPD_FILES]; static uint64_t staged_len[UPD_FILES];
 
 long update_syscall(int op, const void *a, long b, bool (*user_ok_fn)(const void *, size_t)) {
     if (op == UPDATE_BUILD) return OS_BUILD;
+    if (op == UPDATE_PACKAGE_VERIFY) {
+        if (b <= 0 || b > 16384 || !user_ok_fn(a, (size_t)b)) return UPD_EFORMAT;
+        char *copy = kmalloc((size_t)b);                   /* (the app can't change it while it's checked) */
+        if (!copy) return UPD_ENOMEM;
+        memcpy(copy, a, (size_t)b);
+        int r = check_package(copy, b);
+        kfree(copy);
+        return r;
+    }
     struct manifest mf;
     if (op == UPDATE_VERIFY) {
         if (b <= 0 || b > 16384 || !user_ok_fn(a, (size_t)b)) return UPD_EFORMAT;

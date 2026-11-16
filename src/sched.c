@@ -63,6 +63,23 @@ int task_spawn(const char *app) { return task_spawn_arg(app, ""); }
 int task_spawn_arg(const char *app, const char *arg) {
     const struct app_entry *ae = apps_find(app);
     if (!ae) return -1;
+    if (ae->linux_cmd[0]) {                                     /* a Linux program (an installed package) */
+        char cmd[400]; ksnprintf(cmd, sizeof cmd, "%s%s%s", ae->linux_cmd, arg && arg[0] ? " " : "", arg ? arg : "");
+        char *argv[24]; int argc = 0;
+        for (char *p = cmd; *p && argc < 23;) {
+            while (*p == ' ') *p++ = 0;
+            if (!*p) break;
+            argv[argc++] = p;
+            while (*p && *p != ' ') p++;
+        }
+        if (!argc) return -1;
+        argv[argc] = 0;
+        int pid = linux_spawn(argv[0], argc, argv, 0);
+        if (pid < 0) return -1;
+        for (int i = 0; i < MAX_TASKS; i++)                     /* the dock shows it as this app */
+            if (tasks[i].state && tasks[i].pid == pid) { strncpy0(tasks[i].appid, ae->id, sizeof tasks[i].appid); tasks[i].app = tasks[i].appid; strncpy0(tasks[i].name, ae->name, sizeof tasks[i].name); }
+        return pid;
+    }
     const uint8_t *img = 0; uint64_t img_len = 0; void *loaded = 0;
     if (ae->builtin) { img = ae->builtin->start; img_len = ae->builtin->end - ae->builtin->start; }
     else {

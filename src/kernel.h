@@ -377,8 +377,10 @@ void kyield(void);
 uint64_t cpu_time_us(void);   /* also brings the running task's CPU time up to date */         /* yield if the scheduler runs, else spin */
 struct app_image { const char *id, *title; const uint8_t *start, *end; };
 /* ---- apps.c: registry of built-in and installed (clan) apps ---- */
-struct app_entry { char id[24], name[32], icon[16], version[12]; const struct app_image *builtin; bool installed; };
+struct app_entry { char id[24], name[32], icon[16], version[12]; const struct app_image *builtin; bool installed;
+                   char linux_cmd[200]; };   /* a Linux program (installed package): its path and arguments */
 void apps_refresh(void);
+void desktop_dock_changed(void);
 int apps_count(void);
 int apps_visible(void);                      /* the first ones: shown in the dock and menu (Protection Test isn't) */
 const struct app_entry *apps_get(int i);

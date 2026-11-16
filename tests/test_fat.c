@@ -57,6 +57,14 @@ int main(int argc, char **argv) {
     CHECK(o->mkdir(v, "/My Folder") == 0, "mkdir");
     CHECK(o->mkdir(v, "/My Folder") == FS_EEXIST, "mkdir exists");
     CHECK(o->mkdir(v, "/My Folder/Sub dir") == 0, "mkdir nested");
+    {   /* long names (84 and 31 characters): a folder and a file in it, as packages unpack them */
+        const char *ld = "/My Folder/a-folder-with-a-rather-long-name-to-need-gnu-long-name-records-in-the-tar-archive";
+        int r = o->mkdir(v, ld);
+        CHECK(r == 0, "mkdir long name: %d", r);
+        char lf[300]; snprintf(lf, sizeof lf, "%s/readme-with-a-long-name-too.txt", ld);
+        long w = o->write(v, lf, "long\n", 5);
+        CHECK(w == 5, "write in long-named folder: %ld", w);
+    }
     for (int i = 0; i < 40; i++) {   /* force the folder to grow beyond one cluster */
         char p[96], t[32]; snprintf(p, sizeof p, "/My Folder/Sub dir/document number %02d.txt", i); snprintf(t, sizeof t, "file %d\n", i);
         CHECK(o->write(v, p, t, strlen(t)) == (long)strlen(t), "write many %d", i);

@@ -1,5 +1,7 @@
 /* App registry (built-in apps + apps installed with clan) and the clan package manager.
- * Packages live in /system/repo (index.txt + <id>.elf); installed apps in /apps. */
+ * Packages live in /system/repo (index.txt + <id>.elf); installed apps in /apps (<id>.info + <id>.elf).
+ * An .info line is "id|Name|version|icon|description" and, for a Linux program installed from a package
+ * (Settings > Updates > Apps), a sixth field "linux:<path> <arguments>" instead of an .elf. */
 #include "kernel.h"
 #include "vfs.h"
 
@@ -39,17 +41,19 @@ void apps_refresh(void) {
     for (int i = 0; i < n && napps < MAX_APPS; i++) {
         int l = strlen(ents[i].name);
         if (l < 6 || strcmp(ents[i].name + l - 5, ".info")) continue;
-        char path[96], line[256]; ksnprintf(path, sizeof path, "/apps/%s", ents[i].name);
+        char path[96], line[512]; ksnprintf(path, sizeof path, "/apps/%s", ents[i].name);
         long r = vfs_read(path, line, 0, sizeof line - 1);
         if (r <= 0) continue;
         line[r] = 0;
-        char *f[5];
-        if (split(line, f, 5) < 4) continue;
+        char *f[6];
+        int nf = split(line, f, 6);
+        if (nf < 4) continue;
         struct app_entry *a = &apps[napps++];
         memset(a, 0, sizeof *a);
         strncpy0(a->id, f[0], sizeof a->id); strncpy0(a->name, f[1], sizeof a->name);
         strncpy0(a->version, f[2], sizeof a->version); strncpy0(a->icon, f[3], sizeof a->icon);
         a->installed = true;
+        if (nf >= 6 && !strncmp(f[5], "linux:", 6)) strncpy0(a->linux_cmd, f[5] + 6, sizeof a->linux_cmd);
     }
     nhidden = 0;                                              /* apps not shown in the dock or menu go last */
     for (int i = 0; i < napps - nhidden; i++)
@@ -64,7 +68,8 @@ int apps_count(void) { return napps; }
 int apps_visible(void) { return napps - nhidden; }
 const struct app_entry *apps_get(int i) { return i >= 0 && i < napps ? &apps[i] : 0; }
 const struct app_entry *apps_find(const char *id) {
-    if (id && (!strcmp(id, "vertex") || !strcmp(id, "arc"))) id = "web";   /* the browser is Vertex (it was Arc, and Web before that) */
+    if (id && !strcmp(id, "vertex")) for (int i = 0; i < napps; i++) if (!strcmp(apps[i].id, "vertex")) return &apps[i];   /* the installed (Chromium) Vertex */
+    if (id && (!strcmp(id, "vertex") || !strcmp(id, "arc"))) id = "web";   /* else the built-in browser (it was Arc, and Web before that) */
     for (int i = 0; i < napps; i++) if (!strcmp(apps[i].id, id)) return &apps[i];
     return 0;
 }

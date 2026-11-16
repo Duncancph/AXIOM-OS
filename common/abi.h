@@ -119,7 +119,7 @@ struct dunc_disk {
 enum { INSTALL_ERASE = 1, INSTALL_UPDATE };   /* update: new system files, keep the user's files */
 struct dunc_install { int state, percent; char msg[120]; };
 /* signed system updates (SYS_UPDATE): op 0 = this system's build number, 1 = check a manifest, 2 = install */
-enum { UPDATE_BUILD, UPDATE_VERIFY, UPDATE_APPLY };
+enum { UPDATE_BUILD, UPDATE_VERIFY, UPDATE_APPLY, UPDATE_PACKAGE_VERIFY /* (text, len): a signed "AXIOM package 1" description: 0 if genuine */ };
 enum { UPD_FILES = 4 };                         /* kernel, initrd, bootx64, biosboot (optional), in that order */
 struct dunc_update { const char *manifest; long mlen; const unsigned char *data[UPD_FILES]; long len[UPD_FILES]; };
 enum { UPD_EFORMAT = -20, UPD_ESIG = -21, UPD_EOLD = -22, UPD_EHASH = -23, UPD_ENODISK = -24, UPD_ENOMEM = -25, UPD_EBUSY = -26 };   /* state: 0 idle, 1 working, 2 done, 3 failed */
