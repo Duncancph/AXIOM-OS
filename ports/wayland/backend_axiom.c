@@ -18,7 +18,7 @@ static int map(struct bwin *b) {
 }
 struct bwin *be_create(int w, int h, const char *title) {
     struct bwin *b = calloc(1, sizeof *b);
-    b->fd = open("/dev/axiom/window", O_RDWR | O_CLOEXEC);
+    b->fd = open("/dev/axiom/window", O_RDWR | O_CLOEXEC | O_NONBLOCK);
     struct axwin_create c = { w, h, AXWIN_RESIZABLE, "" };
     strncpy(c.title, title ? title : "", sizeof c.title - 1);
     if (b->fd < 0 || ioctl(b->fd, AXWIN_CREATE, &c) < 0 || map(b) < 0) { if (b->fd >= 0) close(b->fd); free(b); return 0; }
@@ -29,6 +29,7 @@ uint32_t *be_pixels(struct bwin *b, int *w, int *h, int *stride) { *w = b->info.
 void be_flush(struct bwin *b, int x, int y, int w, int h) { struct axwin_rect r = { x, y, w, h }; ioctl(b->fd, AXWIN_FLUSH, &r); }
 void be_title(struct bwin *b, const char *t) { char c[64] = { 0 }; strncpy(c, t, 63); ioctl(b->fd, AXWIN_TITLE, c); }
 int be_fd(struct bwin *b) { return b->fd; }
+/* (the file is non-blocking: this returns 0 once the queue is empty, so the event loop goes back to waiting) */
 int be_event(struct bwin *b, struct axwin_event *e) { return read(b->fd, e, sizeof *e) == (ssize_t)sizeof *e; }
 int be_resize(struct bwin *b) {
     if (b->px) { munmap(b->px, b->maplen); b->px = 0; }
