@@ -30,6 +30,7 @@ struct chan;
  * other end, or after shutdown) and holds a reader count on rx and a writer count on tx. */
 struct ulisten;
 struct lfd { int kind; int flags; uint64_t off; char path[200]; struct chan *rx, *tx; bool sock; uint8_t stype;
+             bool cloexec;          /* closed by execve (O_CLOEXEC, FD_CLOEXEC) */
              struct ulisten *lis;   /* FD_CHAN: a listening socket (path in path[]); bound: path[] set */
              int peer;              /* a connected socket: the other end's process (SO_PEERCRED) */
              uint8_t dev;    /* FD_DEV: which of devs[] */
@@ -48,6 +49,7 @@ struct lxproc {
     struct shmmap *maps; int nmaps, capmaps;   /* where shared memory (memfd) is mapped */
     struct fmap *fmaps; int nfmaps, capfmaps;  /* which parts of memory came from which file (/proc/self/maps) */
     struct { uint64_t handler, flags, restorer, mask; } sa[65];   /* signal handlers (rt_sigaction), by number */
+    int ppid;                      /* the Linux program that forked it (0: AXIOM started it) */
 };
 /* a range of a program's memory read from a file (its own segments, its loader's, mmap'd libraries): only
  * for /proc/self/maps, which Chromium (and debuggers) read to find code and print stack traces */
@@ -150,7 +152,7 @@ enum { EPERM_ = 1, ENOENT_ = 2, EBADF_ = 9, EAGAIN_ = 11, ENOMEM_ = 12, EFAULT_ 
        EACCES_ = 13, EBUSY_ = 16, ENODEV_ = 19, ENOSPC_ = 28, EINVAL_ = 22, EMFILE_ = 24, ENOTTY_ = 25, ESPIPE_ = 29, EPIPE_ = 32, ERANGE_ = 34, ENOSYS_ = 38, ENOTSOCK_ = 88,
        EMSGSIZE_ = 90, ENOPROTOOPT_ = 92, EOPNOTSUPP_ = 95, EAFNOSUPPORT_ = 97, ETIMEDOUT_ = 110, EINTR_ = 4, EPROTONOSUPPORT_ = 93,
        EADDRINUSE_ = 98, ENETDOWN_ = 100, ENETUNREACH_ = 101, ECONNRESET_ = 104, ENOBUFS_ = 105, EISCONN_ = 106, ENOTCONN_ = 107,
-       ECONNREFUSED_ = 111, ENOTEMPTY_ = 39, ESRCH_ = 3, EHOSTUNREACH_ = 113, EALREADY_ = 114, EINPROGRESS_ = 115, EDESTADDRREQ_ = 89 };
+       ECONNREFUSED_ = 111, ENOTEMPTY_ = 39, E2BIG_ = 7, ENOEXEC_ = 8, ECHILD_ = 10, ESRCH_ = 3, EHOSTUNREACH_ = 113, EALREADY_ = 114, EINPROGRESS_ = 115, EDESTADDRREQ_ = 89 };
 
 static bool uok(uint64_t p, uint64_t n, bool w) { return n == 0 || user_ok(current->pml4, (const void *)p, n, w); }
 static bool ustr(char *dst, uint64_t src, size_t max) {
@@ -290,6 +292,57 @@ static bool load_elf(struct mm *m, struct lxproc *lx, const char *path, uint64_t
 #define STACK_SIZE  (8ULL << 20)
 
 static void lx_net_files(void);
+/* AXIOM's environment for the Linux programs it starts (execve passes on the caller's own) */
+static const char *lx_envs[] = { "HOME=/home", "PATH=/bin:/usr/bin", "LANG=en_GB.UTF-8", "TERM=dumb", "USER=user",
+    "XDG_RUNTIME_DIR=/tmp", "WAYLAND_DISPLAY=wayland-0", "XDG_SESSION_TYPE=wayland", "GDK_BACKEND=wayland", "QT_QPA_PLATFORM=wayland", 0 };
+/* load a program (and its loader, if it's dynamically linked) into m; lx gets its file mappings.
+ * false, with why: it can't be run */
+static bool lx_load(struct mm *m, struct lxproc *lx, const char *path, uint64_t *start, uint64_t *entry, uint64_t *phdr, int *phnum,
+                    uint64_t *ibase, char *why, int wn) {
+    char interp[128]; bool fixed;
+    if (!load_elf(m, lx, path, MAIN_BASE, entry, phdr, phnum, interp, sizeof interp, &fixed)) {
+        struct dunc_stat st;
+        if (vfs_stat(path, &st) != 0) ksnprintf(why, wn, "can't find %s", path);
+        else ksnprintf(why, wn, "%s isn't a program AXIOM can run%s", path, fixed ? " (built at a fixed address: build it position-independent, e.g. -static-pie)" : "");
+        return false;
+    }
+    *start = *entry; *ibase = 0;
+    if (interp[0]) {                                           /* a dynamically linked program: its loader first */
+        char ip[200]; path_join("/", interp, ip, sizeof ip);
+        uint64_t ie, iph; int ipn;
+        if (!load_elf(m, lx, ip, INTERP_BASE, &ie, &iph, &ipn, 0, 0, 0)) { ksnprintf(why, wn, "%s needs %s, which isn't there", path, interp); return false; }
+        *start = ie; *ibase = INTERP_BASE;
+    }
+    return true;
+}
+/* the stack: 8 MiB at the top of the map area, then argc, argv, envp and the auxiliary vector. 0: no room */
+static uint64_t lx_stack(struct mm *m, const char *path, int argc, char **argv, const char **envp,
+                         uint64_t entry, uint64_t phdr, int phnum, uint64_t ibase) {
+    uint64_t stop = USER_MMAP_END, sbase = stop - STACK_SIZE;
+    mm_mmap(m, sbase, STACK_SIZE, DPROT_READ | DPROT_WRITE, DMAP_FIXED, 0);
+    int envc = 0; while (envp[envc]) envc++;
+    if (argc > 4096 || envc > 4096) return 0;
+    uint64_t *ptrs = kmalloc((uint64_t)(argc + envc + 64) * 2 * 8);   /* (argp, envp, then the vector) */
+    if (!ptrs) return 0;
+    uint64_t sp = stop, used = 0;
+    for (int i = argc - 1; i >= 0; i--) { uint64_t l = strlen(argv[i]) + 1; used += l; if (used > (1u << 20)) { kfree(ptrs); return 0; } sp -= l; copy_to(m, sp, argv[i], l); ptrs[i] = sp; }
+    for (int i = envc - 1; i >= 0; i--) { uint64_t l = strlen(envp[i]) + 1; used += l; if (used > (1u << 20)) { kfree(ptrs); return 0; } sp -= l; copy_to(m, sp, envp[i], l); ptrs[argc + i] = sp; }
+    uint8_t rnd[16]; random_bytes(rnd, 16); sp -= 16; copy_to(m, sp, rnd, 16); uint64_t rndp = sp;
+    sp -= strlen(path) + 1; copy_to(m, sp, path, strlen(path) + 1); uint64_t execfn = sp;
+    uint64_t *v = ptrs + argc + envc; int k = 0;
+    v[k++] = (uint64_t)argc;
+    for (int i = 0; i < argc; i++) v[k++] = ptrs[i];
+    v[k++] = 0;
+    for (int i = 0; i < envc; i++) v[k++] = ptrs[argc + i];
+    v[k++] = 0;
+    uint64_t aux[][2] = { { 3, phdr }, { 4, 56 }, { 5, (uint64_t)phnum }, { 6, 4096 }, { 7, ibase }, { 8, 0 }, { 9, entry },
+                          { 11, 1000 }, { 12, 1000 }, { 13, 1000 }, { 14, 1000 }, { 16, 0 }, { 17, 100 }, { 23, 0 }, { 25, rndp }, { 31, execfn }, { 0, 0 } };
+    for (unsigned i = 0; i < sizeof aux / sizeof aux[0]; i++) { v[k++] = aux[i][0]; v[k++] = aux[i][1]; }
+    sp = (sp - (uint64_t)k * 8) & ~15ULL;
+    copy_to(m, sp, v, (uint64_t)k * 8);
+    kfree(ptrs);
+    return sp;
+}
 int linux_spawn(const char *path, int argc, char **argv, struct task *out) {
     lx_net_files();                                              /* /etc/resolv.conf: the DNS server AXIOM uses now */
     struct mm *m = mm_new();
@@ -297,45 +350,13 @@ int linux_spawn(const char *path, int argc, char **argv, struct task *out) {
     if (!m || !lx) { if (m) mm_put(m); kfree(lx); return -1; }
     memset(lx, 0, sizeof *lx);
     m->fill = lx_fill; m->fill_ctx = lx;
-    uint64_t entry, phdr; int phnum; char interp[128]; bool fixed;
-    if (!load_elf(m, lx, path, MAIN_BASE, &entry, &phdr, &phnum, interp, sizeof interp, &fixed)) {
-        struct dunc_stat st;
-        if (vfs_stat(path, &st) != 0) kprintf("run: can't find %s\n", path);
-        else kprintf("run: %s isn't a program AXIOM can run%s\n", path, fixed ? " (built at a fixed address: build it position-independent, e.g. -static-pie)" : "");
+    uint64_t start, entry, phdr, ibase; int phnum; char why[200];
+    if (!lx_load(m, lx, path, &start, &entry, &phdr, &phnum, &ibase, why, sizeof why)) {
+        kprintf("run: %s\n", why);
         mm_put(m); kfree(lx->fmaps); kfree(lx); return -1;
     }
-    uint64_t start = entry, ibase = 0;
-    if (interp[0]) {                                           /* a dynamically linked program: its loader first */
-        char ip[200]; path_join("/", interp, ip, sizeof ip);
-        uint64_t ie, iph; int ipn;
-        if (!load_elf(m, lx, ip, INTERP_BASE, &ie, &iph, &ipn, 0, 0, 0)) { kprintf("run: needs %s, which isn't there\n", interp); mm_put(m); kfree(lx->fmaps); kfree(lx); return -1; }
-        start = ie; ibase = INTERP_BASE;
-    }
-    /* the stack: 8 MiB at the top of the map area, then argc, argv, envp and the auxiliary vector */
-    uint64_t stop = USER_MMAP_END, sbase = stop - STACK_SIZE;
-    mm_mmap(m, sbase, STACK_SIZE, DPROT_READ | DPROT_WRITE, DMAP_FIXED, 0);
-    uint64_t sp = stop;
-    uint64_t argp[16]; int na = argc < 16 ? argc : 16;
-    for (int i = na - 1; i >= 0; i--) { uint64_t l = strlen(argv[i]) + 1; sp -= l; copy_to(m, sp, argv[i], l); argp[i] = sp; }
-    /* (Wayland: desktop apps find AXIOM's compositor, axwl, at /tmp/wayland-0) */
-    static const char *envs[] = { "HOME=/home", "PATH=/bin:/usr/bin", "LANG=en_GB.UTF-8", "TERM=dumb", "USER=user",
-        "XDG_RUNTIME_DIR=/tmp", "WAYLAND_DISPLAY=wayland-0", "XDG_SESSION_TYPE=wayland", "GDK_BACKEND=wayland", "QT_QPA_PLATFORM=wayland" };
-    enum { NENV = sizeof envs / sizeof envs[0] };
-    uint64_t envp[NENV];
-    for (int i = NENV - 1; i >= 0; i--) { uint64_t l = strlen(envs[i]) + 1; sp -= l; copy_to(m, sp, envs[i], l); envp[i] = sp; }
-    uint8_t rnd[16]; random_bytes(rnd, 16); sp -= 16; copy_to(m, sp, rnd, 16); uint64_t rndp = sp;
-    sp -= strlen(path) + 1; copy_to(m, sp, path, strlen(path) + 1); uint64_t execfn = sp;
-    uint64_t v[96]; int k = 0;
-    v[k++] = na;
-    for (int i = 0; i < na; i++) v[k++] = argp[i];
-    v[k++] = 0;
-    for (int i = 0; i < NENV; i++) v[k++] = envp[i];
-    v[k++] = 0;
-    uint64_t aux[][2] = { { 3, phdr }, { 4, 56 }, { 5, (uint64_t)phnum }, { 6, 4096 }, { 7, ibase }, { 8, 0 }, { 9, entry },
-                          { 11, 1000 }, { 12, 1000 }, { 13, 1000 }, { 14, 1000 }, { 16, 0 }, { 17, 100 }, { 23, 0 }, { 25, rndp }, { 31, execfn }, { 0, 0 } };
-    for (unsigned i = 0; i < sizeof aux / sizeof aux[0]; i++) { v[k++] = aux[i][0]; v[k++] = aux[i][1]; }
-    sp = (sp - k * 8) & ~15ULL;
-    copy_to(m, sp, v, k * 8);
+    uint64_t sp = lx_stack(m, path, argc, argv, lx_envs, entry, phdr, phnum, ibase);
+    if (!sp) { kprintf("run: no room for the arguments\n"); mm_put(m); kfree(lx->fmaps); kfree(lx); return -1; }
     /* files: 0 = input (nothing yet), 1 and 2 = the terminal */
     lx->fd[0].kind = FD_TTY_IN; lx->fd[1].kind = FD_TTY_OUT; lx->fd[2].kind = FD_TTY_OUT;
     strncpy0(lx->cwd, "/home", sizeof lx->cwd);
@@ -347,14 +368,20 @@ int linux_spawn(const char *path, int argc, char **argv, struct task *out) {
     if (!t) { kfree(lx); return -1; }
     t->lx = lx;
     strncpy0(t->appid, "linux", sizeof t->appid); t->app = t->appid;
-    kprintf("[linux] started %s (pid %d)%s%s\n", path, t->pid, interp[0] ? " with " : "", interp);
+    kprintf("[linux] started %s (pid %d)%s\n", path, t->pid, ibase ? " (dynamically linked)" : "");
     return t->pid;
 }
 static void fd_close(struct lfd *f);
 static void shm_forget_all(struct lxproc *lx);
+static void linux_task_exit_free(struct lxproc *lx) {      /* a fork's copy that never ran */
+    for (int i = 0; i < NFD; i++) if (lx->fd[i].kind) fd_close(&lx->fd[i]);
+    shm_forget_all(lx); kfree(lx->fmaps); kfree(lx);
+}
+static void lx_child_ended(struct task *t, struct lxproc *lx);
 void linux_task_exit(struct task *t) {
     struct lxproc *lx = t->lx;
     if (!lx) return;
+    lx_child_ended(t, lx);
     if (lx->linelen) { lx->line[lx->linelen] = 0; kprintf("[%s] %s\n", t->name, lx->line); }
     for (int i = 0; i < NFD; i++) if (lx->fd[i].kind) fd_close(&lx->fd[i]);   /* (the other ends see end of file) */
     shm_forget_all(lx);
@@ -421,6 +448,7 @@ void linux_signals(struct frame *f) {
         if (sig_default_ignored(n)) return;
         kprintf("[linux] %s: ended by signal %d\n", t->name, n);
         if (n == 6) lx_abort_trace(lx, f);
+        if (t->proc) t->proc->exit_signal = n;
         task_exit(128 + n);
     }
     /* a system call the signal interrupted: with SA_RESTART it runs again after the handler (as on Linux), except
@@ -470,6 +498,7 @@ static uint64_t sig_return(struct frame *f) {                              /* rt
     t->sig_blocked = *(uint64_t *)(uc + 296) & ~SIG_UNBLOCKABLE;
     return g[13];                                                          /* rax, as it was */
 }
+
 /* ---------------- the system calls ---------------- */
 struct lstat { uint64_t dev, ino, nlink; uint32_t mode, uid, gid, pad; uint64_t rdev; int64_t size, blksize, blocks; uint64_t at[2], mt[2], ct[2]; int64_t r[3]; };
 static uint64_t path_ino(const char *p) { uint64_t h = 1469598103934665603ull; for (; p && *p; p++) h = (h ^ (uint8_t)*p) * 1099511628211ull; return h >> 1 | 1; }
@@ -1510,6 +1539,184 @@ void linux_dump_threads(void) {
         }
     }
 }
+/* ---------------- processes: fork, vfork, execve, wait ----------------
+ * A fork copies the address space (mm_fork) and the program's state here: its files (each one more reference:
+ * pipes and sockets are shared, as on Linux), shared-memory mappings, file mappings, handlers. A vfork (what
+ * posix_spawn and system() use) shares the address space until the child calls execve or ends, and its parent
+ * waits till then. execve loads a new program into a fresh address space for the same process. When a child
+ * ends, its status waits in zombies[] for its parent's wait4, and the parent gets SIGCHLD. */
+#define NZOMB 128
+static struct { int ppid, pid, status; bool used; } zombies[NZOMB];
+static int vforking[32];                                       /* children whose parent waits for their execve/exit */
+static void vfork_release(int pid) {
+    for (int i = 0; i < 32; i++) if (vforking[i] == pid) { vforking[i] = 0; chan_wake(); }
+}
+static bool vfork_waiting(int pid) { for (int i = 0; i < 32; i++) if (vforking[i] == pid) return true; return false; }
+static struct task *proc_task(int pid) {                       /* a Linux program's first thread, by its pid */
+    for (int i = 0; i < MAX_TASKS; i++)
+        if (tasks[i].state && tasks[i].state != PS_ZOMBIE && tasks[i].pid == pid && tasks[i].lx && tasks[i].proc == &tasks[i]) return &tasks[i];
+    return 0;
+}
+static void lx_child_ended(struct task *t, struct lxproc *lx) {
+    vfork_release(t->pid);
+    if (!lx->ppid) return;
+    int sig = t->exit_signal ? t->exit_signal : t->exit_code == -1 ? 9 : 0;
+    int status = sig ? (sig & 0x7f) : ((t->exit_code & 0xff) << 8);
+    int k = -1;
+    for (int i = 0; i < NZOMB; i++) if (!zombies[i].used) { k = i; break; }
+    if (k < 0) k = 0;                                          /* (full: the oldest goes; its parent never asked) */
+    zombies[k].used = true; zombies[k].ppid = lx->ppid; zombies[k].pid = t->pid; zombies[k].status = status;
+    struct task *p = proc_task(lx->ppid);
+    if (p) sig_post(p, 17, t->pid);                            /* SIGCHLD (ignored unless it has a handler) */
+    chan_wake();
+}
+static struct lxproc *lx_fork(struct lxproc *p) {
+    struct lxproc *c = kmalloc(sizeof *c);
+    if (!c) return 0;
+    memcpy(c, p, sizeof *c);
+    c->linelen = 0;
+    c->maps = 0; c->nmaps = c->capmaps = 0; c->fmaps = 0; c->nfmaps = c->capfmaps = 0;
+    if (p->nfmaps && (c->fmaps = kmalloc((uint64_t)p->capfmaps * sizeof *c->fmaps))) {
+        memcpy(c->fmaps, p->fmaps, (uint64_t)p->nfmaps * sizeof *c->fmaps); c->nfmaps = p->nfmaps; c->capfmaps = p->capfmaps;
+    }
+    if (p->nmaps && (c->maps = kmalloc((uint64_t)p->capmaps * sizeof *c->maps))) {
+        memcpy(c->maps, p->maps, (uint64_t)p->nmaps * sizeof *c->maps); c->nmaps = p->nmaps; c->capmaps = p->capmaps;
+        for (int i = 0; i < c->nmaps; i++) c->maps[i].obj->refs++;
+    }
+    for (int i = 0; i < NFD; i++) { memset(&c->fd[i], 0, sizeof c->fd[i]); if (p->fd[i].kind) fd_copy(&c->fd[i], &p->fd[i]); }
+    return c;
+}
+static uint64_t lx_clone_process(struct frame *f, uint64_t flags, uint64_t stack, uint64_t ptid, uint64_t ctid) {
+    struct task *t = current; struct lxproc *lx = t->lx;
+    bool vfork = (flags & 0x100) != 0;                         /* CLONE_VM: shares memory (vfork, posix_spawn) */
+    struct mm *m = 0; uint64_t pages = 0;
+    if (!vfork && !(m = mm_fork(t->mm, &pages))) return E(ENOMEM_);
+    struct lxproc *c = lx_fork(lx);
+    if (!c) { if (m) mm_put(m); return E(ENOMEM_); }
+    struct task *ch = task_fork(f, m, stack);
+    if (!ch) { if (m) mm_put(m); linux_task_exit_free(c); return E(EAGAIN_); }
+    c->ppid = t->proc->pid;
+    ch->lx = c; ch->pages = pages;
+    if (!vfork) ch->mm->fill = lx_fill, ch->mm->fill_ctx = c;
+    if (flags & 0x200000) ch->clear_tid = ctid;                /* CLONE_CHILD_CLEARTID */
+    if (flags & 0x1000000) {                                   /* CLONE_CHILD_SETTID: in the child's memory */
+        uint32_t tid = (uint32_t)ch->pid;
+        if (vfork) { if (uok(ctid, 4, true)) *(uint32_t *)ctid = tid; } else copy_to(ch->mm, ctid, &tid, 4);
+    }
+    if ((flags & 0x100000) && uok(ptid, 4, true)) *(uint32_t *)ptid = (uint32_t)ch->pid;   /* CLONE_PARENT_SETTID */
+    int pid = ch->pid;
+    if (vfork) for (int i = 0; i < 32; i++) if (!vforking[i]) { vforking[i] = pid; break; }
+    task_start(ch);
+    if (vfork && (flags & 0x4000)) {                           /* CLONE_VFORK: wait till it execs or ends */
+        while (vfork_waiting(pid) && task_alive(pid)) chan_wait(-1);
+        vfork_release(pid);
+    }
+    return (uint64_t)pid;
+}
+/* wait4 / waitid: a child that ended (pid -1: any), or EAGAIN-like 0 with WNOHANG */
+static int64_t lx_wait(int pid, bool nohang, int *status, int *wpid) {
+    struct task *t = current; int me = t->proc->pid;
+    for (;;) {
+        for (int i = 0; i < NZOMB; i++)
+            if (zombies[i].used && zombies[i].ppid == me && (pid <= 0 || zombies[i].pid == pid)) {
+                *status = zombies[i].status; *wpid = zombies[i].pid; zombies[i].used = false; return 1;
+            }
+        bool any = false;                                      /* children still running */
+        for (int i = 0; i < MAX_TASKS; i++)
+            if (tasks[i].state && tasks[i].state != PS_ZOMBIE && tasks[i].lx && tasks[i].proc == &tasks[i] && tasks[i].lx->ppid == me && (pid <= 0 || tasks[i].pid == pid)) any = true;
+        for (int i = 0; i < MAX_TASKS && !any; i++)            /* (ended, not yet reaped: its status comes) */
+            if (tasks[i].state == PS_ZOMBIE && tasks[i].lx && tasks[i].lx->ppid == me && (pid <= 0 || tasks[i].pid == pid)) any = true;
+        if (!any) return (int64_t)E(ECHILD_);
+        if (nohang) return 0;
+        if (sig_now()) return (int64_t)E(EINTR_);
+        chan_wait(50);                                         /* (reaping happens on its own; look again) */
+    }
+}
+/* execve: the program in path, with these arguments and environment, in place of this one */
+static uint64_t lx_execve(struct frame *f, const char *upath, uint64_t uargv, uint64_t uenvp) {
+    struct task *t = current; struct lxproc *lx = t->lx;
+    if (t != t->proc) return E(EINVAL_);                       /* (from a thread other than the first: not yet) */
+    char p0[200], path[200];
+    if (!ustr(p0, (uint64_t)upath, sizeof p0)) return E(EFAULT_);
+    if (!strcmp(p0, "/proc/self/exe")) strncpy0(p0, lx->exe, sizeof p0);   /* (Chromium starts its helpers this way) */
+    path_join(lx->cwd, p0, path, sizeof path);
+    /* the arguments and environment, copied out before the old memory goes */
+    enum { MAXA = 2048, MAXB = 256 * 1024 };
+    char **argv = kmalloc((MAXA + 4) * 8), **envv = kmalloc((MAXA + 1) * 8), *buf = kmalloc(MAXB);
+    if (!argv || !envv || !buf) { kfree(argv); kfree(envv); kfree(buf); return E(ENOMEM_); }
+    uint64_t used = 0; int argc = 0, envc = 0; uint64_t r = 0;
+    for (int which = 0; which < 2 && !r; which++) {
+        uint64_t arr = which ? uenvp : uargv; char **out = which ? envv : argv; int *n = which ? &envc : &argc;
+        for (int i = 0; arr && !r; i++) {
+            if (!uok(arr + (uint64_t)i * 8, 8, false)) { r = E(EFAULT_); break; }
+            uint64_t sp = *(uint64_t *)(arr + (uint64_t)i * 8);
+            if (!sp) break;
+            if (*n >= MAXA) { r = E(E2BIG_); break; }
+            if (!ustr(buf + used, sp, MAXB - used)) { r = E(E2BIG_); break; }
+            out[(*n)++] = buf + used; used += strlen(buf + used) + 1;
+        }
+    }
+    argv[argc] = 0; envv[envc] = 0;
+    /* a script: #!interpreter [one argument] */
+    for (int depth = 0; !r && depth < 3; depth++) {
+        char head[160]; long hn = vfs_read(path, head, 0, sizeof head - 1);
+        struct dunc_stat st;
+        if (hn < 0 || vfs_stat(path, &st) != FS_OK) { r = E(ENOENT_); break; }
+        if (st.is_dir) { r = E(EACCES_); break; }
+        if (hn < 2 || head[0] != '#' || head[1] != '!') break;
+        head[hn] = 0; char *e = head + 2; while (*e == ' ' || *e == '\t') e++;
+        char *ip = e; while (*e && *e != ' ' && *e != '\t' && *e != '\n') e++;
+        char *ia = 0;
+        if (*e == ' ' || *e == '\t') { *e++ = 0; while (*e == ' ' || *e == '\t') e++; ia = e; while (*e && *e != '\n') e++; while (e > ia && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r')) e--; }
+        *e = 0; if (ia && !*ia) ia = 0;
+        if (!*ip || argc + 3 > MAXA || used + 600 > MAXB) { r = E(ENOEXEC_); break; }
+        int extra = ia ? 2 : 1;                                /* argv: interpreter [arg] script args[1..] */
+        for (int i = argc; i >= 1; i--) argv[i + extra] = argv[i];
+        argv[0] = buf + used; strncpy0(buf + used, ip, 200); used += strlen(buf + used) + 1;
+        if (ia) { argv[1] = buf + used; strncpy0(buf + used, ia, 200); used += strlen(buf + used) + 1; }
+        argv[extra] = buf + used; strncpy0(buf + used, p0, 200); used += strlen(buf + used) + 1;
+        argc += extra; if (argc < extra + 1) argc = extra + 1; argv[argc] = 0;
+        path_join(lx->cwd, ip, path, sizeof path);
+    }
+    struct mm *m = r ? 0 : mm_new();
+    if (!r && !m) r = E(ENOMEM_);
+    struct fmap *ofm = lx->fmaps; int onf = lx->nfmaps, ocap = lx->capfmaps;
+    uint64_t start = 0, sp = 0;
+    if (!r) {
+        lx->fmaps = 0; lx->nfmaps = lx->capfmaps = 0;          /* (the new program's: kept apart until it's loaded) */
+        m->fill = lx_fill; m->fill_ctx = lx;
+        uint64_t entry, phdr, ibase; int phnum; char why[200];
+        if (!lx_load(m, lx, path, &start, &entry, &phdr, &phnum, &ibase, why, sizeof why)) r = E(ENOEXEC_);
+        else if (!(sp = lx_stack(m, path, argc, argv, (const char **)envv, entry, phdr, phnum, ibase))) r = E(E2BIG_);
+        if (r) { kfree(lx->fmaps); lx->fmaps = ofm; lx->nfmaps = onf; lx->capfmaps = ocap; }
+    }
+    if (r) { if (m) { m->fill = 0; mm_put(m); } kfree(argv); kfree(envv); kfree(buf); return r; }
+    kfree(ofm);
+    /* past the point of no return: this process is the new program now */
+    task_kill_others(t);
+    shm_forget_all(lx);
+    for (int i = 0; i < NFD; i++) if (lx->fd[i].kind && lx->fd[i].cloexec) fd_close(&lx->fd[i]);
+    for (int i = 1; i <= 64; i++) if (lx->sa[i].handler > 1) { lx->sa[i].handler = 0; lx->sa[i].flags = 0; lx->sa[i].mask = 0; }
+    struct mm *old = t->mm;
+    if (old->fill_ctx == lx) { old->fill = 0; old->fill_ctx = 0; }
+    t->mm = m; t->pml4 = m->pml4;
+    __asm__ volatile("mov %0, %%cr3" :: "r"((uint64_t)m->pml4) : "memory");
+    mm_put(old);                                               /* (a vfork's parent still has it) */
+    t->pages = 0;
+    vfork_release(t->pid);
+    strncpy0(lx->exe, !strncmp(path, "/system/linux/", 14) ? path + 13 : path, sizeof lx->exe);
+    const char *nm = path; for (const char *q = path; *q; q++) if (*q == '/') nm = q + 1;
+    strncpy0(t->name, nm, sizeof t->name);
+    kprintf("[linux] %d: exec %s\n", t->pid, path);
+    kfree(argv); kfree(envv); kfree(buf);
+    memset(f, 0, offsetof(struct frame, vec));                 /* registers: zero, as a new program starts */
+    f->rip = start; f->rsp = sp; f->rflags = 0x202;
+    t->fs_base = 0; wrmsr(0xC0000100, 0);
+    uint32_t mx = 0x1f80; __asm__ volatile("fninit; ldmxcsr %0" :: "m"(mx));
+    t->clear_tid = 0;
+    return 0;
+}
+
 static uint64_t linux_syscall_(struct frame *f);
 /* Linux reads int arguments (file numbers, flags) from the low 32 bits of their registers; programs that make
  * system calls themselves may leave anything in the upper half, so those are cut off here */
@@ -1526,7 +1733,28 @@ uint64_t linux_syscall(struct frame *f) {
     }
     chan_woke = false;
     current->sig_sysno = f->rax;
+    /* calls that make files: which numbers were free, and whether the new ones close on execve */
+    uint64_t n = f->rax; int ce = -1;
+    switch (n) {
+    case 2: ce = (f->rsi & 02000000) != 0; break;                       /* open */
+    case 257: ce = (f->rdx & 02000000) != 0; break;                     /* openat */
+    case 22: case 32: case 33: ce = 0; break;                           /* pipe, dup, dup2 */
+    case 293: case 41: case 53: case 290: case 283: ce = (f->rsi & 02000000) != 0; break;   /* pipe2 socket socketpair eventfd2 timerfd */
+    case 288: ce = (f->r10 & 02000000) != 0; break;                     /* accept4 */
+    case 43: case 284: case 213: ce = 0; break;                         /* accept, eventfd, epoll_create */
+    case 292: ce = (f->rdx & 02000000) != 0; break;                     /* dup3 */
+    case 291: ce = (f->rdi & 02000000) != 0; break;                     /* epoll_create1 */
+    case 319: ce = (f->rsi & 1) != 0; break;                            /* memfd_create: MFD_CLOEXEC */
+    case 47: ce = (f->rdx & 0x40000000) != 0; break;                    /* recvmsg: MSG_CMSG_CLOEXEC */
+    case 72: if (f->rsi == 0 || f->rsi == 1030) ce = f->rsi == 1030; break;   /* F_DUPFD, F_DUPFD_CLOEXEC */
+    }
+    struct lxproc *lx0 = current->lx; uint64_t was_free[(NFD + 63) / 64] = { 0 };
+    if (ce >= 0 && lx0) for (int i = 0; i < NFD; i++) if (!lx0->fd[i].kind) was_free[i >> 6] |= 1ULL << (i & 63);
     uint64_t r = linux_syscall_(f);
+    if (ce >= 0 && current->lx == lx0 && lx0 && (int64_t)r >= 0) {
+        for (int i = 0; i < NFD; i++) if ((was_free[i >> 6] >> (i & 63) & 1) && lx0->fd[i].kind) lx0->fd[i].cloexec = ce;
+        if ((n == 33 || n == 292) && r < NFD) lx0->fd[r].cloexec = ce;  /* (dup2/dup3 onto an open number) */
+    }
     if (chan_woke) { chan_woke = false; task_yield(); }
     return r;
 }
@@ -1931,7 +2159,9 @@ static uint64_t linux_syscall_(struct frame *f) {
         case 5: case 36:                                       /* F_GETLK, F_OFD_GETLK: nobody else holds a lock (one program per */
             if (!uok(c, 32, true)) return E(EFAULT_);          /* file: locks are always granted), so say F_UNLCK */
             *(int16_t *)c = 2; return 0;
-        default: return 0;                                     /* F_GETFD / F_SETFD (no exec, so close-on-exec doesn't matter), locks */
+        case 1: return lx->fd[a].cloexec ? 1 : 0;              /* F_GETFD: FD_CLOEXEC */
+        case 2: lx->fd[a].cloexec = (c & 1) != 0; return 0;    /* F_SETFD */
+        default: return 0;                                     /* locks (one user) */
         }
     }
     case 32: { if (a >= NFD || !lx->fd[a].kind) return E(EBADF_); int k = fd_new(lx, 0); if (k < 0) return E(EMFILE_); fd_copy(&lx->fd[k], &lx->fd[a]); return k; }   /* dup */
@@ -2584,9 +2814,38 @@ static uint64_t linux_syscall_(struct frame *f) {
     }
 
     /* ---- threads, the process ---- */
-    case 56: {                                                 /* clone: threads (CLONE_VM) */
+    case 57: return lx_clone_process(f, 17, 0, 0, 0);         /* fork */
+    case 58: return lx_clone_process(f, 0x4111, 0, 0, 0);     /* vfork: CLONE_VM | CLONE_VFORK | SIGCHLD */
+    case 59: return lx_execve(f, (const char *)a, b, c);       /* execve */
+    case 322: {                                                /* execveat: a path relative to AT_FDCWD (or absolute) */
+        if ((int)a != -100 && (!uok(b, 1, false) || *(char *)b != '/')) return E(ENOSYS_);
+        return lx_execve(f, (const char *)b, c, d);
+    }
+    case 61: {                                                 /* wait4(pid, status, options, rusage) */
+        int st = 0, wp = 0;
+        int64_t r = lx_wait((int)a, (c & 1) != 0, &st, &wp);
+        if (r <= 0) return (uint64_t)r;
+        if (b && uok(b, 4, true)) *(int32_t *)b = st;
+        if (d && uok(d, 144, true)) memset((void *)d, 0, 144);
+        return (uint64_t)wp;
+    }
+    case 247: {                                                /* waitid(idtype, id, siginfo, options, rusage) */
+        int st = 0, wp = 0;
+        int64_t r = lx_wait(a == 1 ? (int)b : -1, (d & 1) != 0, &st, &wp);
+        if (r < 0) return (uint64_t)r;
+        if (c && uok(c, 128, true)) {
+            memset((void *)c, 0, 128);
+            if (r > 0) {
+                int32_t *si = (int32_t *)c; si[0] = 17; si[2] = (st & 0x7f) ? 2 : 1;   /* SIGCHLD; CLD_KILLED / CLD_EXITED */
+                si[4] = wp; si[5] = 1000; si[6] = (st & 0x7f) ? (st & 0x7f) : (st >> 8) & 0xff;
+            }
+        }
+        return 0;
+    }
+    case 56: {                                                 /* clone: threads, or a new process */
         uint64_t flags = a;
-        if (!(flags & 0x100)) return E(ENOSYS_);               /* a new process (fork): not yet */
+        if (!(flags & 0x10000) && !((flags & 0x100) && !(flags & 0x4000) && (flags & 0x800)))   /* not CLONE_THREAD (or CLONE_VM|SIGHAND): a process */
+            return lx_clone_process(f, flags, b, c, d);
         long tid = task_clone(f, b ? b : f->rsp, (flags & 0x80000) ? e : t->fs_base, (flags & 0x200000) ? d : 0);
         if (tid < 0) return (uint64_t)tid;
         if ((flags & 0x100000) && uok(c, 4, true)) *(uint32_t *)c = (uint32_t)tid;     /* CLONE_PARENT_SETTID */
@@ -2603,7 +2862,9 @@ static uint64_t linux_syscall_(struct frame *f) {
     case 231: task_exit((int)a);                               /* exit_group */
     case 39: return t->proc->pid;                              /* getpid */
     case 186: return t->pid;                                   /* gettid */
-    case 110: return 1;                                        /* getppid */
+    case 110: return lx->ppid ? (uint64_t)lx->ppid : 1;       /* getppid */
+    case 109: return 0;                                        /* setpgid (one session) */
+    case 121: case 111: return (uint64_t)t->proc->pid;        /* getpgid, getpgrp */
     case 102: case 104: case 107: case 108: return 1000;       /* getuid, getgid, geteuid, getegid */
     case 118: case 120:                                        /* getresuid, getresgid */
         if (!uok(a, 4, true) || !uok(b, 4, true) || !uok(c, 4, true)) return E(EFAULT_);
@@ -2613,8 +2874,10 @@ static uint64_t linux_syscall_(struct frame *f) {
         int sig = (int)(n == 62 || n == 200 ? b : c);
         if (sig < 0 || sig > 64) return E(EINVAL_);
         struct task *to = 0;
-        if (n == 62) {                                         /* a process: this one (no others to signal yet) */
-            if ((int)a != t->proc->pid && (int)a != 0 && (int)a != -1) return E(ESRCH_);
+        if (n == 62 && (int)a > 0 && (int)a != t->proc->pid) {   /* another program (a child, say) */
+            to = proc_task((int)a);
+            if (!to) return E(ESRCH_);
+        } else if (n == 62) {                                  /* this one (0, -1: its group, which is just it) */
             for (int i = 0; i < MAX_TASKS; i++)                /* the first of its threads that doesn't block it */
                 if (tasks[i].state && tasks[i].state != PS_ZOMBIE && tasks[i].lx == lx && (!to || !(tasks[i].sig_blocked & SIGBIT(sig ? sig : 1)))) {
                     if (!to || (to->sig_blocked & SIGBIT(sig ? sig : 1))) to = &tasks[i];
@@ -2625,8 +2888,11 @@ static uint64_t linux_syscall_(struct frame *f) {
         }
         if (!to) return E(ESRCH_);
         if (!sig) return 0;                                    /* (only asking whether it's there) */
-        if ((sig == 9 || ((sig == 6 || sig == 15) && !lx->sa[sig].handler)) && to == t) { if (sig == 6) lx_abort_trace(lx, f); task_exit(128 + sig); }
-        if (sig == 9) { task_kill(to->proc ? to->proc->pid : to->pid); return 0; }
+        if ((sig == 9 || ((sig == 6 || sig == 15) && !lx->sa[sig].handler)) && to == t) { if (sig == 6) lx_abort_trace(lx, f); t->proc->exit_signal = sig; task_exit(128 + sig); }
+        if (sig == 9 || (to->lx && !to->lx->sa[sig].handler && !sig_default_ignored(sig) && to->lx != lx)) {   /* another program, ending */
+            if (to->proc) to->proc->exit_signal = sig;
+            task_kill(to->proc ? to->proc->pid : to->pid); return 0;
+        }
         sig_post(to, sig, t->proc->pid);
         return 0;
     }

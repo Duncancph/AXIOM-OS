@@ -89,7 +89,16 @@ static void kernel_panic(struct frame *f) {
     kprintf("\n\n*** THANE KERNEL PANIC: %s (vector %lu) ***\n", v < 20 ? names[v] : "Exception", v);
     console_set_color(C_LGRAY);
     kprintf("err=%lx rip=%lx rsp=%lx cr2=%lx task=%s\n", f->err, f->rip, f->rsp, cr2, current ? current->name : "boot");
-    kprintf("rax=%lx rbx=%lx rcx=%lx rdx=%lx\n", f->rax, f->rbx, f->rcx, f->rdx);
+    kprintf("rax=%lx rbx=%lx rcx=%lx rdx=%lx pid=%d last syscall %lu\n", f->rax, f->rbx, f->rcx, f->rdx, current ? current->pid : 0, current ? current->sig_sysno : 0);
+    {   /* kernel code addresses on its stack (for finding where it came from) */
+        extern char kernel_end[]; uint64_t *sp = (uint64_t *)f->rsp; int shown = 0;
+        kprintf("stack:");
+        for (int i = 0; i < 256 && shown < 16; i++) {
+            if (!current || !current->kstack || (uint8_t *)(sp + i) < current->kstack || (uint64_t)(sp + i) + 8 > current->kstack_top) break;
+            uint64_t w = sp[i]; if (w >= 0x100000 && w < (uint64_t)kernel_end) { kprintf(" %lx", w); shown++; }
+        }
+        kprintf("\n");
+    }
     kprintf("System halted. Press the power button to restart.\n");
     char a[96], b[96], c[96];
     ksnprintf(a, sizeof a, "AXIOM stopped: %s (vector %lu) in '%s'", v < 20 ? names[v] : "exception", v, current ? current->name : "boot");

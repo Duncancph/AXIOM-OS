@@ -190,6 +190,29 @@ long task_clone(const struct frame *f, uint64_t rsp, uint64_t fs, uint64_t clear
     t->state = PS_READY; t->rq = ++rq_seq;
     return t->pid;
 }
+/* a new process (a Linux fork or vfork): its own task, running the same code from the same frame (rax 0 there),
+ * with address space m (its reference passes to the task), or the caller's own (vfork: shared until it execs) */
+struct task *task_fork(const struct frame *f, struct mm *m, uint64_t rsp) {
+    struct task *p = current->proc;
+    struct task *t = alloc_task(p->name);
+    if (!t) return 0;
+    t->user = true;
+    fpu_save(t->fx);
+    if (m) t->mm = m; else { t->mm = current->mm; t->mm->refs++; }
+    t->pml4 = t->mm->pml4; t->proc = t;
+    strncpy0(t->appid, p->appid, sizeof t->appid); t->app = t->appid;
+    t->fs_base = current->fs_base;
+    t->sig_blocked = current->sig_blocked;
+    struct frame *nf = (struct frame *)(t->kstack_top - sizeof *nf);
+    *nf = *f; nf->rax = 0; if (rsp) nf->rsp = rsp;
+    uint64_t *s = (uint64_t *)nf;
+    *--s = (uint64_t)frame_entry;
+    for (int i = 0; i < 6; i++) *--s = 0;
+    t->rsp = (uint64_t)s;
+    t->state = PS_BLOCKED; t->wake_at = 0;                         /* (taken, not ready: the caller fills it in, then task_start) */
+    return t;
+}
+void task_start(struct task *t) { t->state = PS_READY; t->rq = ++rq_seq; }
 bool task_alive(int pid) {
     for (int i = 0; i < MAX_TASKS; i++) if (tasks[i].state && tasks[i].state != PS_ZOMBIE && tasks[i].pid == pid) return true;
     return false;
@@ -432,6 +455,7 @@ void task_thread_exit(void) {
 
 void task_exit(int code) {
     struct task *t = current;
+    if (t->user && t->proc && !t->proc->exit_set) { t->proc->exit_code = code; t->proc->exit_set = true; }   /* (what wait4 reports) */
     if (t->user) kprintf("[sched] '%s' (pid %d) exited with code %d\n", t->name, t->pid, code);
     if (t->user) kill_threads(t);                         /* a program ends with all its threads */
     wm_task_exit(t);
@@ -441,6 +465,7 @@ void task_exit(int code) {
     panic("zombie task was scheduled");
 }
 
+void task_kill_others(struct task *except) { kill_threads(except); }
 bool task_kill(int pid) {
     for (int i = 0; i < MAX_TASKS; i++) {
         struct task *t = &tasks[i];

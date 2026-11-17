@@ -359,6 +359,37 @@ bool mm_fault(struct mm *m, uint64_t addr, bool write, bool exec, uint64_t *page
     __asm__ volatile("invlpg (%0)" ::"r"(va) : "memory");
     return true;
 }
+/* a copy of an address space (a Linux program's fork): the same areas; every page of its own is copied, pages that
+ * belong to something else (shared memory) are mapped again. *pages: how many pages the copy made. 0: no memory */
+struct mm *mm_fork(struct mm *src, uint64_t *pages) {
+    struct mm *m = mm_new();
+    if (!m) return 0;
+    if (src->nv && !vma_room(m, src->nv)) { mm_put(m); return 0; }
+    memcpy(m->v, src->v, src->nv * sizeof *m->v); m->nv = src->nv;
+    uint64_t *l3 = (src->pml4[USER_PML4_INDEX] & P) ? (uint64_t *)ADDR(src->pml4[USER_PML4_INDEX]) : 0;
+    for (int i = 0; l3 && i < 512; i++) {
+        if (!(l3[i] & P)) continue;
+        uint64_t *l2 = (uint64_t *)ADDR(l3[i]);
+        for (int j = 0; j < 512; j++) {
+            if (!(l2[j] & P)) continue;
+            uint64_t *l1 = (uint64_t *)ADDR(l2[j]);
+            for (int k = 0; k < 512; k++) {
+                uint64_t e = l1[k];
+                if (!pte_kept(e)) continue;
+                uint64_t va = ((uint64_t)USER_PML4_INDEX << 39) | ((uint64_t)i << 30) | ((uint64_t)j << 21) | ((uint64_t)k << 12);
+                uint64_t *pte = pte_of(m->pml4, va, true);
+                if (!pte) { mm_put(m); return 0; }
+                if (e & SHARED) { *pte = e; continue; }                         /* (its owner keeps it) */
+                uint64_t pg = upage_alloc();
+                if (!pg) { mm_put(m); return 0; }
+                memcpy(mmio_virt(pg), mmio_virt(ADDR(e)), 4096);
+                *pte = pg | (e & ~0x000FFFFFFFFFF000ULL);
+                if (pages) (*pages)++;
+            }
+        }
+    }
+    return m;
+}
 bool mm_add_page(struct mm *m, uint64_t va, const void *data, uint64_t *pages) {
     if (!m || (va & 4095) || !in_area(va, va + 4096)) return false;
     int i = vma_find(m, va);

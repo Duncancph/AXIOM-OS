@@ -264,6 +264,7 @@ struct mm {
 };
 struct mm *mm_new(void);
 void mm_put(struct mm *m);
+struct mm *mm_fork(struct mm *src, uint64_t *pages);   /* a copy (a Linux fork): own pages copied, shared ones mapped again */
 long mm_mmap(struct mm *m, uint64_t addr, uint64_t len, int prot, int flags, uint64_t *pages);
 long mm_munmap(struct mm *m, uint64_t addr, uint64_t len, uint64_t *pages);
 long mm_mprotect(struct mm *m, uint64_t addr, uint64_t len, int prot);
@@ -333,6 +334,8 @@ struct task {
     int sig_from;                                   /* who sent the last one (siginfo's si_pid) */
     uint64_t sig_sysno;                             /* the Linux system call being made (to restart it: SA_RESTART) */
     uint64_t last_rip;                              /* where it was in its program when it last came into the kernel */
+    int exit_code; bool exit_set;                   /* a program's: how it ended (task_exit's code; first one counts) */
+    int exit_signal;                                /* a Linux program ended by a signal: which (wait4's status) */
 };
 struct frame {
     uint64_t r15, r14, r13, r12, r11, r10, r9, r8, rbp, rdi, rsi, rdx, rcx, rbx, rax;
@@ -393,7 +396,10 @@ void sched_start(void) __attribute__((noreturn));
 void schedule(void);
 void task_yield(void);
 void task_sleep(uint64_t ms);
-void task_wake(struct task *t);   /* a waiting task carries on (e.g. a signal came) */
+void task_wake(struct task *t);
+struct task *task_fork(const struct frame *f, struct mm *m, uint64_t rsp);   /* a Linux fork/vfork's new process (not started) */
+void task_start(struct task *t);
+void task_kill_others(struct task *except);   /* the other threads of its program end (execve) */   /* a waiting task carries on (e.g. a signal came) */
 void task_exit(int code) __attribute__((noreturn));
 bool task_kill(int pid);
 void task_reap(void);
