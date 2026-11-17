@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 165
-notes Settings > Apps: install AbiWord (word processor), Gnumeric (spreadsheet), Mousepad and Mines. Linux apps show their own names in the top bar, and file dialogs show real file dates.
-file kernel b165/thane.elf.gz 19390016 c5ca15ab552ef5f397c40add6cc45501de3a455cb7b47624e1431dc86b924740
-file initrd b165/initrd.tar.gz 2365440 8b255bd59fadb549fb6ba4a3d7623d0f81f675cd5481ef20463980723e32d828
-file bootx64 b165/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b165/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3046022100920a16c60c9d0c7b6c52961c5c84456281f0376b33e40bb5cb8ea00d5916ca73022100f6b422f9a2f3cb0bad73a98a09442bfde364b92ffe6dcf0cbb96138a85df0e77
+build 166
+notes Solitaire (Klondike, FreeCell, Spider and 80 more) in Settings > Apps. Linux programs can use signals, and installed apps keep their files' dates.
+file kernel b166/thane.elf.gz 19425536 aea42c14021b530f098e0a4301f73bf0e99b829ba3e5091e72e11fb3994b0cff
+file initrd b166/initrd.tar.gz 2365440 6ebbb2e01480bd3b1273c48c2ac11a84d5cfb146aee9369e8a2ec05cb8004013
+file bootx64 b166/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b166/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3046022100e80fcd2b0991230167e95642a8264ef337dbceddc795960c29666baba32796d702210080d58471e3fa99aa82971b4cd3f7bdd8ad925ea30cc2803835a29e062ba4bf69

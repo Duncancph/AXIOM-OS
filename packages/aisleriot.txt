@@ -1,0 +1,16 @@
+AXIOM package 1
+id aisleriot
+name Solitaire
+version 3.22.31
+icon crown
+description Klondike, FreeCell, Spider and 80 more card games (AisleRiot).
+min-build 166
+size 14108175
+sha256 6f281e4414876a490b27d8e8ab7b103d0ead8dbfc3f75622d3c4c9f2700c11df
+url https://raw.githubusercontent.com/Duncancph/AXIOM-OS/updates/packages/aisleriot.tar.gz
+installed-size 66979767
+root yes
+requires gtk3
+compression gzip
+run usr/games/sol
+signature 3045022022d1faa0aff0ab68523aa6ddb98365bf64c743df57658bd913906a58b00bbdcc022100b26cccede3f3eb7a2bdd1a42ef78be089fc878db46d0adf65d0956b55ab64387

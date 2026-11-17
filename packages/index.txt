@@ -3,3 +3,4 @@ abiword
 gnumeric
 mousepad
 gnome-mines
+aisleriot
