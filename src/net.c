@@ -461,6 +461,7 @@ static int udp_send(const struct ipaddr *src, const struct ipaddr *dst, uint16_t
 
 static void dhcp_input(const uint8_t *p, int len);
 static void d6_input(const uint8_t *p, int len);
+static bool usock_input(const struct ipaddr *src, uint16_t sport, uint16_t dport, const uint8_t *d, int len);
 static void udp_input(const struct ipaddr *src, const struct ipaddr *dst, const uint8_t *p, int len) {
     if (len < 8) return;
     uint16_t dport = g16(p + 2), ulen = g16(p + 4);
@@ -468,6 +469,7 @@ static void udp_input(const struct ipaddr *src, const struct ipaddr *dst, const 
     if (src->v6 && csum_fin(csum_add(pseudo(src, dst, 17, ulen), p, ulen))) return;   /* mandatory in IPv6 */
     if (!src->v6 && dport == 68) { dhcp_input(p + 8, ulen - 8); return; }
     if (src->v6 && dport == 546) { d6_input(p + 8, ulen - 8); return; }
+    if (usock_input(src, g16(p), dport, p + 8, ulen - 8)) return;
     for (int i = 0; i < 4; i++)
         if (uwait[i].active && uwait[i].port == dport && uwait[i].len < 0) {
             int n = ulen - 8 < (int)sizeof uwait[i].buf ? ulen - 8 : (int)sizeof uwait[i].buf;
@@ -753,13 +755,14 @@ enum { T_FREE, T_SYN_SENT, T_ESTAB, T_FIN_WAIT1, T_FIN_WAIT2, T_CLOSING, T_TIME_
 #define F_RST 4
 #define F_PSH 8
 #define F_ACK 16
-#define TCP_MAX 16
+#define TCP_MAX 64
 #define RBUF 65536
 #define SBUF 65536
 
 struct tcb {
     int state, gen, err;
     struct task *owner;
+    const void *sowner;                      /* a Linux program's socket (tcp_sock_*): its owner, else 0 */
     struct ipaddr rip, lip; uint16_t rport, lport;
     uint32_t iss, snd_una, snd_nxt, snd_wnd, rcv_nxt;
     uint16_t mss;
@@ -770,6 +773,7 @@ struct tcb {
     uint32_t last_adv;
 };
 static struct tcb tcbs[TCP_MAX];
+static bool sock_dirty;                      /* something changed for a Linux program's socket: wake its waiters */
 static uint16_t next_lport;
 
 static uint32_t rwin(struct tcb *t) { uint32_t f = RBUF - t->rlen; return f > 65535 ? 65535 : f; }
@@ -839,7 +843,7 @@ static void tcp_free(struct tcb *t) {
 /* an ICMP error said the far end can't be reached: give up on a connection that is still being set up */
 static void tcp_unreach(const struct ipaddr *dst, uint16_t lport, uint16_t rport) {
     struct tcb *t = tcb_find(dst, rport, lport);
-    if (t && t->state == T_SYN_SENT) { t->err = NET_EUNREACH; t->state = T_CLOSED; }
+    if (t && t->state == T_SYN_SENT) { t->err = NET_EUNREACH; t->state = T_CLOSED; if (t->sowner) sock_dirty = true; }
 }
 
 /* path MTU discovery: a router said our packets are too big */
@@ -864,6 +868,7 @@ static void tcp_input(const struct ipaddr *src, const struct ipaddr *dst, const 
     if (hl < 20 || hl > len) return;
     const uint8_t *data = s + hl; int dlen = len - hl;
     struct tcb *t = tcb_find(src, sport, dport);
+    if (t && t->sowner) sock_dirty = true;
     if (!t) {                                       /* nobody listening: reset */
         if (!(flags & F_RST)) {
             if (flags & F_ACK) tcp_raw(dst, src, dport, sport, ack, 0, F_RST, 0, 0, 0, 0);
@@ -940,8 +945,9 @@ static void tcp_timers(void) {
         struct tcb *t = &tcbs[i];
         if (t->state == T_FREE) continue;
         if (t->state == T_TIME_WAIT && now >= t->time_wait_until) { t->state = T_CLOSED; }
-        if (t->state == T_CLOSED) { if (!t->owner) tcp_free(t); continue; }
+        if (t->state == T_CLOSED) { if (!t->owner && !t->sowner) tcp_free(t); continue; }
         if (!t->rto_at || now < t->rto_at) continue;
+        if (t->sowner) sock_dirty = true;
         if (++t->retries > 7) { t->err = NET_ETIMEDOUT; t->state = T_CLOSED; continue; }
         t->rto = t->rto * 2 > 16000 ? 16000 : t->rto * 2;
         if (t->state == T_SYN_SENT) { tcp_seg(t, F_SYN, t->iss, 0, 0); arm_rto(t); continue; }
@@ -965,7 +971,8 @@ static struct tcb *handle_tcb(int h) {
     return t;
 }
 
-int tcp_connect(const struct ipaddr *ip, uint16_t port, uint32_t timeout_ms) {
+/* a new connection: sends the SYN and returns its slot (or an error) without waiting */
+static int tcp_start(const struct ipaddr *ip, uint16_t port, struct task *owner, const void *sowner) {
     if (!nif) return NET_ENODEV;
     struct ipaddr lip; memset(&lip, 0, sizeof lip);
     if (ip->v6) {
@@ -976,7 +983,6 @@ int tcp_connect(const struct ipaddr *ip, uint16_t port, uint32_t timeout_ms) {
         if (!configured) return NET_ENOTCONN;
         lip = ip_v4(my_ip);
     }
-    if (!timeout_ms || timeout_ms > 60000) timeout_ms = 15000;
     struct tcb *t = 0; int idx = -1;
     for (int i = 0; i < TCP_MAX; i++) if (tcbs[i].state == T_FREE) { t = &tcbs[i]; idx = i; break; }
     if (!t) return NET_ENOMEM;
@@ -986,13 +992,21 @@ int tcp_connect(const struct ipaddr *ip, uint16_t port, uint32_t timeout_ms) {
     t->rbuf = kmalloc(RBUF); t->sbuf = kmalloc(SBUF);
     if (!t->rbuf || !t->sbuf) { kfree(t->rbuf); kfree(t->sbuf); t->rbuf = t->sbuf = 0; return NET_ENOMEM; }
     if (!next_lport) next_lport = 49152 + rnd32() % 10000;
-    t->owner = current; t->rip = *ip; t->rip.prefix = 0; t->lip = lip; t->rport = port;
+    t->owner = owner; t->sowner = sowner; t->rip = *ip; t->rip.prefix = 0; t->lip = lip; t->rport = port;
     t->lport = next_lport++; if (next_lport > 65000) next_lport = 49152;
     t->iss = rnd32(); t->snd_una = t->iss; t->snd_nxt = t->iss + 1;
     t->mss = ip->v6 ? (uint16_t)(mtu6 - 60) : 1460; t->rto = 1000;
     t->state = T_SYN_SENT;
     tcp_seg(t, F_SYN, t->iss, 0, 0);
     arm_rto(t);
+    return idx;
+}
+
+int tcp_connect(const struct ipaddr *ip, uint16_t port, uint32_t timeout_ms) {
+    if (!timeout_ms || timeout_ms > 60000) timeout_ms = 15000;
+    int idx = tcp_start(ip, port, current, 0);
+    if (idx < 0) return idx;
+    struct tcb *t = &tcbs[idx];
     uint64_t end = uptime_ms() + timeout_ms;
     while (t->state == T_SYN_SENT && uptime_ms() < end) task_sleep(1);
     if (t->state != T_ESTAB) {
@@ -1043,6 +1057,157 @@ int tcp_close(int h) {
     if (t->state == T_ESTAB || t->state == T_CLOSE_WAIT) { t->closing = true; tcp_output(t); }
     else if (t->state != T_FIN_WAIT1 && t->state != T_FIN_WAIT2 && t->state != T_CLOSING && t->state != T_LAST_ACK && t->state != T_TIME_WAIT) t->state = T_CLOSED;
     return NET_OK;
+}
+
+/* ---------------- sockets for Linux programs (src/linux.c) ----------------
+ * The same TCP connections, and UDP, but nothing here waits: the program asks (tcp_sock_info) and the
+ * Linux layer is woken (linux_net_wake) whenever something changes for one of them. They belong to an
+ * owner (a Linux program's socket) rather than a task, since any of the program's threads may use them. */
+static struct tcb *sock_tcb(int h, const void *who) {
+    int i = h & 0xFF, gen = h >> 8;
+    if (h < 0 || i >= TCP_MAX || !who) return 0;
+    struct tcb *t = &tcbs[i];
+    if (t->state == T_FREE || t->gen != gen || t->sowner != who) return 0;
+    return t;
+}
+int tcp_sock_open(const struct ipaddr *ip, uint16_t port, const void *who) {
+    int idx = tcp_start(ip, port, 0, who);
+    return idx < 0 ? idx : (tcbs[idx].gen << 8) | idx;
+}
+int tcp_sock_info(int h, const void *who, struct tcp_sock_info *i) {
+    struct tcb *t = sock_tcb(h, who);
+    if (!t) return NET_EINVAL;
+    memset(i, 0, sizeof *i);
+    i->state = t->state == T_SYN_SENT ? 0 : t->state == T_ESTAB || t->state == T_CLOSE_WAIT ? 1 : 2;
+    if (t->state == T_FIN_WAIT1 || t->state == T_FIN_WAIT2 || t->state == T_CLOSING) i->state = 3;   /* (we sent FIN) */
+    i->err = t->err; i->rlen = t->rlen; i->eof = t->fin_rcvd;
+    i->sfree = (t->state == T_ESTAB || t->state == T_CLOSE_WAIT) && !t->closing ? SBUF - t->slen : 0;
+    i->lip = t->lip; i->rip = t->rip; i->lport = t->lport; i->rport = t->rport;
+    return NET_OK;
+}
+long tcp_sock_send(int h, const void *who, const void *buf, uint32_t len) {
+    struct tcb *t = sock_tcb(h, who);
+    if (!t) return NET_EINVAL;
+    if (t->state == T_SYN_SENT) return NET_EAGAIN;
+    if ((t->state != T_ESTAB && t->state != T_CLOSE_WAIT) || t->closing) return t->err ? t->err : NET_ERESET;
+    uint32_t space = SBUF - t->slen, n = len < space ? len : space;
+    if (!n) return len ? NET_EAGAIN : 0;
+    memcpy(t->sbuf + t->slen, buf, n);
+    t->slen += n;
+    tcp_output(t);
+    return n;
+}
+long tcp_sock_recv(int h, const void *who, void *buf, uint32_t len, bool peek) {
+    struct tcb *t = sock_tcb(h, who);
+    if (!t) return NET_EINVAL;
+    if (!t->rlen) {
+        if (t->fin_rcvd) return 0;
+        if (t->state == T_CLOSED) return t->err ? t->err : 0;
+        return NET_EAGAIN;
+    }
+    uint32_t n = len < t->rlen ? len : t->rlen;
+    for (uint32_t i = 0; i < n; i++) ((uint8_t *)buf)[i] = t->rbuf[(t->rhead + i) % RBUF];
+    if (peek) return n;
+    t->rhead = (t->rhead + n) % RBUF; t->rlen -= n;
+    if (t->last_adv < 2u * t->mss && rwin(t) >= 2u * t->mss && !t->fin_rcvd) tcp_seg(t, F_ACK, t->snd_nxt, 0, 0);  /* window update */
+    return n;
+}
+void tcp_sock_shutdown(int h, const void *who) {                      /* no more sending: FIN after what's queued */
+    struct tcb *t = sock_tcb(h, who);
+    if (t && (t->state == T_ESTAB || t->state == T_CLOSE_WAIT)) { t->closing = true; tcp_output(t); }
+}
+void tcp_sock_close(int h, const void *who) {
+    struct tcb *t = sock_tcb(h, who);
+    if (!t) return;
+    t->sowner = 0;                      /* the net thread frees it once the connection has closed */
+    if (t->state == T_SYN_SENT || (t->rlen && t->state != T_CLOSED)) {   /* unread data (or not connected yet): reset, as Linux does */
+        tcp_raw(&t->lip, &t->rip, t->lport, t->rport, t->snd_nxt, t->rcv_nxt, F_RST | F_ACK, 0, 0, 0, 0);
+        t->state = T_CLOSED;
+    } else if (t->state == T_ESTAB || t->state == T_CLOSE_WAIT) { t->closing = true; tcp_output(t); }
+    else if (t->state != T_FIN_WAIT1 && t->state != T_FIN_WAIT2 && t->state != T_CLOSING && t->state != T_LAST_ACK && t->state != T_TIME_WAIT) t->state = T_CLOSED;
+}
+
+/* UDP: a socket is a local port and a queue of datagrams received on it */
+#define USOCK_MAX 32
+#define UQ_LEN 64
+struct udgram { struct ipaddr src; uint16_t sport, len; uint8_t data[1500]; };
+struct usock { const void *who; uint16_t lport; int gen, head, n; struct udgram *q; };
+static struct usock usocks[USOCK_MAX];
+static bool usock_input(const struct ipaddr *src, uint16_t sport, uint16_t dport, const uint8_t *d, int len) {
+    for (int i = 0; i < USOCK_MAX; i++) {
+        struct usock *u = &usocks[i];
+        if (!u->who || u->lport != dport) continue;
+        if (u->n < UQ_LEN && len <= 1500) {
+            struct udgram *g = &u->q[(u->head + u->n) % UQ_LEN];
+            g->src = *src; g->src.prefix = 0; g->sport = sport; g->len = (uint16_t)len; memcpy(g->data, d, len);
+            u->n++; sock_dirty = true;
+        }
+        return true;
+    }
+    return false;
+}
+static struct usock *sock_udp(int h, const void *who) {
+    int i = h & 0xFF;
+    if (h < 0 || i >= USOCK_MAX || !who || usocks[i].who != who || usocks[i].gen != h >> 8) return 0;
+    return &usocks[i];
+}
+int udp_sock_open(const void *who, uint16_t port) {                    /* port 0: any free one */
+    if (!who) return NET_EINVAL;
+    for (int i = 0; i < USOCK_MAX; i++) if (usocks[i].who && port && usocks[i].lport == port) return NET_EINVAL;
+    for (int i = 0; i < USOCK_MAX; i++) {
+        struct usock *u = &usocks[i];
+        if (u->who) continue;
+        u->q = kmalloc(UQ_LEN * sizeof *u->q);
+        if (!u->q) return NET_ENOMEM;
+        if (!port) for (int k = 0; k < 100 && !port; k++) {
+            uint16_t p = (uint16_t)(32768 + rnd32() % 28000); bool used = false;
+            for (int j = 0; j < USOCK_MAX; j++) if (usocks[j].who && usocks[j].lport == p) used = true;
+            if (!used) port = p;
+        }
+        u->who = who; u->lport = port; u->head = u->n = 0; u->gen = (u->gen + 1) & 0x7FFFFF;
+        return (u->gen << 8) | i;
+    }
+    return NET_ENOMEM;
+}
+int udp_sock_port(int h, const void *who) { struct usock *u = sock_udp(h, who); return u ? u->lport : NET_EINVAL; }
+/* the address this machine sends from to reach dst */
+int net_local_addr(const struct ipaddr *dst, struct ipaddr *out) {
+    memset(out, 0, sizeof *out);
+    if (dst->v6) { if (!src6_for(dst->b, out->b)) return NET_ENOTCONN; out->v6 = 1; return NET_OK; }
+    if (!configured) return NET_ENOTCONN;
+    *out = ip_v4(my_ip);
+    return NET_OK;
+}
+long udp_sock_send(int h, const void *who, const struct ipaddr *dst, uint16_t dport, const void *buf, uint32_t len) {
+    struct usock *u = sock_udp(h, who);
+    if (!u) return NET_EINVAL;
+    if (!nif) return NET_ENODEV;
+    if (len > 1440) return NET_ENOMEM;                                 /* (the Linux layer says EMSGSIZE) */
+    struct ipaddr src;
+    if (dst->v6 ? !route6_ok(dst->b) : 0) return NET_EUNREACH;
+    int r = net_local_addr(dst, &src);
+    if (r) return r;
+    r = udp_send(&src, dst, u->lport, dport, buf, (int)len);
+    return r < 0 && r != NET_EAGAIN ? r : (long)len;
+}
+long udp_sock_recv(int h, const void *who, void *buf, uint32_t len, struct ipaddr *from, uint16_t *fport, bool peek, uint32_t *full) {
+    struct usock *u = sock_udp(h, who);
+    if (!u) return NET_EINVAL;
+    if (!u->n) return NET_EAGAIN;
+    struct udgram *g = &u->q[u->head];
+    uint32_t n = len < g->len ? len : g->len;
+    memcpy(buf, g->data, n);
+    if (from) *from = g->src;
+    if (fport) *fport = g->sport;
+    if (full) *full = g->len;
+    if (!peek) { u->head = (u->head + 1) % UQ_LEN; u->n--; }
+    return n;
+}
+int udp_sock_pending(int h, const void *who) { struct usock *u = sock_udp(h, who); return u ? u->n : 0; }
+void udp_sock_close(int h, const void *who) {
+    struct usock *u = sock_udp(h, who);
+    if (!u) return;
+    kfree(u->q); u->q = 0; u->who = 0; u->lport = 0; u->n = 0;
 }
 
 void net_task_exit(struct task *task) {
@@ -1130,7 +1295,7 @@ static void net_reset(void) {
     memset(nb, 0, sizeof nb); memset(dcache, 0, sizeof dcache);
     for (int i = 0; i < 8; i++) pend[i].used = false;
     for (int i = 0; i < TCP_MAX; i++)
-        if (tcbs[i].state != T_FREE && tcbs[i].state != T_CLOSED) { tcbs[i].err = NET_ERESET; tcbs[i].state = T_CLOSED; }
+        if (tcbs[i].state != T_FREE && tcbs[i].state != T_CLOSED) { tcbs[i].err = NET_ERESET; tcbs[i].state = T_CLOSED; sock_dirty = true; }
 }
 
 static void activate(struct netif *n) {
@@ -1183,6 +1348,7 @@ void net_thread(void *arg) {
         }
         if (nif->link) { dhcp_tick(); v6_tick(); }
         tcp_timers();
+        if (sock_dirty) { sock_dirty = false; linux_net_wake(); }
         task_sleep(1);
     }
 }

@@ -20,7 +20,11 @@
 #define AXIOM_WINDOW_H
 #include <stdint.h>
 
-#define AXWIN_RESIZABLE 1u
+#define AXWIN_RESIZABLE   1u
+#define AXWIN_POPUP       2u   /* a menu, list or tooltip: no frame, above the other windows, never takes the keyboard;
+                                  placed with AXWIN_MOVE (screen coordinates), shown and hidden with AXWIN_SHOW */
+#define AXWIN_MOVE_EVENTS 4u   /* send AXWIN_EV_MOVE whenever the window's content moves on the screen */
+#define AXWIN_HIDDEN      8u   /* made hidden; AXWIN_SHOW shows it */
 
 struct axwin_create { int32_t w, h; uint32_t flags; char title[64]; };
 struct axwin_info { int32_t id, w, h, stride; int32_t screen_w, screen_h; };   /* stride in bytes */
@@ -32,12 +36,21 @@ struct axwin_rect { int32_t x, y, w, h; };
 #define AXWIN_FLUSH  0x41580003u   /* struct axwin_rect *: show what was drawn there */
 #define AXWIN_TITLE  0x41580004u   /* char[64]: a new title */
 #define AXWIN_RESIZE 0x41580005u   /* (no argument): take the size the last AXWIN_EV_RESIZE asked for */
+#define AXWIN_MOVE   0x41580006u   /* struct axwin_rect * (x, y): put the content there on the screen; before
+                                      AXWIN_CREATE: where it will appear (w, h are ignored) */
+#define AXWIN_SHOW   0x41580007u   /* int *: 1 show, 0 hide */
+#define AXWIN_CURSOR 0x41580008u   /* int *: the pointer's shape over the window (AXWIN_CURSOR_*) */
+#define AXWIN_POS    0x41580009u   /* struct axwin_rect * (out): where the content is on the screen, and its size */
+
+enum { AXWIN_CURSOR_ARROW, AXWIN_CURSOR_TEXT, AXWIN_CURSOR_HAND, AXWIN_CURSOR_WAIT, AXWIN_CURSOR_CROSSHAIR,
+       AXWIN_CURSOR_MOVE, AXWIN_CURSOR_RESIZE_EW, AXWIN_CURSOR_RESIZE_NS, AXWIN_CURSOR_RESIZE_NWSE,
+       AXWIN_CURSOR_RESIZE_NESW, AXWIN_CURSOR_NOT_ALLOWED, AXWIN_CURSOR_NONE };
 /* The clipboard (shared with every AXIOM app), as UTF-8 text. Works on any open /dev/axiom/window fd, with or
  * without a window. seq goes up whenever anything is copied (by any app), so a program can tell whether
  * the clipboard changed since it last looked. */
 struct axwin_clip { uint64_t data; uint64_t len; uint64_t seq; };   /* data: a pointer, as a number */
-#define AXWIN_CLIP_SET 0x41580006u /* struct axwin_clip *: copy len bytes from data (at most 1 MiB); seq comes back */
-#define AXWIN_CLIP_GET 0x41580007u /* struct axwin_clip *: data, len = room there; comes back with len = the whole
+#define AXWIN_CLIP_SET 0x4158000Au /* struct axwin_clip *: copy len bytes from data (at most 1 MiB); seq comes back */
+#define AXWIN_CLIP_GET 0x4158000Bu /* struct axwin_clip *: data, len = room there; comes back with len = the whole
                                       text's length (copied: as much as fits) and seq. data 0: just len and seq */
 
 /* events: the same layout as AXIOM's own (struct dunc_event) */
@@ -54,6 +67,7 @@ enum {
     AXWIN_EV_MOUSE_LEAVE,
     AXWIN_EV_WHEEL,            /* x, y: the pointer; key: steps, positive = down (reversed with natural scrolling) */
     AXWIN_EV_RESIZE,           /* x, y: the size asked for (see above) */
+    AXWIN_EV_MOVE = 12,        /* x, y: where the content is now on the screen (with AXWIN_MOVE_EVENTS) */
 };
 enum { AXWIN_KEY_UP = 0x100, AXWIN_KEY_DOWN, AXWIN_KEY_LEFT, AXWIN_KEY_RIGHT, AXWIN_KEY_HOME, AXWIN_KEY_END,
        AXWIN_KEY_DEL, AXWIN_KEY_PGUP, AXWIN_KEY_PGDN, AXWIN_KEY_INS, AXWIN_KEY_PRTSC,

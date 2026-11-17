@@ -417,6 +417,12 @@ bool desktop_available(void);
 void desktop_init(void);
 void desktop_thread(void *arg);
 struct window *wm_create(struct task *t, int w, int h, const char *title, uint32_t **buf, int *pages, uint64_t uva, int flags);
+#define WM_ANYWHERE (-1000000)
+struct window *wm_create_at(struct task *t, int w, int h, const char *title, uint32_t **buf, int *pages, uint64_t uva, int flags, int x, int y);
+bool wm_pos(struct task *t, int id, int *x, int *y);      /* where its content is on the screen */
+bool wm_move(struct task *t, int id, int x, int y);       /* put its content there */
+bool wm_show(struct task *t, int id, bool show);
+bool wm_set_cursor(struct task *t, int id, int shape);    /* the pointer's shape over it: AXWIN_CURSOR_* (axiom_window.h) */
 bool wm_resize(struct task *t, int id, int *nw, int *nh);
 int wm_id(struct window *w);
 bool wm_flush(struct task *t, int id, int x, int y, int w, int h);

@@ -56,7 +56,8 @@ enum { KEY_UP = 0x100, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_HOME, KEY_END, KEY_DEL
 #define KEY_CODE(k)  ((k) & 0xFFF)
 
 enum { EV_NONE, EV_KEY, EV_MOUSE_DOWN, EV_MOUSE_UP, EV_MOUSE_MOVE, EV_CLOSE, EV_FOCUS, EV_BLUR, EV_MOUSE_LEAVE, EV_WHEEL,
-       EV_RESIZE /* x,y = new content size: call sys_win_resize */, EV_FILES_CHANGED };
+       EV_RESIZE /* x,y = new content size: call sys_win_resize */, EV_FILES_CHANGED,
+       EV_MOVE /* x,y = where the content now is on the screen (only with WIN_MOVE_EVENTS) */ };
 struct dunc_event { int type, win, x, y, key, button; };
 
 struct win_info { int id; uint32_t *buf; int w, h; };
@@ -131,6 +132,9 @@ struct dunc_app { char id[24], name[32]; int installed; };
 
 /* window flags */
 #define WIN_RESIZABLE 1
+#define WIN_POPUP       2   /* a menu, list or tooltip: no frame, above other windows, never focused (Linux windows) */
+#define WIN_MOVE_EVENTS 4   /* send EV_MOVE when it moves */
+#define WIN_HIDDEN      8   /* made hidden (shown later) */
 
 /* ---- networking ---- */
 #include "inet.h"

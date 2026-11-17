@@ -28,9 +28,16 @@ struct window {
     int rx, ry, rw, rh;                 /* position/size to restore after maximise */
     uint64_t last_title_click;
     bool snapped;                       /* filling half the screen (dragged to an edge) */
+    bool popup;                         /* a menu, list or tooltip (WIN_POPUP): no frame, never focused, above the rest;
+                                           minimized = hidden */
+    bool move_events;                   /* WIN_MOVE_EVENTS: tell the app where its content is when it moves */
+    int sent_x, sent_y;                 /* (the last position told) */
+    int cursor;                         /* the pointer's shape over its content (WM_CURSOR_*) */
 };
-static inline int fw(struct window *w) { return w->w + 2; }
-static inline int fh(struct window *w) { return w->h + TITLE + 1; }
+static inline int fw(struct window *w) { return w->popup ? w->w : w->w + 2; }
+static inline int fh(struct window *w) { return w->popup ? w->h : w->h + TITLE + 1; }
+static inline int cx0(struct window *w) { return w->popup ? w->x : w->x + 1; }       /* where its content starts */
+static inline int cy0(struct window *w) { return w->popup ? w->y : w->y + TITLE; }
 
 static struct window wins[MAX_WIN];
 static int zorder[MAX_WIN], nz, next_wid = 1;
@@ -105,7 +112,10 @@ static struct rect bar_rect(void) { return (struct rect){ 0, 0, W, HL_BAR_H }; }
 static struct rect dock_rect(void) { int x, y, w, h; hl_dock_rect(W, H, ndock ? ndock : 1, &x, &y, &w, &h); return (struct rect){ x, y, w, h }; }
 static struct rect dock_area(void) { struct rect d = dock_rect(); return (struct rect){ d.x - 1, d.y - 1, d.w + 2, d.h + 10 }; }  /* incl. shadow */
 static struct rect dock_item(int i) { struct rect d = dock_rect(); return (struct rect){ d.x + HL_DOCK_PAD + i * (HL_DOCK_ICON + HL_DOCK_GAP), d.y + HL_DOCK_PAD, HL_DOCK_ICON, HL_DOCK_ICON }; }
-static struct rect frame_area(struct window *w) { return (struct rect){ w->x - 16, w->y - 12, fw(w) + 32, fh(w) + 44 }; }   /* incl. the shadow */
+static struct rect frame_area(struct window *w) {   /* incl. the shadow */
+    if (w->popup) return (struct rect){ w->x, w->y, w->w, w->h };
+    return (struct rect){ w->x - 16, w->y - 12, fw(w) + 32, fh(w) + 44 };
+}
 static struct rect crown_btn(void) { return (struct rect){ 6, 3, 132, HL_BAR_H - 6 }; }
 /* The AXIOM menu: apps in two columns, in groups (everyday apps, system tools, apps added with clan).
  * The square at the end of each row puts the app in the dock or takes it out. */
@@ -195,8 +205,8 @@ static void damage_r(struct rect r) { damage(r.x, r.y, r.w, r.h); }
 static void damage_frame(struct window *w) { damage_r(frame_area(w)); }
 
 /* ---------------- helpers ---------------- */
-static int top_window(void) {
-    for (int i = nz - 1; i >= 0; i--) if (!wins[zorder[i]].minimized) return zorder[i];
+static int top_window(void) {                    /* the focused one (popups never are) */
+    for (int i = nz - 1; i >= 0; i--) if (!wins[zorder[i]].minimized && !wins[zorder[i]].popup) return zorder[i];
     return -1;
 }
 static int app_index(const char *id) {
@@ -243,8 +253,36 @@ static const char *cursor_img[] = {
 static const char *cursor_resize[] = {   /* diagonal resize, hotspot at the centre */
     "XXXXXX       ", "X....X       ", "X...X        ", "X....X       ", "X.X..X       ", "XX X..X      ",
     "     X..X    ", "      X..X XX", "       X..X.X", "       X....X", "        X...X", "       X....X", "       XXXXXX" };
+static const char *cur_text[] = {   /* hotspot 4,9 */
+    "XXXXXXXXX", "X...X...X", "XXXX.XXXX", "   X.X", "   X.X", "   X.X", "   X.X", "   X.X", "   X.X", "   X.X", "   X.X", "   X.X", "   X.X", "   X.X", "   X.X", "XXXX.XXXX", "X...X...X", "XXXXXXXXX" };
+static const char *cur_hand[] = {   /* hotspot 5,1 */
+    "   XXXXX", "   X...X", "   X...X", "   X...X", "   X...XXXX", "   X...X..XXXX", "   X...X..X..XXXX", "   X...X..X..X..X", "XXXX...X..X..X..X", "X......X..X..X..X", "XX..............X", " X..............X", " X..............X", " X..............X", " XXX............X", "   XX..........XX", "    X..........X", "    X..........X", "    XXXXXXXXXXXX" };
+static const char *cur_wait[] = {   /* hotspot 6,9 */
+    "XXXXXXXXXXXXX", "X...........X", "X...........X", "X...........X", "X...........X", "XX.........XX", " XX.......XX", "  XX.....XX", "   XX...XX", "    X...X", "   XX...XX", "  XX.....XX", " XX.......XX", "XX.........XX", "X...........X", "X...........X", "X...........X", "X...........X", "XXXXXXXXXXXXX" };
+static const char *cur_crosshair[] = {   /* hotspot 8,8 */
+    "       XXX", "       X.X", "       X.X", "       X.X", "       X.X", "       X.X", "       X.X", "XXXXXXXXXXXXXXXXX", "X......X X......X", "XXXXXXXXXXXXXXXXX", "       X.X", "       X.X", "       X.X", "       X.X", "       X.X", "       X.X", "       XXX" };
+static const char *cur_move[] = {   /* hotspot 9,9 */
+    "", "        XXX", "       XX.XX", "      XX...XX", "      X.....X", "      XXX.XXX", "   XXX  X.X  XXX", "  XX.X  X.X  X.XX", " XX..XXXX.XXXX..XX", " X...............X", " XX..XXXX.XXXX..XX", "  XX.X  X.X  X.XX", "   XXX  X.X  XXX", "      XXX.XXX", "      X.....X", "      XX...XX", "       XX.XX", "        XXX", "" };
+static const char *cur_ew[] = {   /* hotspot 10,4 */
+    "", "   XXX         XXX", "  XX.X         X.XX", " XX..XXXXXXXXXXX..XX", " X.................X", " XX..XXXXXXXXXXX..XX", "  XX.X         X.XX", "   XXX         XXX", "" };
+static const char *cur_ns[] = {   /* hotspot 4,10 */
+    "", "   XXX", "  XX.XX", " XX...XX", " X.....X", " XXX.XXX", "   X.X", "   X.X", "   X.X", "   X.X", "   X.X", "   X.X", "   X.X", "   X.X", "   X.X", " XXX.XXX", " X.....X", " XX...XX", "  XX.XX", "   XXX", "" };
+static const char *cur_nwse[] = {   /* hotspot 9,9 */
+    "XXXXXXX", "X.....X", "X....XX", "X...XX", "X..X.XX", "X.XXX.XX", "XXX XX.XX", "     XX.XX", "      XX.XX", "       XX.XX", "        XX.XX", "         XX.XX", "          XX.XX XXX", "           XX.XXX.X", "            XX.X..X", "             XX...X", "            XX....X", "            X.....X", "            XXXXXXX" };
+static const char *cur_nesw[] = {   /* hotspot 9,9 */
+    "            XXXXXXX", "            X.....X", "            XX....X", "             XX...X", "            XX.X..X", "           XX.XXX.X", "          XX.XX XXX", "         XX.XX", "        XX.XX", "       XX.XX", "      XX.XX", "     XX.XX", "XXX XX.XX", "X.XXX.XX", "X..X.XX", "X...XX", "X....XX", "X.....X", "XXXXXXX" };
+static const char *cur_notallowed[] = {   /* hotspot 8,8 */
+    "     XXXXXXX", "   XXX.....XXX", "  XX.........XX", " XX....XXX....XX", " X....XX XXX...X", "XX.....XX  XX..XX", "X...X...XX  X...X", "X..XXX...XX XX..X", "X..X XX...XX X..X", "X..XX XX...XXX..X", "X...X  XX...X...X", "XX..XX  XX.....XX", " X...XXX XX....X", " XX....XXX....XX", "  XX.........XX", "   XXX.....XXX", "     XXXXXXX" };
+/* the shapes apps can ask for (WM_CURSOR_*, the same numbers as AXWIN_CURSOR_*), then the frame's own resize */
+struct cursor_shape { const char **img; int rows, w, hx, hy; };
+#define CUR_FRAME_RESIZE 12
+static const struct cursor_shape cshape[] = {
+    { cursor_img, 19, 12, 0, 0 }, { cur_text, 18, 9, 4, 9 }, { cur_hand, 19, 17, 5, 1 }, { cur_wait, 19, 13, 6, 9 },
+    { cur_crosshair, 17, 17, 8, 8 }, { cur_move, 19, 18, 9, 9 }, { cur_ew, 9, 20, 10, 4 }, { cur_ns, 21, 8, 4, 10 },
+    { cur_nwse, 19, 19, 9, 9 }, { cur_nesw, 19, 19, 9, 9 }, { cur_notallowed, 17, 17, 8, 8 }, { 0, 0, 0, 0, 0 },
+    { cursor_resize, 13, 13, 6, 6 } };
 static const char **cur_img = cursor_img;
-static int cur_rows = 19, cur_hx, cur_hy;
+static int cur_rows = 19, cur_w = 12, cur_hx, cur_hy, cur_shape;
 
 /* a screen pixel of the stretched desktop (bilinear) */
 static uint32_t scaled_px(int px, int py) {
@@ -294,7 +332,7 @@ static void flush_rect(struct rect r) {
             for (int px = x0; px < x1; px++) d[px] = fbcol(scaled_px(px, py));
         }
         int cx = mx * dw / W - cur_hx - 2, cy = my * dh / H - cur_hy - 2;
-        if (cx < x1 && cx + 17 > x0 && cy < y1 && cy + 23 > y0) cursor_paint(mx, my, true);
+        if (cx < x1 && cx + cur_w + 4 > x0 && cy < y1 && cy + cur_rows + 4 > y0) cursor_paint(mx, my, true);
         return;
     }
     for (int j = r.y; j < r.y + r.h; j++) {
@@ -303,7 +341,7 @@ static void flush_rect(struct rect r) {
         if (fb_xrgb) for (int i = 0; i < r.w; i++) d[i] = s[i];
         else for (int i = 0; i < r.w; i++) d[i] = fbcol(s[i]);
     }
-    if (overlap(r, (struct rect){ mx - cur_hx, my - cur_hy, 13, 19 })) cursor_paint(mx, my, true);
+    if (overlap(r, (struct rect){ mx - cur_hx, my - cur_hy, cur_w, cur_rows })) cursor_paint(mx, my, true);
 }
 
 /* draw a message straight onto the screen (used by the watchdog when the system is stuck) */
@@ -316,16 +354,18 @@ void desktop_emergency(const char *const *lines, int n) {
     flush_rect((struct rect){ 20, H - 120 - h, W - 40 > 780 ? 780 : W - 40, h });
 }
 
-static void set_cursor(bool resize) {
-    const char **img = resize ? cursor_resize : cursor_img;
-    if (img == cur_img) return;
+static void set_cursor(int shape) {
+    if (shape < 0 || shape > CUR_FRAME_RESIZE) shape = 0;
+    if (shape == cur_shape) return;
+    const struct cursor_shape *c = &cshape[shape];
     cursor_paint(mx, my, false);
-    cur_img = img; cur_rows = resize ? 13 : 19; cur_hx = resize ? 6 : 0; cur_hy = resize ? 6 : 0;
+    cur_shape = shape; cur_img = c->img; cur_rows = c->rows; cur_w = c->w; cur_hx = c->hx; cur_hy = c->hy;
     cursor_paint(mx, my, true);
 }
 
 static void draw_window(int idx, struct rect r) {
     struct window *w = &wins[idx];
+    if (w->popup) { (void)r; gfx_blit(&cv, w->x, w->y, w->buf, w->w, w->h, w->w); return; }
     bool active = idx == top_window();
     char t[80];
     bool hung = w->close_req && uptime_ms() - w->close_req > 1000;
@@ -461,7 +501,7 @@ static void draw_toasts(void) {
     }
 }
 
-static struct rect content_rect(struct window *w) { return (struct rect){ w->x + 1, w->y + TITLE, w->w, w->h }; }
+static struct rect content_rect(struct window *w) { return (struct rect){ cx0(w), cy0(w), w->w, w->h }; }
 static struct rect intersect(struct rect a, struct rect b) {
     int x0 = a.x > b.x ? a.x : b.x, y0 = a.y > b.y ? a.y : b.y;
     int x1 = a.x + a.w < b.x + b.w ? a.x + a.w : b.x + b.w, y1 = a.y + a.h < b.y + b.h ? a.y + a.h : b.y + b.h;
@@ -546,7 +586,7 @@ static struct rect power_rect(void) { return (struct rect){ (W - 560) / 2, HL_BA
 static struct rect power_btn(int k) { struct rect b = power_rect(); return (struct rect){ b.x + b.w - 360 + k * 180, b.y + b.h - 52, 166, 36 }; }  /* Cancel, anyway */
 static int windows_open(char *first, int n) {
     int c = 0;
-    for (int i = 0; i < MAX_WIN; i++) if (wins[i].used) { if (!c && first) strncpy0(first, wins[i].owner ? wins[i].owner->name : wins[i].title, n); c++; }
+    for (int i = 0; i < MAX_WIN; i++) if (wins[i].used && !wins[i].popup) { if (!c && first) strncpy0(first, wins[i].owner ? wins[i].owner->name : wins[i].title, n); c++; }
     return c;
 }
 static void power_start(int act) {
@@ -683,7 +723,7 @@ static void compose(struct rect r) {
     for (int z = start; z < nz; z++) {
         struct window *w = &wins[zorder[z]];
         if (w->minimized || !overlap(frame_area(w), r)) continue;
-        if (contains(content_rect(w), intersect(r, frame_area(w))))
+        if (!w->popup && contains(content_rect(w), intersect(r, frame_area(w))))
             gfx_blit_rr(&cv, w->x + 1, w->y + TITLE, w->buf, w->w, w->h, w->w, w->x + 1, w->y + 1, fw(w) - 2, fh(w) - 2, HL_WIN_RADIUS - 1);
         else draw_window(zorder[z], r);
     }
@@ -735,15 +775,19 @@ static void focus_changed(int old_top) {
     damage_r(bar_rect());
 }
 
-static void raise(int idx) {
-    int old = top_window(), k = 0;
-    for (int i = 0; i < nz; i++) if (zorder[i] != idx) zorder[k++] = zorder[i];
-    zorder[k++] = idx; nz = k;
+static void raise(int idx) {                     /* (popups stay above the other windows; a new one on top) */
+    int old = top_window(), k = 0, z[MAX_WIN];
+    for (int i = 0; i < nz; i++) if (zorder[i] != idx && !wins[zorder[i]].popup) z[k++] = zorder[i];
+    if (!wins[idx].popup) z[k++] = idx;
+    for (int i = 0; i < nz; i++) if (zorder[i] != idx && wins[zorder[i]].popup) z[k++] = zorder[i];
+    if (wins[idx].popup) z[k++] = idx;
+    memcpy(zorder, z, sizeof z[0] * k); nz = k;
     wins[idx].minimized = false;
     damage_frame(&wins[idx]);
     focus_changed(old);
 }
 
+static void update_hover(void);
 static void remove_window(int idx) {
     int old = top_window();
     struct window *w = &wins[idx];
@@ -759,6 +803,7 @@ static void remove_window(int idx) {
     if (hover_win == idx) hover_win = -1;
     hover_ctl = 0;
     focus_changed(old == idx ? -1 : old);
+    update_hover();                                  /* (the pointer's shape may have been this window's) */
 }
 
 static struct window *find(struct task *t, int id) {
@@ -767,8 +812,15 @@ static struct window *find(struct task *t, int id) {
 }
 
 struct window *wm_create(struct task *t, int w, int h, const char *title, uint32_t **buf, int *pages, uint64_t uva, int flags) {
+    return wm_create_at(t, w, h, title, buf, pages, uva, flags, WM_ANYWHERE, WM_ANYWHERE);
+}
+/* x, y: where its content goes on the screen (WM_ANYWHERE: the desktop chooses) */
+struct window *wm_create_at(struct task *t, int w, int h, const char *title, uint32_t **buf, int *pages, uint64_t uva, int flags, int x, int y) {
     int top = HL_BAR_H + 8, bottom = dock_rect().y - 8;
-    if (!desktop_ok || w < 100 || h < 60 || w > W - 20 || h + TITLE + 1 > H - HL_BAR_H - 16) return 0;
+    bool popup = flags & WIN_POPUP;
+    if (!desktop_ok || w < 1 || h < 1) return 0;
+    if (!popup && (w < 100 || h < 60 || w > W - 20 || h + TITLE + 1 > H - HL_BAR_H - 16)) return 0;
+    if (popup && (w > W || h > H)) return 0;
     int idx = -1, open = 0;
     for (int i = 0; i < MAX_WIN; i++) { if (!wins[i].used && idx < 0) idx = i; if (wins[i].used) open++; }
     if (idx < 0) return 0;
@@ -779,7 +831,9 @@ struct window *wm_create(struct task *t, int w, int h, const char *title, uint32
     memset(win, 0, sizeof *win);
     win->used = true; win->id = next_wid++; win->owner = t; win->w = w; win->h = h;
     win->buf = b; win->pages = np; win->uva = uva;
-    win->resizable = flags & WIN_RESIZABLE;
+    win->resizable = !popup && (flags & WIN_RESIZABLE);
+    win->popup = popup; win->move_events = flags & WIN_MOVE_EVENTS; win->sent_x = win->sent_y = -100000;
+    win->minimized = flags & WIN_HIDDEN;
     win->want_w = w; win->want_h = h;
     strncpy0(win->title, title, sizeof win->title);
     for (int i = 0; i < w * h; i++) b[i] = HL_WIN_BG;
@@ -790,6 +844,7 @@ struct window *wm_create(struct task *t, int w, int h, const char *title, uint32
     if (win->x + fw(win) > W - 8) win->x = W - 8 - fw(win);
     if (win->y + fh(win) > bottom) win->y = bottom - fh(win);
     if (win->y < top) win->y = top;
+    if (x != WM_ANYWHERE) { win->x = popup ? x : x - 1; win->y = popup ? y : y - TITLE; if (!popup && win->y < HL_BAR_H) win->y = HL_BAR_H; }
     raise(idx);
     *buf = b; *pages = np;
     return win;
@@ -860,7 +915,7 @@ bool wm_flush(struct task *t, int id, int x, int y, int w, int h) {
     if (y < 0) { h += y; y = 0; }
     if (x + w > win->w) w = win->w - x;
     if (y + h > win->h) h = win->h - y;
-    if (!win->minimized && w > 0 && h > 0) damage(win->x + 1 + x, win->y + TITLE + y, w, h);
+    if (!win->minimized && w > 0 && h > 0) damage(cx0(win) + x, cy0(win) + y, w, h);
     win->close_req = 0;
     return true;
 }
@@ -891,6 +946,44 @@ int wm_count(struct task *t) {
     return n;
 }
 
+/* where its content is on the screen */
+bool wm_pos(struct task *t, int id, int *x, int *y) {
+    struct window *w = find(t, id);
+    if (!w) return false;
+    *x = cx0(w); *y = cy0(w);
+    return true;
+}
+/* move it so its content starts at x, y (a window's title bar stays below the top bar) */
+bool wm_move(struct task *t, int id, int x, int y) {
+    struct window *w = find(t, id);
+    if (!w) return false;
+    if (w->maximized || w->snapped) return true;               /* (the desktop placed it: it stays) */
+    damage_frame(w);
+    w->x = w->popup ? x : x - 1; w->y = w->popup ? y : y - TITLE;
+    if (!w->popup && w->y < HL_BAR_H) w->y = HL_BAR_H;
+    damage_frame(w);
+    return true;
+}
+/* show or hide it (a hidden window is minimised; a popup just isn't drawn) */
+bool wm_show(struct task *t, int id, bool show) {
+    struct window *w = find(t, id);
+    if (!w) return false;
+    if (w->minimized == !show) return true;
+    int idx = w - wins;
+    if (show) raise(idx);
+    else { int old = top_window(); w->minimized = true; damage_frame(w); focus_changed(old); if (capture_win == idx) capture_win = -1; }
+    return true;
+}
+bool wm_set_cursor(struct task *t, int id, int shape) {
+    struct window *w = find(t, id);
+    if (!w) return false;
+    if (shape < 0 || shape >= CUR_FRAME_RESIZE) shape = 0;
+    if (w->cursor == shape) return true;
+    w->cursor = shape;
+    update_hover();
+    return true;
+}
+
 void desktop_notify(const char *title, const char *msg) {
     sound_notify();
     kprintf("[notify] %s: %s\n", title, msg);
@@ -909,7 +1002,7 @@ void desktop_notify(const char *title, const char *msg) {
 /* ---------------- input ---------------- */
 static void send_mouse(int idx, int type, int button) {
     struct window *w = &wins[idx];
-    struct dunc_event e = { type, w->id, mx - w->x - 1, my - w->y - TITLE, 0, button };
+    struct dunc_event e = { type, w->id, mx - cx0(w), my - cy0(w), 0, button };
     event_push(w->owner, &e);
 }
 
@@ -943,7 +1036,13 @@ static int resize_zone(int *wi_out) {
 }
 
 static void update_hover(void) {
-    int zw; set_cursor(resize_win >= 0 || resize_zone(&zw));
+    int zw, shape = 0;
+    if (resize_win >= 0 || resize_zone(&zw)) shape = CUR_FRAME_RESIZE;
+    else if (drag_win < 0) {                       /* over an app's content: the shape it asked for */
+        int t = capture_win >= 0 ? capture_win : window_at(mx, my);
+        if (t >= 0 && in_rect(content_rect(&wins[t]), mx, my)) shape = wins[t].cursor;
+    }
+    set_cursor(shape);
     if (power_act) for (int k = 0; k < 2; k++) if (in_rect(power_btn(k), mx, my)) { set_hover(320 + k, power_btn(k)); return; }
     if (menu_open) {
         for (int i = 0; i < mn; i++) if (in_rect(menu_pin(i), mx, my)) { set_hover(500 + i, menu_item(i)); return; }
@@ -956,7 +1055,7 @@ static void update_hover(void) {
         if (in_rect(dock_item(i), mx, my)) { struct rect d = dock_item(i); set_hover(100 + i, (struct rect){ d.x - 110, d.y - 48, d.w + 220, d.h + 48 }); return; }
     if (window_at(mx, my) < 0 && in_rect(dock_rect(), mx, my)) { set_hover(0, (struct rect){0, 0, 0, 0}); return; }
     int wi = window_at(mx, my);
-    if (wi >= 0) {
+    if (wi >= 0 && !wins[wi].popup) {
         struct window *w = &wins[wi];
         for (int k = 0; k < 3; k++) { struct rect b = dot(w, k); if (b.w && in_rect(b, mx, my)) { set_hover(1000 + wi * 4 + k, b); return; } }
     }
@@ -997,7 +1096,7 @@ static void launch(int a) {
 static void activate_app(int a) {
     int top = top_window(), best = -1;
     for (int z = nz - 1; z >= 0; z--)
-        if (app_index(wins[zorder[z]].owner->app) == a) { best = zorder[z]; break; }
+        if (!wins[zorder[z]].popup && app_index(wins[zorder[z]].owner->app) == a) { best = zorder[z]; break; }
     if (best < 0) { if (!app_running(a)) launch(a); return; }
     if (best == top) { int old = top; wins[best].minimized = true; damage_frame(&wins[best]); focus_changed(old); }
     else raise(best);
@@ -1061,6 +1160,7 @@ static void click(int button) {
     int wi = window_at(mx, my);
     if (wi < 0) return;
     struct window *w = &wins[wi];
+    if (w->popup) { capture_win = wi; send_mouse(wi, EV_MOUSE_DOWN, button); return; }   /* (no raising, no focus) */
     if (wi != top_window()) raise(wi);
     if (my < w->y + HL_TITLE_H) {
         if (button != 1) return;
@@ -1160,14 +1260,14 @@ static void handle_mouse(int dx, int dy, int b, int wheel) {
     if (moved && drag_win < 0 && resize_win < 0) {
         update_hover();
         int target = capture_win >= 0 ? capture_win : window_at(mx, my);
-        bool content = target >= 0 && my >= wins[target].y + TITLE;
+        bool content = target >= 0 && my >= cy0(&wins[target]);
         if (content) send_mouse(target, EV_MOUSE_MOVE, 0);
         if (hover_win >= 0 && hover_win != (content ? target : -1) && wins[hover_win].used) send_mouse(hover_win, EV_MOUSE_LEAVE, 0);
         hover_win = content ? target : -1;
     }
     if (wheel) {
         int t = window_at(mx, my);
-        if (t >= 0) { struct dunc_event e = { EV_WHEEL, wins[t].id, mx - wins[t].x - 1, my - wins[t].y - TITLE, wheel, 0 }; event_push(wins[t].owner, &e); }
+        if (t >= 0) { struct dunc_event e = { EV_WHEEL, wins[t].id, mx - cx0(&wins[t]), my - cy0(&wins[t]), wheel, 0 }; event_push(wins[t].owner, &e); }
     }
 }
 
@@ -1219,7 +1319,7 @@ static void handle_key(int k) {
         uint64_t now = uptime_ms();
         if (!sw_until || now > sw_until) {                    /* a new round: windows from the most recently used */
             sw_n = 0;
-            for (int z = nz - 1; z >= 0 && sw_n < 32; z--) if (wins[zorder[z]].used) sw_list[sw_n++] = zorder[z];
+            for (int z = nz - 1; z >= 0 && sw_n < 32; z--) if (wins[zorder[z]].used && !wins[zorder[z]].popup) sw_list[sw_n++] = zorder[z];
             sw_sel = 0;
         }
         if (sw_n < 1) return;
@@ -1345,6 +1445,13 @@ void desktop_thread(void *arg) {
         while ((k = input_pop()) >= 0) handle_key(k);
         int dx, dy, b, wh;
         while (mouse_pop(&dx, &dy, &b, &wh)) handle_mouse(dx, dy, b, wh);
+        for (int i = 0; i < MAX_WIN; i++) {                /* windows that asked to hear where they've moved to */
+            struct window *w = &wins[i];
+            if (!w->used || !w->move_events || (cx0(w) == w->sent_x && cy0(w) == w->sent_y)) continue;
+            w->sent_x = cx0(w); w->sent_y = cy0(w);
+            struct dunc_event e = { EV_MOVE, w->id, w->sent_x, w->sent_y, 0, 0 };
+            event_push(w->owner, &e);
+        }
 
         uint64_t now = uptime_ms();
         for (int i = 0; i < 4; i++)
