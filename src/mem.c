@@ -1,11 +1,17 @@
-/* Physical memory: bump allocator over the largest usable RAM region below 4 GiB,
- * plus a free list of recycled single pages. Physical memory is identity mapped. */
+/* Physical memory: the largest usable RAM region below 4 GiB (identity mapped), one bit per page. A freed page
+ * is free again for runs of pages as well as single ones (a bump pointer with a list of freed single pages,
+ * as this was, never gave a run back: FAT's buffers, pipe rings, kernel stacks and window buffers slowly used
+ * up every run, and a long session ran out of memory with most of it free). Searches start after the last page
+ * given out (next fit), so they're short. */
 #include "kernel.h"
 
 extern char kernel_end[];
 extern uint64_t boot_pml4[];
-static uint64_t region_start, region_end, next_free, total, free_count;
-static void *free_list;
+static uint64_t region_start, region_end, total;
+#define MAXPAGES (1u << 20)                                   /* 4 GiB of pages */
+static uint64_t pbits[MAXPAGES / 64];                         /* 1: in use */
+static uint32_t npages, used_pages, hint;
+static inline bool pused(uint32_t i) { return pbits[i >> 6] >> (i & 63) & 1; }
 
 void mem_init(void) {
     uint64_t kend = ((uint64_t)kernel_end + 0xFFFFF) & ~0xFFFFFULL;
@@ -22,22 +28,33 @@ void mem_init(void) {
         s = (s + 0xFFF) & ~0xFFFULL; end &= ~0xFFFULL;
         if (end > s && end - s > region_end - region_start) { region_start = s; region_end = end; }
     }
-    next_free = region_start;
+    npages = (uint32_t)((region_end - region_start) / 4096 < MAXPAGES ? (region_end - region_start) / 4096 : MAXPAGES);
+    region_end = region_start + (uint64_t)npages * 4096;
+}
+static void pmark(uint32_t i, uint32_t n, bool on) {
+    for (uint32_t k = i; k < i + n; k++) { if (on) pbits[k >> 6] |= 1ULL << (k & 63); else pbits[k >> 6] &= ~(1ULL << (k & 63)); }
+}
+/* the first run of n free pages at or after from (whole words in use are skipped); npages if none */
+static uint32_t pfind(uint32_t from, uint32_t to, uint32_t n) {
+    uint32_t run = 0, start = from;
+    for (uint32_t i = from; i < to;) {
+        if (!(i & 63) && pbits[i >> 6] == ~0ULL) { i += 64; run = 0; start = i; continue; }
+        if (pused(i)) { i++; run = 0; start = i; continue; }
+        if (++run == n) return start;
+        i++;
+    }
+    return npages;
 }
 
 void *page_alloc(size_t pages) {
-    if (pages == 1 && free_list) {
-        void *p = free_list;
-        free_list = *(void **)p;
-        free_count--;
-        memset(p, 0, 4096);
-        return p;
-    }
-    uint64_t sz = pages * 4096;
-    if (next_free + sz > region_end) return 0;
-    void *p = (void *)next_free;
-    next_free += sz;
-    memset(p, 0, sz);
+    if (!pages || pages > npages) return 0;
+    uint32_t n = (uint32_t)pages;
+    uint32_t i = pfind(hint, npages, n);
+    if (i == npages) i = pfind(0, hint + n < npages ? hint + n : npages, n);   /* (wrap around) */
+    if (i == npages) return 0;
+    pmark(i, n, true); used_pages += n; hint = i + n < npages ? i + n : 0;
+    void *p = (void *)(region_start + (uint64_t)i * 4096);
+    memset(p, 0, pages * 4096);
     return p;
 }
 
@@ -48,9 +65,11 @@ void *page_alloc_or_panic(size_t pages) {
 }
 
 void page_free(void *p) {
-    *(void **)p = free_list;
-    free_list = p;
-    free_count++;
+    uint64_t a = (uint64_t)p;
+    if (a < region_start || a >= region_end || (a & 4095)) { kprintf("[mem] page_free of %p: not a kernel page\n", p); return; }
+    uint32_t i = (uint32_t)((a - region_start) / 4096);
+    if (!pused(i)) { kprintf("[mem] page_free of %p: already free\n", p); return; }
+    pmark(i, 1, false); used_pages--;
 }
 
 /* ---- memory above 4 GiB: programs' pages (and the disk cache, which takes the first part of it) ----
@@ -99,8 +118,8 @@ void upage_free(uint64_t pa) {
 }
 
 uint64_t mem_total(void) { return total; }
-uint64_t mem_used(void) { return next_free - region_start - free_count * 4096 + high_used; }
-uint64_t mem_low_free(void) { return region_end - next_free + free_count * 4096; }   /* the kernel's own (below 4 GiB) */
+uint64_t mem_used(void) { return (uint64_t)used_pages * 4096 + high_used; }
+uint64_t mem_low_free(void) { return (uint64_t)(npages - used_pages) * 4096; }   /* the kernel's own (below 4 GiB) */
 
 void map_mmio_flags(uint64_t phys, uint64_t size, uint64_t cache) {
     for (uint64_t a = phys & ~0x1FFFFFULL; a < phys + size; a += 0x200000) {
