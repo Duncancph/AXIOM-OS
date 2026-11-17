@@ -1432,10 +1432,120 @@ static struct shm *proc_text(const char *which) {
     return o;
 }
 
+static struct task *proc_task(int pid);
+/* a path given to an *at call: relative to the folder open as dirfd (AT_FDCWD -100: the working folder) */
+static int64_t at_join(struct lxproc *lx, int dirfd, const char *p, char *out, size_t n) {
+    if (p[0] == '/' || dirfd == -100) { path_join(lx->cwd, p, out, n); return 0; }
+    if (dirfd < 0 || dirfd >= NFD || !lx->fd[dirfd].kind) return E(EBADF_);
+    if (lx->fd[dirfd].kind != FD_DIR) return E(ENOTDIR_);
+    path_join(lx->fd[dirfd].path, p, out, n);
+    return 0;
+}
+
+/* /proc as folders (Chromium counts a process's threads by the links of /proc/self/task, and waits for a
+ * stopped thread's /proc/self/task/<tid> to go before it seals its sandbox; it lists /proc/self/fd to close
+ * a child's files). Its files (maps, cpuinfo, meminfo, exe) are made in do_open and readlink. */
+static bool proc_norm(const char *full, char *out, size_t n) { /* AXIOM's /system/linux/proc/... -> /proc/... */
+    if (strncmp(full, "/system/linux/proc", 18) || (full[18] && full[18] != '/')) return false;
+    ksnprintf(out, n, "/proc%s", full + 18);
+    return true;
+}
+static bool proc_alive(const struct task *t) { return t->state && t->state != PS_ZOMBIE && t->lx && t->user; }
+static int proc_nthreads(const struct task *p) {
+    int k = 0;
+    for (int i = 0; i < MAX_TASKS; i++) if (proc_alive(&tasks[i]) && tasks[i].proc == p) k++;
+    return k;
+}
+static const struct task *proc_thread(const struct task *p, int tid) {
+    for (int i = 0; i < MAX_TASKS; i++) if (proc_alive(&tasks[i]) && tasks[i].proc == p && tasks[i].pid == tid) return &tasks[i];
+    return 0;
+}
+static bool proc_num(const char *s, int *v) {
+    if (*s < '0' || *s > '9') return false;
+    int x = 0; for (; *s; s++) { if (*s < '0' || *s > '9') return false; x = x * 10 + (*s - '0'); }
+    *v = x; return true;
+}
+/* what a /proc path is: 0 nothing, 1 a folder, 2 a file; *proc and *what say whose and which */
+enum { PN_ROOT = 1, PN_PID, PN_TASK, PN_TID, PN_FD, PN_FILE };
+static int proc_node(const char *pp, struct task **proc, int *what, int *nlink) {
+    char parts[6][32]; int np = 0;
+    for (const char *s = pp + 5; *s && np < 6;) {             /* after "/proc" */
+        while (*s == '/') s++;
+        if (!*s) break;
+        int k = 0; while (*s && *s != '/') { if (k < 31) parts[np][k++] = *s; s++; }
+        parts[np++][k] = 0;
+    }
+    *proc = 0; *nlink = 2;
+    if (np == 0) { *what = PN_ROOT; *nlink = 3; return 1; }
+    if (np == 1 && (!strcmp(parts[0], "cpuinfo") || !strcmp(parts[0], "meminfo"))) { *what = PN_FILE; *nlink = 1; return 2; }
+    struct task *p = 0; int v, tid = 0;
+    if (!strcmp(parts[0], "self")) p = current->proc;
+    else if (!strcmp(parts[0], "thread-self")) { p = current->proc; tid = current->pid; }
+    else if (proc_num(parts[0], &v)) {                         /* a process, or (as Linux) a thread by its id */
+        p = proc_task(v);
+        if (!p) for (int i = 0; i < MAX_TASKS; i++) if (proc_alive(&tasks[i]) && tasks[i].pid == v) { p = tasks[i].proc; break; }
+    }
+    if (!p) return 0;
+    *proc = p;
+    int i = 1;
+    if (tid) {                                                 /* thread-self: as task/<tid> */
+        if (np == 1) { *what = PN_TID; return 1; }
+    } else {
+        if (np == 1) { *what = PN_PID; return 1; }
+        if (!strcmp(parts[1], "task")) {
+            if (np == 2) { *what = PN_TASK; *nlink = 2 + proc_nthreads(p); return 1; }
+            if (!proc_num(parts[2], &tid) || !proc_thread(p, tid)) return 0;
+            if (np == 3) { *what = PN_TID; return 1; }
+            i = 3;
+        }
+    }
+    if (np == i + 2 && !strcmp(parts[i], "fd") && proc_num(parts[i + 1], &v)) { *what = PN_FILE; *nlink = 1; return 2; }
+    if (np != i + 1) return 0;                                 /* one name inside <pid> or task/<tid> */
+    if (!strcmp(parts[i], "fd")) { *what = PN_FD; return 1; }
+    if (!strcmp(parts[i], "maps") || !strcmp(parts[i], "exe")) { *what = PN_FILE; *nlink = 1; return 2; }
+    return 0;
+}
+
+static int proc_list(struct lxproc *lx, const char *pp, struct vfs_dirent *out, int max) {   /* a /proc folder's names */
+    struct task *who; int what, nl, k = 0;
+    if (proc_node(pp, &who, &what, &nl) != 1) return 0;
+    #define PL_ADD(dir, ...) do { if (k < max) { ksnprintf(out[k].name, sizeof out[k].name, __VA_ARGS__); out[k].is_dir = dir; out[k].size = 0; k++; } } while (0)
+    if (what == PN_ROOT) {
+        PL_ADD(1, "self"); PL_ADD(1, "thread-self"); PL_ADD(0, "cpuinfo"); PL_ADD(0, "meminfo");
+        for (int i = 0; i < MAX_TASKS; i++) if (proc_alive(&tasks[i]) && tasks[i].proc == &tasks[i]) PL_ADD(1, "%d", tasks[i].pid);
+    } else if (what == PN_PID || what == PN_TID) {
+        if (what == PN_PID) PL_ADD(1, "task");
+        PL_ADD(1, "fd"); PL_ADD(0, "maps"); PL_ADD(0, "exe");
+    } else if (what == PN_TASK) {
+        for (int i = 0; i < MAX_TASKS; i++) if (proc_alive(&tasks[i]) && tasks[i].proc == who) PL_ADD(1, "%d", tasks[i].pid);
+    } else if (what == PN_FD && who == current->proc) {        /* (another program's files: not listed) */
+        for (int i = 0; i < NFD; i++) if (lx->fd[i].kind) PL_ADD(0, "%d", i);
+    }
+    #undef PL_ADD
+    return k;
+}
+
 static uint64_t do_open(struct lxproc *lx, int dirfd, uint64_t upath, int flags) {
     char p[200], full[200];
     if (!ustr(p, upath, sizeof p)) return E(EFAULT_);
-    (void)dirfd;
+    int64_t aj = at_join(lx, dirfd, p, full, sizeof full);
+    if (aj) return (uint64_t)aj;
+    char pp[200];
+    if (proc_norm(full, pp, sizeof pp)) {                      /* /proc: its own names, then as below */
+        struct task *who; int what, nl, k = proc_node(pp, &who, &what, &nl);
+        if (!k) return E(ENOENT_);
+        if (k == 1) {                                          /* a folder */
+            if (flags & 3) return E(EISDIR_);
+            int fd = fd_new(lx, 0);
+            if (fd < 0) return E(EMFILE_);
+            struct lfd *f = &lx->fd[fd]; memset(f, 0, sizeof *f);
+            f->kind = FD_DIR; f->flags = flags; strncpy0(f->path, full, sizeof f->path);
+            return fd;
+        }
+        if (what == PN_FILE && who && who != current->proc) return E(EACCES_);   /* (only its own maps) */
+        if (who) { char *sl = pp + 6; while (*sl && *sl != '/') sl++; ksnprintf(p, sizeof p, "/proc/self%s", sl); }
+        else strncpy0(p, pp, sizeof p);
+    }
     char selfmaps[40]; ksnprintf(selfmaps, sizeof selfmaps, "/proc/%d/maps", current->proc ? current->proc->pid : current->pid);
     bool pt = !strcmp(p, "/proc/cpuinfo") || !strcmp(p, "/proc/meminfo");
     if (pt || !strcmp(p, "/proc/self/maps") || !strcmp(p, selfmaps)) {   /* a snapshot, read like a file */
@@ -1458,7 +1568,7 @@ static uint64_t do_open(struct lxproc *lx, int dirfd, uint64_t upath, int flags)
         if (lx->fd[fd].kind == FD_FILE || lx->fd[fd].kind == FD_DIR || lx->fd[fd].kind == FD_SHM) lx->fd[fd].off = 0;
         return fd;
     }
-    path_join(lx->cwd, p, full, sizeof full);
+    if (!strcmp(p, "/proc/self/exe")) path_join("/", lx->exe, full, sizeof full);   /* the program's own file */
     int dv = dev_of(full);
     if (dv) {
         int fd = fd_new(lx, 0);
@@ -2025,6 +2135,11 @@ static uint64_t linux_syscall_(struct frame *f) {
         struct lfd *fd = &lx->fd[a]; struct dunc_stat st = { 0 };
         if (fd->kind == FD_FILE || fd->kind == FD_DIR) vfs_stat(fd->path, &st);
         fill_stat((struct lstat *)b, fd->kind == FD_DIR, st.size, fd->kind == FD_TTY_IN || fd->kind == FD_TTY_OUT, fd->kind == FD_FILE || fd->kind == FD_DIR ? fd->path : (a == 0 ? "<stdin>" : "<tty>"));
+        char pp[200];
+        if (fd->kind == FD_DIR && proc_norm(fd->path, pp, sizeof pp)) {   /* a /proc folder: its links now */
+            struct task *who; int what, nl;
+            if (proc_node(pp, &who, &what, &nl)) ((struct lstat *)b)->nlink = (uint64_t)nl;
+        }
         if (fd->kind == FD_DEV) dev_stat((struct lstat *)b, fd->dev);
         if (fd->kind == FD_WIN) dev_stat((struct lstat *)b, DEV_WINDOW);
         if (fd->kind == FD_SND) dev_stat((struct lstat *)b, fd->dev);
@@ -2047,8 +2162,18 @@ static uint64_t linux_syscall_(struct frame *f) {
             struct frame g = *f; g.rax = 5; g.rdi = a; g.rsi = c; return linux_syscall(&g);
         }
         if (!ustr(p, up, sizeof p) || !uok(us, sizeof(struct lstat), true)) return E(EFAULT_);
-        path_join(lx->cwd, p, full, sizeof full);
+        int64_t aj = at_join(lx, n == 262 ? (int)a : -100, p, full, sizeof full);
+        if (aj) return (uint64_t)aj;
         if (dev_of(full)) { dev_stat((struct lstat *)us, dev_of(full)); return 0; }
+        char pp[200];
+        if (proc_norm(full, pp, sizeof pp)) {                  /* /proc */
+            struct task *who; int what, nl, k = proc_node(pp, &who, &what, &nl);
+            if (!k) return E(ENOENT_);
+            fill_stat((struct lstat *)us, k == 1, 0, false, full);
+            ((struct lstat *)us)->nlink = (uint64_t)nl;
+            if (k == 2) ((struct lstat *)us)->mode = 0100444;
+            return 0;
+        }
         struct dunc_stat st;
         if (vfs_stat(full, &st) != 0) return E(ENOENT_);
         fill_stat((struct lstat *)us, st.is_dir, st.size, false, full);
@@ -2076,8 +2201,10 @@ static uint64_t linux_syscall_(struct frame *f) {
     case 21: case 269: {                                       /* access, faccessat */
         char p[200], full[200];
         if (!ustr(p, n == 21 ? a : b, sizeof p)) return E(EFAULT_);
-        path_join(lx->cwd, p, full, sizeof full);
-        struct dunc_stat st;
+        int64_t aj = at_join(lx, n == 269 ? (int)a : -100, p, full, sizeof full);
+        if (aj) return (uint64_t)aj;
+        struct dunc_stat st; char pp[200];
+        if (proc_norm(full, pp, sizeof pp)) { struct task *who; int what, nl; return proc_node(pp, &who, &what, &nl) ? 0 : E(ENOENT_); }
         return dev_of(full) || vfs_stat(full, &st) == 0 ? 0 : E(ENOENT_);
     }
     case 79: {                                                 /* getcwd */
@@ -2102,7 +2229,9 @@ static uint64_t linux_syscall_(struct frame *f) {
         static struct vfs_dirent *ents;                        /* full names, up to 255 characters */
         if (!ents) ents = kmalloc(sizeof *ents * MAXDENTS);
         if (!ents) return E(ENOMEM_);
-        int ne = vfs_list_full(fd->path, ents, MAXDENTS);
+        char pp[200]; int ne;
+        if (proc_norm(fd->path, pp, sizeof pp)) ne = proc_list(lx, pp, ents, MAXDENTS);
+        else ne = vfs_list_full(fd->path, ents, MAXDENTS);
         uint64_t pos = 0;
         while ((int)fd->off < ne) {
             const struct vfs_dirent *de = &ents[fd->off];
@@ -2618,7 +2747,14 @@ static uint64_t linux_syscall_(struct frame *f) {
         char p[200];
         if (!ustr(p, n == 89 ? a : b, sizeof p)) return E(EFAULT_);
         uint64_t ub = n == 89 ? b : c, ul = n == 89 ? c : d;
-        if (strcmp(p, "/proc/self/exe")) return E(EINVAL_);
+        char full[200], pp[200];
+        int64_t aj = at_join(lx, n == 267 ? (int)a : -100, p, full, sizeof full);
+        if (aj) return (uint64_t)aj;
+        if (!proc_norm(full, pp, sizeof pp)) { struct dunc_stat st; return vfs_stat(full, &st) == 0 || dev_of(full) ? E(EINVAL_) : E(ENOENT_); }
+        struct task *who; int what, nl;
+        if (!proc_node(pp, &who, &what, &nl)) return E(ENOENT_);
+        char *sl = pp + 6; while (*sl && *sl != '/') sl++;
+        if (who != current->proc || strcmp(sl, "/exe")) return E(EINVAL_);
         uint64_t l = strlen(lx->exe); if (l > ul) l = ul;
         if (!uok(ub, l, true)) return E(EFAULT_);
         memcpy((void *)ub, lx->exe, l); return l;

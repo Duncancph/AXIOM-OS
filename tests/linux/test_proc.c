@@ -67,6 +67,11 @@ int main(int argc, char **argv) {
     struct timespec ts = { 0, 300000000 }; nanosleep(&ts, 0);
     kill(p, SIGTERM); waitpid(p, &st, 0);
     CHECK(WIFSIGNALED(st) && WTERMSIG(st) == SIGTERM, "kill: the child ended by SIGTERM (status %x)", st);
+    /* a child that crashes: ended by SIGSEGV (not SIGKILL), as Chromium tells a crashed tab from a killed one */
+    p = fork();
+    if (p == 0) { *(volatile int *)0 = 1; _exit(0); }
+    waitpid(p, &st, 0);
+    CHECK(WIFSIGNALED(st) && WTERMSIG(st) == SIGSEGV, "a null pointer: the child ended by SIGSEGV (status %x)", st);
     /* #! script */
     char script[300]; snprintf(script, sizeof script, "/home/proctest-script.sh");
     FILE *sf = fopen(script, "w"); fprintf(sf, "#!%s --script\n", self); fclose(sf); chmod(script, 0755);

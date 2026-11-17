@@ -17,7 +17,8 @@ static void user_fault(struct frame *f) {
     const char *what;
     switch (f->vec) {
     case 14:
-        if (cr2 < USER_BASE || cr2 >= USER_END) what = "It tried to read or write protected kernel memory";
+        if (current->lx && cr2 < 0x10000) what = "It used an invalid (null) pointer";   /* (Linux programs live low) */
+        else if (cr2 < USER_BASE || cr2 >= USER_END) what = "It tried to read or write protected kernel memory";
         else if (cr2 < 0x1000 + USER_BASE) what = "It used an invalid (null) pointer";
         else what = "It accessed memory it doesn't own";
         break;
@@ -42,6 +43,13 @@ static void user_fault(struct frame *f) {
     }
     char title[64]; ksnprintf(title, sizeof title, "%s crashed", current->name);
     desktop_notify(title, msg);
+    if (current->lx && current->proc) {                    /* what its parent's wait4 sees, as on Linux (Chromium tells a
+                                                              crashed tab from a killed one by it) */
+        uint8_t op = 0;
+        if (f->vec == 13 && user_ok(current->pml4, (const void *)f->rip, 1, false)) op = *(volatile uint8_t *)f->rip;
+        current->proc->exit_signal = f->vec == 6 ? 4 : f->vec == 0 || f->vec == 16 || f->vec == 19 ? 8 :
+                                     f->vec == 3 || op == 0xCC ? 5 : f->vec == 17 ? 7 : 11;   /* SIGILL SIGFPE SIGTRAP SIGBUS SIGSEGV */
+    }
     task_exit(-1);
 }
 
