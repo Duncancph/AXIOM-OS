@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 162
-notes Linux desktop apps: GTK apps open in AXIOM windows (Settings > Updates > More apps has GTK 3 and the Mousepad editor). Internet for Linux programs. Fixes memory running out in long sessions, and file 
-file kernel b162/thane.elf.gz 19381776 04576430e3a03e2d730afa556824733af0afdf65adcc11ff0a984112119e6449
-file initrd b162/initrd.tar.gz 2365440 811680bd5b36259718c201191cf32747b5ca2c89c85a86e29b3664d21f54217f
-file bootx64 b162/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b162/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 30450221008f29e08f7568ffa08089c3a5ceb0fd04d8a4ca15006561bc9e6318405ce8e2c202206cea84f3852b0f1ab8b57d30ce11ea89949b53e45bc3bbaaa493f0d938b1a782
+build 165
+notes Settings > Apps: install AbiWord (word processor), Gnumeric (spreadsheet), Mousepad and Mines. Linux apps show their own names in the top bar, and file dialogs show real file dates.
+file kernel b165/thane.elf.gz 19390016 c5ca15ab552ef5f397c40add6cc45501de3a455cb7b47624e1431dc86b924740
+file initrd b165/initrd.tar.gz 2365440 8b255bd59fadb549fb6ba4a3d7623d0f81f675cd5481ef20463980723e32d828
+file bootx64 b165/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b165/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3046022100920a16c60c9d0c7b6c52961c5c84456281f0376b33e40bb5cb8ea00d5916ca73022100f6b422f9a2f3cb0bad73a98a09442bfde364b92ffe6dcf0cbb96138a85df0e77

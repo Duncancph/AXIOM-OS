@@ -1,0 +1,16 @@
+AXIOM package 1
+id abiword
+name AbiWord
+version 3.0.5
+icon note
+description A word processor: opens and saves Word and OpenDocument files.
+min-build 165
+size 26916470
+sha256 25bf633032733b0d0269a909d8db3e04f4c04f588378fac7066a9a8122e588f7
+url https://raw.githubusercontent.com/Duncancph/AXIOM-OS/updates/packages/abiword.tar.gz
+installed-size 71499775
+root yes
+requires gtk3
+compression gzip
+run usr/bin/abiword
+signature 3046022100d8214a679da5443291b531e3050b1494230ccbc9b9bf0d03d42f313475fdaa45022100a63bfe00189d41d6fed5f3758c9310f7e55cb63068057b3c400823f864bf38cd

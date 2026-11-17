@@ -3,14 +3,14 @@ id mousepad
 name Mousepad
 version 0.6.1
 icon note
-description A simple text editor with syntax highlighting (Xfce, GTK 3).
-min-build 162
-size 14661124
-sha256 ab73a8a70d20e5e5a1bb7fbfc3bf9ccaa5859aebf6dc710d277e3009f4992b3d
+description A simple text editor with syntax highlighting.
+min-build 165
+size 831135
+sha256 1d4b6a26dc667b3f8794107171c2629b945e893f32dc1b0096ff0e4912d497ff
 url https://raw.githubusercontent.com/Duncancph/AXIOM-OS/updates/packages/mousepad.tar.gz
-installed-size 38583609
+installed-size 3815415
 root yes
 requires gtk3
 compression gzip
 run usr/bin/mousepad
-signature 3045022100c7977447519da55acc17ae6115a2a4b63aefff71cf8ad38127fdd8e391b33aa80220420d0735abf243cbd1842e8c8e32d7bcc3e0c7a9dab52c1aa2ccadf10deeea20
+signature 3045022017a0cd0a61a4c31493f8facecdf2c849d14f3e72de330f9d1a9fd45453637c15022100f8d0faf6539aed264430b9affb942a5289fc966658b2eb58a2fa6c90a5a21411
