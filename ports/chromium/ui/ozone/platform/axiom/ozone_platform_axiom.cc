@@ -18,6 +18,7 @@
 #include "ui/gfx/switches.h"
 #include "ui/ozone/common/bitmap_cursor_factory.h"
 #include "ui/ozone/common/stub_overlay_manager.h"
+#include "ui/ozone/platform/axiom/axiom_clipboard.h"
 #include "ui/ozone/platform/axiom/axiom_surface_factory.h"
 #include "ui/ozone/platform/axiom/axiom_window.h"
 #include "ui/ozone/platform/headless/headless_screen.h"
@@ -75,9 +76,17 @@ class OzonePlatformAxiom : public OzonePlatformHeadless {
       PlatformWindowDelegate* delegate,
       PlatformWindowInitProperties properties) override {
     return std::make_unique<AxiomWindow>(delegate, window_manager_.get(),
-                                         properties.bounds);
+                                         properties);
   }
-  bool IsWindowCompositingSupported() const override { return true; }
+  // AXIOM shows windows' pixels as they are (no alpha): menus and bubbles are
+  // drawn opaque and square, without shadows.
+  bool IsWindowCompositingSupported() const override { return false; }
+  PlatformClipboard* GetPlatformClipboard() override {
+    if (!clipboard_) {
+      clipboard_ = std::make_unique<AxiomClipboard>();
+    }
+    return clipboard_.get();
+  }
   std::unique_ptr<display::NativeDisplayDelegate> CreateNativeDisplayDelegate()
       override {
     return nullptr;
@@ -135,6 +144,7 @@ class OzonePlatformAxiom : public OzonePlatformHeadless {
   std::unique_ptr<InputController> input_controller_;
   std::unique_ptr<GpuPlatformSupportHost> gpu_platform_support_host_;
   std::unique_ptr<OverlayManagerOzone> overlay_manager_;
+  std::unique_ptr<AxiomClipboard> clipboard_;
 };
 
 }  // namespace

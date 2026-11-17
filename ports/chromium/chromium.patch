@@ -20,6 +20,210 @@ index f75adeef2d..28928ba063 100644
                           ozone_platform_x11 || ozone_platform_wayland),
        "Must set use_ozone to select ozone platforms")
  }
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+index a072881e6b..6bdfe5ea70 100644
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -1740,8 +1740,11 @@ void ChromeMainDelegate::PreSandboxStartup() {
+ 
+ #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
+   // Zygote needs to call InitCrashReporter() in RunZygote().
++  // (AXIOM, where Chromium runs as a Linux program: no fork() for Crashpad's
++  // handler yet; a crash there is reported by AXIOM's own log.)
+   if (process_type != switches::kZygoteProcess &&
+-      !command_line.HasSwitch(switches::kDisableCrashpadForTesting)) {
++      !command_line.HasSwitch(switches::kDisableCrashpadForTesting) &&
++      access("/dev/axiom/window", F_OK) != 0) {
+     if (command_line.HasSwitch(switches::kPreCrashpadCrashTest)) {
+       // Crash for the purposes of testing the handling of crashes that happen
+       // before crashpad is initialized. Please leave this check immediately
+diff --git a/chrome/app/theme/chromium/BRANDING b/chrome/app/theme/chromium/BRANDING
+index f8363d5b29..b7a74179f3 100644
+--- a/chrome/app/theme/chromium/BRANDING
++++ b/chrome/app/theme/chromium/BRANDING
+@@ -1,9 +1,9 @@
+ COMPANY_FULLNAME=The Chromium Authors
+ COMPANY_SHORTNAME=The Chromium Authors
+-PRODUCT_FULLNAME=Chromium
+-PRODUCT_SHORTNAME=Chromium
+-PRODUCT_INSTALLER_FULLNAME=Chromium Installer
+-PRODUCT_INSTALLER_SHORTNAME=Chromium Installer
++PRODUCT_FULLNAME=Vertex
++PRODUCT_SHORTNAME=Vertex
++PRODUCT_INSTALLER_FULLNAME=Vertex Installer
++PRODUCT_INSTALLER_SHORTNAME=Vertex Installer
+ COPYRIGHT=Copyright @LASTCHANGE_YEAR@ The Chromium Authors. All rights reserved.
+ MAC_BUNDLE_ID=org.chromium.Chromium
+ MAC_CREATOR_CODE=Cr24
+diff --git a/chrome/browser/process_singleton_posix.cc b/chrome/browser/process_singleton_posix.cc
+index 827a8a94b0..ad9d1abfd9 100644
+--- a/chrome/browser/process_singleton_posix.cc
++++ b/chrome/browser/process_singleton_posix.cc
+@@ -937,6 +937,16 @@ ProcessSingleton::NotifyResult ProcessSingleton::NotifyOtherProcessWithTimeout(
+                << buf_string_view;
+ }
+ 
++namespace {
++// On AXIOM (Chromium as a Linux program there: /dev/axiom/window) there are no
++// Unix-domain sockets or symlinks on its FAT disks yet, so Vertex is simply the
++// only instance (a second one isn't routed to the first).
++bool OnAxiom() {
++  static const bool on_axiom = access("/dev/axiom/window", F_OK) == 0;
++  return on_axiom;
++}
++}  // namespace
++
+ ProcessSingleton::NotifyResult ProcessSingleton::NotifyOtherProcessOrCreate() {
+   return NotifyOtherProcessWithTimeoutOrCreate(
+       *base::CommandLine::ForCurrentProcess(), kRetryAttempts,
+@@ -948,6 +958,9 @@ ProcessSingleton::NotifyOtherProcessWithTimeoutOrCreate(
+     const base::CommandLine& command_line,
+     int retry_attempts,
+     const base::TimeDelta& timeout) {
++  if (OnAxiom()) {
++    return PROCESS_NONE;
++  }
+   const base::TimeTicks begin_ticks = base::TimeTicks::Now();
+   NotifyResult result = NotifyOtherProcessWithTimeout(
+       command_line, retry_attempts, timeout, true);
+@@ -1013,6 +1026,9 @@ void ProcessSingleton::SetUserOptedUnlockInUseProfileForTesting(
+ }
+ 
+ bool ProcessSingleton::Create() {
++  if (OnAxiom()) {
++    return true;
++  }
+   // The symlink lock is pointed to the hostname and process id, so other
+   // processes can find it out.
+   base::FilePath symlink_content(
+@@ -1093,6 +1109,9 @@ bool ProcessSingleton::Create() {
+ }
+ 
+ void ProcessSingleton::StartWatching() {
++  if (OnAxiom()) {
++    return;  // (no socket: see OnAxiom)
++  }
+   CHECK_GE(sock_, 0, base::NotFatalUntil::M162);
+   CHECK(!watcher_, base::NotFatalUntil::M162);
+   watcher_ = base::MakeRefCounted<LinuxWatcher>(this);
+diff --git a/chrome/browser/ui/startup/bad_flags_prompt.cc b/chrome/browser/ui/startup/bad_flags_prompt.cc
+index 292198210c..96557f50d9 100644
+--- a/chrome/browser/ui/startup/bad_flags_prompt.cc
++++ b/chrome/browser/ui/startup/bad_flags_prompt.cc
+@@ -4,6 +4,10 @@
+ 
+ #include "chrome/browser/ui/startup/bad_flags_prompt.h"
+ 
++#include <unistd.h>
++
++#include <string_view>
++
+ #include <algorithm>
+ #include <string>
+ #include <string_view>
+@@ -306,7 +310,16 @@ void ShowBadFlagsPrompt(content::WebContents* web_contents) {
+ // On Android, ShowBadFlagsPrompt doesn't show the warning notification
+ // for flags which are not available in about:flags.
+ #if !BUILDFLAG(IS_ANDROID)
++  // On AXIOM (/dev/axiom/window) Chromium runs as a Linux program without the
++  // Linux sandbox's kernel features or fork(), so --no-sandbox and
++  // --single-process are how Vertex always runs there.
++  const bool on_axiom = access("/dev/axiom/window", F_OK) == 0;
+   for (const char* flag : kBadFlags) {
++    if (on_axiom &&
++        (std::string_view(flag) == sandbox::policy::switches::kNoSandbox ||
++         std::string_view(flag) == switches::kSingleProcess)) {
++      continue;
++    }
+     if (base::CommandLine::ForCurrentProcess()->HasSwitch(flag)) {
+       ShowBadFlagsInfoBar(web_contents, IDS_BAD_FLAGS_WARNING_MESSAGE, flag);
+       return;
+diff --git a/chrome/browser/ui/views/BUILD.gn b/chrome/browser/ui/views/BUILD.gn
+index 98bce37338..590aff594c 100644
+--- a/chrome/browser/ui/views/BUILD.gn
++++ b/chrome/browser/ui/views/BUILD.gn
+@@ -1337,8 +1337,14 @@ source_set("chrome_browser_main_extra_parts_views") {
+   }
+   if (use_aura && is_linux) {
+     public += [ "chrome_browser_main_extra_parts_views_linux.h" ]
+-    sources += [ "chrome_browser_main_extra_parts_views_linux.cc" ]
++    sources += [
++      "axiom/axiom_select_file_dialog.cc",
++      "axiom/axiom_select_file_dialog.h",
++      "chrome_browser_main_extra_parts_views_linux.cc",
++    ]
+     deps += [
++      "//ui/ozone",
++      "//ui/shell_dialogs",
+       "//build/config/linux/dbus:buildflags",
+       "//chrome/app:branded_strings",
+       "//chrome/browser/themes",
+diff --git a/chrome/browser/ui/views/chrome_browser_main_extra_parts_views_linux.cc b/chrome/browser/ui/views/chrome_browser_main_extra_parts_views_linux.cc
+index 8b8f81d059..1e9fc8e07f 100644
+--- a/chrome/browser/ui/views/chrome_browser_main_extra_parts_views_linux.cc
++++ b/chrome/browser/ui/views/chrome_browser_main_extra_parts_views_linux.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/views/chrome_browser_main_extra_parts_views_linux.h"
+ 
++#include "chrome/browser/ui/views/axiom/axiom_select_file_dialog.h"
++
+ #include "base/functional/bind.h"
+ #include "base/notreached.h"
+ #include "chrome/browser/lifetime/application_lifetime_desktop.h"
+@@ -55,6 +57,9 @@ ChromeBrowserMainExtraPartsViewsLinux::
+ void ChromeBrowserMainExtraPartsViewsLinux::ToolkitInitialized() {
+   ChromeBrowserMainExtraPartsViews::ToolkitInitialized();
+ 
++  // AXIOM: no GTK, Qt or portal for file dialogs; views draws them.
++  AxiomSelectFileDialogFactory::InstallIfAxiom();
++
+   if (auto* linux_ui = ui::GetDefaultLinuxUi()) {
+     linux_ui_getter_ = std::make_unique<LinuxUiGetterImpl>();
+     ui::LinuxUi::SetInstance(linux_ui);
+diff --git a/components/embedder_support/user_agent_utils.cc b/components/embedder_support/user_agent_utils.cc
+index 833293873f..79626f3bdf 100644
+--- a/components/embedder_support/user_agent_utils.cc
++++ b/components/embedder_support/user_agent_utils.cc
+@@ -161,6 +161,12 @@ const blink::UserAgentBrandList GetUserAgentBrandList(
+   std::optional<std::string> brand;
+ #if !BUILDFLAG(CHROMIUM_BRANDING)
+   brand = version_info::GetProductName();
++#else
++  // A browser built from Chromium under its own name (Vertex, on AXIOM) is
++  // listed by that name too, as other Chromium-based browsers are.
++  if (version_info::GetProductName() != "Chromium") {
++    brand = std::string(version_info::GetProductName());
++  }
+ #endif
+ 
+   std::string brand_version =
+diff --git a/ui/linux/display_server_utils.cc b/ui/linux/display_server_utils.cc
+index 378f335212..09a52e1954 100644
+--- a/ui/linux/display_server_utils.cc
++++ b/ui/linux/display_server_utils.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "ui/linux/display_server_utils.h"
+ 
++#include <unistd.h>
++
+ #include <optional>
+ #include <string>
+ 
+@@ -65,6 +67,12 @@ void SetOzonePlatformForLinuxIfNeeded(base::CommandLine& command_line) {
+     return;
+   }
+ 
++  // AXIOM (Chromium as a Linux program there): its own windows.
++  if (access("/dev/axiom/window", F_OK) == 0) {
++    command_line.AppendSwitchASCII(switches::kOzonePlatform, "axiom");
++    return;
++  }
++
+ #if BUILDFLAG(SUPPORTS_OZONE_WAYLAND)
+   auto env = base::Environment::Create();
+   bool use_wayland = env->GetVar(base::nix::kXdgSessionTypeEnvVar) == "wayland";
 diff --git a/ui/ozone/BUILD.gn b/ui/ozone/BUILD.gn
 index 44442dbdb5..95ee0bcad8 100644
 --- a/ui/ozone/BUILD.gn

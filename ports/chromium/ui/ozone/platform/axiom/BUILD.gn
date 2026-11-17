@@ -10,6 +10,8 @@ visibility = [ "//ui/ozone/*" ]
 
 source_set("axiom") {
   sources = [
+    "axiom_clipboard.cc",
+    "axiom_clipboard.h",
     "axiom_pixels.cc",
     "axiom_pixels.h",
     "axiom_surface_factory.cc",
@@ -31,7 +33,9 @@ source_set("axiom") {
     "//base",
     "//skia",
     "//ui/base",
+    "//ui/base/clipboard:clipboard_types",
     "//ui/base/cursor",
+    "//ui/base/cursor/mojom:cursor_type_shared",
     "//ui/base/ime",
     "//ui/display",
     "//ui/events",
