@@ -10,6 +10,7 @@ static struct app a;
 struct note { char file[64]; char title[64]; uint64_t mtime; };
 static struct note notes[200]; static int nnotes, cur = -1, list_off;
 static char *text; static int len, cap, cursor, scroll_line;
+static bool all_sel;                                       /* Ctrl+A: the whole note is selected (copy, cut, or replace it) */
 static bool dirty; static uint64_t last_edit;
 static int hover = -1;
 static char status[96];
@@ -162,6 +163,7 @@ static void draw(void) {
         for (int l = scroll_line; l < nvl && l < scroll_line + rows(); l++) {
             char t[512]; int n = vl[l].n > 511 ? 511 : vl[l].n; memcpy(t, text + vl[l].start, n); t[n] = 0;
             int by = 64 + (l - scroll_line) * LH + 16;
+            if (all_sel && n) gfx_rrect(c, ex - 2, by - 15, gfx_text_width(l == 0 ? &font_ui_bold : &font_ui, t) + 4, LH - 2, 3, UI_ACCENT, 70);
             gfx_text(c, l == 0 ? &font_ui_bold : &font_ui, ex, by, UI_TEXT, t);
         }
         int cy = 64 + (cl - scroll_line) * LH;
@@ -210,6 +212,7 @@ int main(void) {
             else if (h == 2) delete_note();
             else if (h >= 100) open_note(h - 100);
             else if (h == 3 && cur >= 0) {
+                all_sel = false;
                 int l = scroll_line + (e.y - 64) / LH; if (l >= nvl) l = nvl - 1; if (l < 0) l = 0;
                 cursor = pos_at_x(l, e.x - (SIDE + 24));
             }
@@ -218,6 +221,18 @@ int main(void) {
         if (e.type != EV_KEY) continue;
         int k = e.key, code = KEY_CODE(k);
         if (cur < 0) { if (key_is_char(k) || k == '\n') { new_note(); if (k == '\n') { draw(); continue; } } else continue; }
+        if (k == 1) { all_sel = len > 0; draw(); continue; }                   /* Ctrl+A: select all */
+        if (all_sel && (k == 3 || k == 24)) {                                    /* Ctrl+C / Ctrl+X: copy (the clipboard holds UTF-8) */
+            char *u = malloc(len * 3 + 1);
+            if (u) { long n = cp1252_to_utf8(text, len, u, len * 3 + 1); clip_set(u, n); free(u); }
+            if (k == 3) { strncpy0(status, "Copied", sizeof status); draw(); continue; }
+        }
+        if (all_sel) {
+            all_sel = false;
+            bool replaces = k == 24 || k == '\b' || code == KEY_DEL || k == 22 || k == '\n' || k == '\t' || key_is_char(k);
+            if (replaces) { len = 0; cursor = 0; text[0] = 0; dirty = true; last_edit = sys_time(); }
+            if (k == 24 || k == '\b' || code == KEY_DEL) { draw(); continue; }
+        }
         if (k == '\b') { if (cursor > 0) { memmove(text + cursor - 1, text + cursor, len - cursor); cursor--; len--; text[len] = 0; dirty = true; last_edit = sys_time(); } }
         else if (code == KEY_DEL) { if (cursor < len) { memmove(text + cursor, text + cursor + 1, len - cursor - 1); len--; text[len] = 0; dirty = true; last_edit = sys_time(); } }
         else if (code == KEY_LEFT) { if (cursor > 0) cursor--; }

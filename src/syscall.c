@@ -5,7 +5,17 @@
 #include "net.h"
 #include "disk.h"
 
-static char *clip; static uint64_t clip_len;          /* the shared clipboard */
+/* The shared clipboard: UTF-8 text (AXIOM's apps convert to and from Windows-1252 themselves; Linux programs
+ * reach it through /dev/axiom/window). clip_seq goes up with every copy. */
+static char *clip; static uint64_t clip_len, clip_seq;
+int clip_set_utf8(const char *s, uint64_t n) {             /* (s: kernel memory) */
+    char *c = kmalloc(n ? n : 1);
+    if (!c) return -1;
+    memcpy(c, s, n);
+    kfree(clip); clip = c; clip_len = n; clip_seq++;
+    return 0;
+}
+uint64_t clip_get_utf8(const char **out, uint64_t *seq) { *out = clip; *seq = clip_seq; return clip_len; }
 
 #define UOK(p, n, w) user_ok(current->pml4, (const void *)(p), (n), (w))
 long update_syscall(int op, const void *a, long b, bool (*user_ok_fn)(const void *, size_t));
@@ -397,11 +407,7 @@ uint64_t syscall_dispatch(struct frame *f) {
     }
     case SYS_CLIP_SET: {
         if (b > (1u << 20) || (b && !UOK(a, b, false))) return (uint64_t)-1;
-        char *n = kmalloc(b ? b : 1);
-        if (!n) return (uint64_t)-1;
-        memcpy(n, (void *)a, b);
-        kfree(clip); clip = n; clip_len = b;
-        return 0;
+        return clip_set_utf8((const char *)a, b) ? (uint64_t)-1 : 0;
     }
     case SYS_CLIP_GET: {
         if (!a) return clip_len;

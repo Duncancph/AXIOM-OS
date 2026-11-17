@@ -32,6 +32,13 @@ struct axwin_rect { int32_t x, y, w, h; };
 #define AXWIN_FLUSH  0x41580003u   /* struct axwin_rect *: show what was drawn there */
 #define AXWIN_TITLE  0x41580004u   /* char[64]: a new title */
 #define AXWIN_RESIZE 0x41580005u   /* (no argument): take the size the last AXWIN_EV_RESIZE asked for */
+/* The clipboard (shared with every AXIOM app), as UTF-8 text. Works on any open /dev/axiom/window fd, with or
+ * without a window. seq goes up whenever anything is copied (by any app), so a program can tell whether
+ * the clipboard changed since it last looked. */
+struct axwin_clip { uint64_t data; uint64_t len; uint64_t seq; };   /* data: a pointer, as a number */
+#define AXWIN_CLIP_SET 0x41580006u /* struct axwin_clip *: copy len bytes from data (at most 1 MiB); seq comes back */
+#define AXWIN_CLIP_GET 0x41580007u /* struct axwin_clip *: data, len = room there; comes back with len = the whole
+                                      text's length (copied: as much as fits) and seq. data 0: just len and seq */
 
 /* events: the same layout as AXIOM's own (struct dunc_event) */
 struct axwin_event { int32_t type, win, x, y, key, button; };

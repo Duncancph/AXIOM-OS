@@ -381,6 +381,8 @@ struct app_entry { char id[24], name[32], icon[16], version[12]; const struct ap
                    char linux_cmd[200]; };   /* a Linux program (installed package): its path and arguments */
 void apps_refresh(void);
 void desktop_dock_changed(void);
+int clip_set_utf8(const char *s, uint64_t n);
+uint64_t clip_get_utf8(const char **out, uint64_t *seq);
 int apps_count(void);
 int apps_visible(void);                      /* the first ones: shown in the dock and menu (Protection Test isn't) */
 const struct app_entry *apps_get(int i);

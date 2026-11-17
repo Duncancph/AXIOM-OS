@@ -752,6 +752,32 @@ static uint64_t axwin_ioctl(struct lxproc *lx, struct lfd *fd, uint64_t req, uin
     struct axwin *x = fd->obj;
     struct task *P = current->proc ? current->proc : current;
     switch (req) {
+    case AXWIN_CLIP_SET: {
+        if (!uok(arg, sizeof(struct axwin_clip), true)) return E(EFAULT_);
+        struct axwin_clip *c = (struct axwin_clip *)arg;
+        if (c->len > (1u << 20)) return E(EINVAL_);
+        if (c->len && !uok(c->data, c->len, false)) return E(EFAULT_);
+        char *k = kmalloc(c->len ? c->len : 1);
+        if (!k) return E(ENOMEM_);
+        memcpy(k, (void *)c->data, c->len);
+        int r = clip_set_utf8(k, c->len);
+        kfree(k);
+        if (r) return E(ENOMEM_);
+        const char *d; clip_get_utf8(&d, &c->seq);
+        return 0;
+    }
+    case AXWIN_CLIP_GET: {
+        if (!uok(arg, sizeof(struct axwin_clip), true)) return E(EFAULT_);
+        struct axwin_clip *c = (struct axwin_clip *)arg;
+        const char *d; uint64_t seq, n = clip_get_utf8(&d, &seq), room = c->len;
+        if (c->data) {
+            uint64_t k = n < room ? n : room;
+            if (k && !uok(c->data, k, true)) return E(EFAULT_);
+            if (k) memcpy((void *)c->data, d, k);
+        }
+        c->len = n; c->seq = seq;
+        return 0;
+    }
     case AXWIN_CREATE: {
         if (x->id) return E(EEXIST_);
         if (!uok(arg, sizeof(struct axwin_create), true)) return E(EFAULT_);
