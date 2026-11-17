@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 173
-notes Linux programs: /proc folders, paths relative to folders, and crashes reported as the right signal. Groundwork for Vertex running each tab in its own process.
-file kernel b173/thane.elf.gz 19518512 e569428b8649772964267763064ffeebb8cbe5f4f23d4503cdb86960598503df
-file initrd b173/initrd.tar.gz 2385920 ec7f3b54e48314408d4ba6e56d8f2a5d4a9884e5241e93ef6e47c813704d61a6
-file bootx64 b173/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b173/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3046022100df3fd4f096f7ae7b21714623525147d559f6f698b72eaa32886ad6941ddfefa5022100ebea04905ed1e7e9b3448cb691fe1057909576bceaeb4185ece941dafbd4cf52
+build 174
+notes Programs and libraries that several apps use are now loaded into memory once and shared, so running more Linux apps (and Vertex's tabs) takes much less memory.
+file kernel b174/thane.elf.gz 19532984 8417fe4da4338300b07ffd608639b394b9fc8859ff68d3f6c769caf0073f9b63
+file initrd b174/initrd.tar.gz 2385920 994b6f3c7f0dbf068cabe67baab79c964316ee5cd318ece9591d6e2355a7fc84
+file bootx64 b174/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b174/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3046022100c7c86ac2a9360896d604b1e1c548759fa17048d4d058f3afcdb945575caed2eb0221008a880f08835821312ff2905273f168331e7f85d3971b778cdc59fec6b03858b9
