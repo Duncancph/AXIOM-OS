@@ -36,7 +36,7 @@ int main(int argc, char **argv) {
     if (!v) { printf("mount failed: %s\n", why); return 1; }
     printf("mounted, label '%s'\n", label);
     const struct fs_ops *o = &fat_ops;
-    struct dunc_dirent d[64]; struct dunc_stat st;
+    struct vfs_dirent d[64]; struct dunc_stat st;
 
     int n = o->list(v, "/", d, 64);
     printf("root has %d entries:", n); for (int i = 0; i < n; i++) printf(" %s%s", d[i].name, d[i].is_dir ? "/" : ""); printf("\n");

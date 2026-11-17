@@ -3,8 +3,10 @@
 
 /* A mounted file system (e.g. a FAT32 USB drive at /usb). Paths given to the ops are
  * relative to the mount point and start with '/'. */
+/* a folder entry inside the kernel: names up to 255 characters (apps' struct dunc_dirent has 63) */
+struct vfs_dirent { char name[256]; int is_dir; uint64_t size; };
 struct fs_ops {
-    int  (*list)(void *vol, const char *rel, struct dunc_dirent *out, int max);
+    int  (*list)(void *vol, const char *rel, struct vfs_dirent *out, int max);
     long (*read)(void *vol, const char *rel, void *buf, uint64_t off, uint64_t len);
     long (*write)(void *vol, const char *rel, const void *buf, uint64_t len);
     int  (*mkdir)(void *vol, const char *rel);
@@ -21,7 +23,8 @@ int  vfs_mount_at(const char *at, const char *sub, const char *label, const char
 void vfs_unmount(void *vol);                             /* removes every mount of that volume */
 void vfs_unmount_at(const char *at);
 bool vfs_home_persistent(void);                          /* /home is on a disk (else in memory) */
-int  vfs_list(const char *path, struct dunc_dirent *out, int max);
+int  vfs_list(const char *path, struct dunc_dirent *out, int max);       /* for apps: names cut to 63 */
+int  vfs_list_full(const char *path, struct vfs_dirent *out, int max);   /* full names (Linux programs' getdents) */
 long vfs_read(const char *path, void *buf, uint64_t off, uint64_t len);
 long vfs_write(const char *path, const void *buf, uint64_t len);
 long vfs_append(const char *path, const void *buf, uint64_t len);   /* creates the file if missing */

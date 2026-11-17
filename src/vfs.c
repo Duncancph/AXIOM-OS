@@ -167,7 +167,17 @@ void vfs_init(void) {
 }
 
 /* ---------------- public operations ---------------- */
+/* for apps: the same, in their struct (names longer than 63 characters are cut) */
 int vfs_list(const char *path, struct dunc_dirent *out, int max) {
+    if (max <= 0) return 0;
+    struct vfs_dirent *f = kmalloc(sizeof *f * (size_t)max);
+    if (!f) return FS_ENOSPC;
+    int n = vfs_list_full(path, f, max);
+    for (int i = 0; i < n; i++) { strncpy0(out[i].name, f[i].name, sizeof out[i].name); out[i].is_dir = f[i].is_dir; out[i].size = f[i].size; }
+    kfree(f);
+    return n;
+}
+int vfs_list_full(const char *path, struct vfs_dirent *out, int max) {
     struct path p; char rel[PATH_MAX_];
     if (!parse(path, &p)) return FS_EINVAL;
     lock();
@@ -188,7 +198,7 @@ int vfs_list(const char *path, struct dunc_dirent *out, int max) {
                     bool match = true, dup = false;
                     for (int k = 0; k < p.n; k++) if (strcmp(mounts[i].at[k], p.c[k])) match = false;
                     for (int k = 0; match && k < n; k++) if (!strcmp(out[k].name, mounts[i].at[p.n])) dup = true;
-                    if (match && !dup) { strncpy0(out[n].name, mounts[i].at[p.n], 64); out[n].is_dir = 1; out[n].size = 0; n++; }
+                    if (match && !dup) { strncpy0(out[n].name, mounts[i].at[p.n], sizeof out[n].name); out[n].is_dir = 1; out[n].size = 0; n++; }
                 }
         }
     }
@@ -311,7 +321,7 @@ int vfs_delete(const char *path) {
             struct dunc_stat st;
             r = m->ops->stat(m->vol, rel, &st);
             if (r == FS_OK && st.is_dir) {          /* delete contents first */
-                struct dunc_dirent *ents = kmalloc(sizeof(struct dunc_dirent) * 128);
+                struct vfs_dirent *ents = kmalloc(sizeof(struct vfs_dirent) * 128);   /* (full names: a long one cut short couldn't be deleted) */
                 if (!ents) r = FS_ENOSPC;
                 while (r == FS_OK) {
                     int n = m->ops->list(m->vol, rel, ents, 128);

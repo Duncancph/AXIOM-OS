@@ -1229,11 +1229,14 @@ static uint64_t linux_syscall_(struct frame *f) {
         if (a >= NFD || lx->fd[a].kind != FD_DIR) return E(ENOTDIR_);
         if (!uok(b, c, true)) return E(EFAULT_);
         struct lfd *fd = &lx->fd[a];
-        static struct dunc_dirent ents[256];
-        int ne = vfs_list(fd->path, ents, 256);
+        #define MAXDENTS 4096                                   /* (a folder of shared libraries can be big) */
+        static struct vfs_dirent *ents;                        /* full names, up to 255 characters */
+        if (!ents) ents = kmalloc(sizeof *ents * MAXDENTS);
+        if (!ents) return E(ENOMEM_);
+        int ne = vfs_list_full(fd->path, ents, MAXDENTS);
         uint64_t pos = 0;
         while ((int)fd->off < ne) {
-            const struct dunc_dirent *de = &ents[fd->off];
+            const struct vfs_dirent *de = &ents[fd->off];
             uint64_t nl = strlen(de->name), rl = (19 + nl + 1 + 7) & ~7ULL;
             if (pos + rl > c) break;
             uint8_t *r = (uint8_t *)b + pos;

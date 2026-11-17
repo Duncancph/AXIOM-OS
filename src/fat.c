@@ -390,7 +390,7 @@ static int create_entry(struct fatvol *v, uint32_t dclus, const char *name, uint
 }
 
 /* ---------------- fs_ops ---------------- */
-struct list_ctx { struct dunc_dirent *out; int max, n; };
+struct list_ctx { struct vfs_dirent *out; int max, n; };
 static int list_cb(struct fatvol *v, struct dent *d, void *c) {
     struct list_ctx *l = c;
     if (!strcmp(d->name, ".") || !strcmp(d->name, "..")) return 0;
@@ -403,7 +403,7 @@ static int list_cb(struct fatvol *v, struct dent *d, void *c) {
     return 0;
 }
 
-static int f_list(void *vol, const char *rel, struct dunc_dirent *out, int max) {
+static int f_list(void *vol, const char *rel, struct vfs_dirent *out, int max) {
     struct fatvol *v = vol; struct dent *d = kmalloc(sizeof *d);
     if (!d) return FS_ENOSPC;
     int r = lookup(v, rel, d);
@@ -417,7 +417,7 @@ static int f_list(void *vol, const char *rel, struct dunc_dirent *out, int max) 
     if (r < 0) return r;
     /* folders first, then names (insertion sort) */
     for (int i = 1; i < l.n; i++) {
-        struct dunc_dirent t = out[i]; int j = i - 1;
+        struct vfs_dirent t = out[i]; int j = i - 1;
         while (j >= 0 && (out[j].is_dir < t.is_dir || (out[j].is_dir == t.is_dir && strcmp(out[j].name, t.name) > 0))) { out[j + 1] = out[j]; j--; }
         out[j + 1] = t;
     }
