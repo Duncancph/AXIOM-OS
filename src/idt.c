@@ -70,9 +70,11 @@ static void dispatch(struct frame *f) {
 void isr_dispatch(struct frame *f) {
     if (f->vec == 0xF1) { tlb_ipi(); return; }     /* TLB shootdown: without the lock (its sender holds it) */
     if ((f->cs & 3) == 3) cpu_self()->in_user = 0;
+    if ((f->cs & 3) == 3 && current) current->last_rip = f->rip;
     bool took = !cpu_self()->bkl_held;
     if (took) bkl_lock();
     dispatch(f);
+    if ((f->cs & 3) == 3 && current && current->lx && (current->sig_pending & ~current->sig_blocked)) linux_signals(f);
     if (took) {
         if ((f->cs & 3) == 3) tlb_sync();          /* back to the app: fresh translations if its memory changed */
         bkl_unlock();

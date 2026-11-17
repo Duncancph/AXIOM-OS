@@ -17,9 +17,11 @@ struct fs_ops {
     long (*append)(void *vol, const char *rel, const void *buf, uint64_t len);   /* file must exist */
     int64_t (*mtime)(void *vol, const char *rel);      /* last change, Unix seconds (UTC); <0 if not known.
                                                           Optional (0: the file system keeps no dates) */
+    int (*set_mtime)(void *vol, const char *rel, int64_t when);   /* optional, as mtime */
 };
 
-int64_t vfs_mtime(const char *path);                 /* when a file last changed (Unix seconds), <0 if not known */
+int64_t vfs_mtime(const char *path);
+int  vfs_set_mtime(const char *path, int64_t when);   /* FS_OK, or FS_EROFS where dates aren't kept */                 /* when a file last changed (Unix seconds), <0 if not known */
 int  vfs_mount(const char *label, const char *kind, const struct fs_ops *ops, void *vol, char *path_out);
 /* mount a folder of a volume at a path, e.g. ("/home", "/home") or ("/system/config", "/config") */
 int  vfs_mount_at(const char *at, const char *sub, const char *label, const char *kind, const struct fs_ops *ops, void *vol);

@@ -41,6 +41,7 @@ enum {
     /* for ported software (a POSIX layer on top): memory maps, threads, futexes, thread-local storage, clocks */
     SYS_MMAP, SYS_MUNMAP, SYS_MPROTECT, SYS_THREAD, SYS_THREAD_EXIT, SYS_FUTEX, SYS_SET_FS, SYS_CLOCK, SYS_GETTID,
     SYS_WIFI,
+    SYS_FS_SETTIME,     /* (path, Unix seconds): when a file last changed (installers keep archives' dates) */
     SYS_COUNT
 };
 

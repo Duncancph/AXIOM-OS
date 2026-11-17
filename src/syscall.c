@@ -158,6 +158,11 @@ uint64_t syscall_dispatch(struct frame *f) {
         }
         return n < max ? n : max;
     }
+    case SYS_FS_SETTIME: {
+        char p1[PATH_MAX_];
+        if (!copy_str(p1, a, sizeof p1)) return (uint64_t)FS_EINVAL;
+        return (uint64_t)(int64_t)vfs_set_mtime(p1, (int64_t)b);
+    }
     case SYS_FS_LIST: case SYS_FS_READ: case SYS_FS_WRITE: case SYS_FS_MKDIR: case SYS_FS_DELETE:
     case SYS_FS_RENAME: case SYS_FS_STAT: case SYS_FS_COPY: case SYS_FS_APPEND: {
         char p1[PATH_MAX_], p2[PATH_MAX_];

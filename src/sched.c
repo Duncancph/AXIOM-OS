@@ -140,6 +140,7 @@ long task_thread(uint64_t rip, uint64_t rsp, uint64_t fs, uint64_t clear_tid) {
     t->pml4 = t->mm->pml4;
     t->proc = p;
     t->fs_base = fs; t->clear_tid = clear_tid;
+    t->sig_blocked = current->sig_blocked;                 /* (a new thread has its creator's signal mask) */
     uint64_t *s = (uint64_t *)t->kstack_top;
     *--s = 0x1B; *--s = rsp; *--s = 0x202; *--s = 0x23; *--s = rip;
     *--s = (uint64_t)user_entry;
@@ -179,6 +180,7 @@ long task_clone(const struct frame *f, uint64_t rsp, uint64_t fs, uint64_t clear
     t->pml4 = t->mm->pml4; t->proc = p; t->lx = current->lx;
     strncpy0(t->appid, p->appid, sizeof t->appid); t->app = t->appid;
     t->fs_base = fs; t->clear_tid = clear_tid;
+    t->sig_blocked = current->sig_blocked;                 /* (a new thread has its creator's signal mask) */
     struct frame *nf = (struct frame *)(t->kstack_top - sizeof *nf);
     *nf = *f; nf->rax = 0; nf->rsp = rsp;
     uint64_t *s = (uint64_t *)nf;
@@ -350,6 +352,12 @@ void kyield(void) {
     schedule();
 }
 
+/* wake a task that's waiting (futex, sleep, I/O): it carries on and sees why (a signal) */
+void task_wake(struct task *t) {
+    if (t->state != PS_BLOCKED && t->state != PS_SLEEPING) return;
+    t->futex_mm = 0; t->futex_addr = 0;
+    t->state = PS_READY; t->wake_at = 0; t->rq = ++rq_seq;
+}
 void task_sleep(uint64_t ms) {
     if (!sched_running) { sleep_ms(ms); return; }
     current->wake_at = uptime_ms() + (ms ? ms : 1) + 1;   /* (+1: the current ms is part gone; a sleep never ends early) */

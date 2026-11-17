@@ -595,6 +595,8 @@ static long untar(const char *tar, long tsize, const char *dir) {
                 if (r1 != k || r2 != k) { ksnprintf(untar_err, sizeof untar_err, "%s %s: %ld", r1 != k ? "reading for" : "writing", out, r1 != k ? r1 : r2); free(chunk); return -1; }
                 done += k;
             }
+            long mt = oct(h + 136, 12);                       /* keep the archive's date (programs compare them: */
+            if (mt > 0) sys_call(SYS_FS_SETTIME, (long)out, mt, 0, 0, 0);   /* Guile uses a .go only if it's newer than its .scm) */
             files++;
             if (files % 20 == 0) { char m[120]; ksnprintf(m, sizeof m, "Unpacking: %ld files...", files); pk_say(UI_MUTED, m); draw(); }
         }                                                    /* (links and devices are skipped) */

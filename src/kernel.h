@@ -279,7 +279,9 @@ struct lxproc;
 void linux_cpu_init(void);                 /* the syscall instruction (each core) */
 uint64_t linux_syscall(struct frame *f);
 int linux_spawn(const char *path, int argc, char **argv, struct task *out);   /* -> pid */
-void linux_where(const char *what, uint64_t addr);   /* print which file (and offset) a Linux program's address is in */
+void linux_where(const char *what, uint64_t addr);
+void linux_signals(struct frame *f);
+void linux_threads(void);   /* the terminal's "threads" command */   /* on the way back to a Linux program: run its pending signal handlers */   /* print which file (and offset) a Linux program's address is in */
 bool linux_where_quiet(uint64_t addr);
 void linux_task_exit(struct task *t);
 void linux_dump_threads(void);            /* Ctrl+\ on the serial line: where each Linux thread is (debugging) */
@@ -319,6 +321,12 @@ struct task {
     uint64_t clear_tid;        /* when the thread ends: *(u32 *)clear_tid = 0, futex woken */
     struct lxproc *lx;         /* a Linux program (linux.c): its files etc., shared by its threads */
     struct mm *futex_mm; uint64_t futex_addr; bool futex_woken;   /* waiting in SYS_FUTEX */
+    /* Linux signals (linux.c): bit (n - 1) for signal n */
+    uint64_t sig_pending, sig_blocked, sig_saved;   /* sig_saved: the mask to put back after sigsuspend's handler */
+    bool sig_restore;
+    int sig_from;                                   /* who sent the last one (siginfo's si_pid) */
+    uint64_t sig_sysno;                             /* the Linux system call being made (to restart it: SA_RESTART) */
+    uint64_t last_rip;                              /* where it was in its program when it last came into the kernel */
 };
 struct frame {
     uint64_t r15, r14, r13, r12, r11, r10, r9, r8, rbp, rdi, rsi, rdx, rcx, rbx, rax;
@@ -375,6 +383,7 @@ void sched_start(void) __attribute__((noreturn));
 void schedule(void);
 void task_yield(void);
 void task_sleep(uint64_t ms);
+void task_wake(struct task *t);   /* a waiting task carries on (e.g. a signal came) */
 void task_exit(int code) __attribute__((noreturn));
 bool task_kill(int pid);
 void task_reap(void);

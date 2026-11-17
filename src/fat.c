@@ -654,7 +654,28 @@ static int64_t f_mtime(void *vol, const char *rel) {
     return days_from_civil(y, mo, dd) * 86400 + (t >> 11) * 3600 + ((t >> 5) & 63) * 60 + (t & 31) * 2 - now.utc_offset_min * 60;
 }
 
-const struct fs_ops fat_ops = { f_list, f_read, f_write, f_mkdir, f_remove, f_rename, f_stat, f_space, f_append, f_mtime };
+void civil_from_days(int64_t z, int *y, int *m, int *d);
+static int f_setmtime(void *vol, const char *rel, int64_t when) {           /* (Unix seconds; FAT keeps local time) */
+    struct fatvol *v = vol; struct dent *d = kmalloc(sizeof *d);
+    if (!d) return FS_ENOSPC;
+    int r = lookup(v, rel, d);
+    if (!r && !d->nslots) r = FS_EINVAL;                                  /* (the root has no entry) */
+    if (!r) {
+        struct rtc_time now; rtc_read_local(&now);
+        int64_t l = when + now.utc_offset_min * 60;
+        if (l < 315532800) l = 315532800;                                 /* FAT starts in 1980 */
+        int y, mo, dd; civil_from_days(l / 86400, &y, &mo, &dd);
+        if (y > 2107) { y = 2107; mo = 12; dd = 31; }
+        int64_t sec = l % 86400;
+        uint16_t t = (uint16_t)((sec / 3600) << 11 | ((sec / 60) % 60) << 5 | (sec % 60) / 2), dt = (uint16_t)((y - 1980) << 9 | mo << 5 | dd);
+        uint8_t *e = d->raw; w16(e + 22, t); w16(e + 24, dt);
+        r = ent_write(v, d->slot_clus[d->nslots - 1], d->slot_idx[d->nslots - 1], e);
+    }
+    kfree(d);
+    return r;
+}
+
+const struct fs_ops fat_ops = { f_list, f_read, f_write, f_mkdir, f_remove, f_rename, f_stat, f_space, f_append, f_mtime, f_setmtime };
 
 /* ---------------- mount ---------------- */
 static bool is_fat32_vbr(const uint8_t *b) {

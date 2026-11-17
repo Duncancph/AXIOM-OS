@@ -47,11 +47,17 @@ struct lxproc {
     char line[256]; int linelen;   /* output waiting for its end of line (for the log) */
     struct shmmap *maps; int nmaps, capmaps;   /* where shared memory (memfd) is mapped */
     struct fmap *fmaps; int nfmaps, capfmaps;  /* which parts of memory came from which file (/proc/self/maps) */
+    struct { uint64_t handler, flags, restorer, mask; } sa[65];   /* signal handlers (rt_sigaction), by number */
 };
 /* a range of a program's memory read from a file (its own segments, its loader's, mmap'd libraries): only
  * for /proc/self/maps, which Chromium (and debuggers) read to find code and print stack traces */
 struct fmap { uint64_t s, e, off; char path[120]; };
 /* the file a code address is in (for crash reports) */
+static const struct fmap *fmap_in(struct lxproc *lx, uint64_t a) {
+    if (!lx) return 0;
+    for (int i = 0; i < lx->nfmaps; i++) if (a >= lx->fmaps[i].s && a < lx->fmaps[i].e) return &lx->fmaps[i];
+    return 0;
+}
 static const struct fmap *fmap_at(uint64_t a) {
     struct lxproc *lx = current ? current->lx : 0;
     if (!lx) return 0;
@@ -289,6 +295,112 @@ void linux_task_exit(struct task *t) {
     kfree(lx);
 }
 
+
+static void chan_wake(void);
+static void lx_abort_trace(struct lxproc *lx, struct frame *f);
+/* ---------------- signals ----------------
+ * A signal is a bit in a thread's sig_pending. On the way back to the program (after a system call, or an
+ * interrupt that stopped it), a pending signal it doesn't block runs its handler: as Linux does, its registers
+ * (and FPU state) go in a frame on its stack, and the handler returns through its restorer, which calls
+ * rt_sigreturn to put them back. Signals without a handler do what Linux does by default: these programs
+ * mostly send them to themselves (abort) or between their own threads (Boehm GC's stop-the-world, Go). */
+#define SIGBIT(n) (1ULL << ((n) - 1))
+#define SIG_UNBLOCKABLE (SIGBIT(9) | SIGBIT(19))       /* SIGKILL, SIGSTOP */
+#define SA_SIGINFO_ 4
+#define SA_RESTORER_ 0x04000000
+#define SA_NODEFER_ 0x40000000
+#define SA_RESETHAND_ 0x80000000
+static bool sig_default_ignored(int n) { return n == 17 || n == 23 || n == 28 || n == 18 || n == 21 || n == 22 || n == 20; }   /* CHLD URG WINCH CONT TTIN TTOU TSTP */
+/* a signal for the running thread: is one waiting that would run a handler (so a blocking call stops, EINTR)? */
+static bool sig_now(void) { struct task *t = current; return t && t->lx && (t->sig_pending & ~t->sig_blocked); }
+/* post signal n to thread t (of a Linux program); false if t isn't one */
+static bool sig_post(struct task *t, int n, int from) {
+    if (!t || !t->lx || n < 1 || n > 64) return false;
+    struct lxproc *lx = t->lx;
+    uint64_t h = lx->sa[n].handler;
+    if (h == 1 || (h == 0 && sig_default_ignored(n))) return true;          /* SIG_IGN, or ignored by default */
+    t->sig_pending |= SIGBIT(n); t->sig_from = from;
+    task_wake(t);                                                          /* stop what it waits for (EINTR) */
+    chan_wake();
+    return true;
+}
+static void sig_frame_fail(struct frame *f, int n) {
+    kprintf("[linux] %s: no room on its stack for signal %d's handler\n", current->name, n);
+    task_exit(128 + n);
+}
+/* the terminal's "threads": what each Linux program's threads are doing (for finding where one is stuck) */
+void linux_threads(void) {
+    static const char *st[] = { "-", "ready", "running", "sleeping", "waiting", "ended" };
+    for (int i = 0; i < MAX_TASKS; i++) {
+        struct task *t = &tasks[i];
+        if (!t->state || !t->lx) continue;
+        kprintf("%5d %-16s %-8s syscall %-4lu cpu %lu ms  signals pending %lx blocked %lx%s\n", t->pid, t->name, st[t->state < 6 ? t->state : 0],
+                t->sig_sysno, t->ticks / 1000, t->sig_pending, t->sig_blocked, t->futex_addr ? "  (futex)" : "");
+        const struct fmap *fm = fmap_in(t->lx, t->last_rip);
+        if (fm) kprintf("        at %s+%lx\n", fm->path, t->last_rip - fm->s + fm->off);
+    }
+}
+void linux_signals(struct frame *f) {
+    struct task *t = current; struct lxproc *lx = t->lx;
+    uint64_t ready = t->sig_pending & ~t->sig_blocked;
+    if (!ready || !lx) return;
+    int n = __builtin_ctzll(ready) + 1;
+    t->sig_pending &= ~SIGBIT(n);
+    uint64_t h = lx->sa[n].handler;
+    if (h == 1) return;                                                    /* SIG_IGN */
+    if (h == 0) {                                                          /* default: ignore, or end the program */
+        if (sig_default_ignored(n)) return;
+        kprintf("[linux] %s: ended by signal %d\n", t->name, n);
+        if (n == 6) lx_abort_trace(lx, f);
+        task_exit(128 + n);
+    }
+    /* a system call the signal interrupted: with SA_RESTART it runs again after the handler (as on Linux), except
+     * those that always say EINTR (waiting for events or time: poll, select, epoll_wait, nanosleep, sigsuspend...) */
+    if (f->vec == 0x81 && f->rax == E(EINTR_) && (lx->sa[n].flags & 0x10000000)) {
+        uint64_t sc = t->sig_sysno;
+        bool never = sc == 7 || sc == 271 || sc == 23 || sc == 270 || sc == 232 || sc == 281 || sc == 441 || sc == 35 || sc == 230 || sc == 130 || sc == 128 || sc == 34;
+        if (!never) { f->rax = sc; f->rip -= 2; }                          /* (back to the syscall instruction) */
+    }
+    /* the frame, as Linux's: [restorer address] ucontext siginfo ... FPU state (fxsave), below the red zone */
+    uint64_t sp = f->rsp - 128;
+    uint64_t fp = (sp - 512) & ~63ULL;
+    uint64_t base = ((fp - (8 + 304 + 128)) & ~15ULL) - 8;                 /* (rsp % 16 == 8 at the handler, as after a call) */
+    if (!uok(base, fp + 512 - base, true)) sig_frame_fail(f, n);
+    uint8_t *fr = (uint8_t *)base; memset(fr, 0, fp + 512 - base);
+    *(uint64_t *)fr = lx->sa[n].restorer;
+    uint8_t *uc = fr + 8, *info = uc + 304;
+    uint64_t *g = (uint64_t *)(uc + 40);                                   /* uc_mcontext: r8..r15 rdi rsi rbp rbx rdx rax rcx rsp rip eflags */
+    g[0] = f->r8; g[1] = f->r9; g[2] = f->r10; g[3] = f->r11; g[4] = f->r12; g[5] = f->r13; g[6] = f->r14; g[7] = f->r15;
+    g[8] = f->rdi; g[9] = f->rsi; g[10] = f->rbp; g[11] = f->rbx; g[12] = f->rdx; g[13] = f->rax; g[14] = f->rcx;
+    g[15] = f->rsp; g[16] = f->rip; g[17] = f->rflags; g[18] = 0x33 | (0x2bULL << 48);   /* cs, gs, fs, ss */
+    g[21] = t->sig_blocked;                                                /* oldmask */
+    g[23] = fp;                                                            /* fpstate */
+    *(uint64_t *)(uc + 296) = t->sig_restore ? t->sig_saved : t->sig_blocked;   /* the mask to put back */
+    *(uint64_t *)(uc + 16) = 0; *(uint32_t *)(uc + 24) = 2;                /* uc_stack: SS_DISABLE */
+    *(int32_t *)info = n; *(int32_t *)(info + 8) = -6;                     /* si_code: SI_TKILL */
+    *(int32_t *)(info + 16) = t->sig_from; *(int32_t *)(info + 20) = 1000;
+    __asm__ volatile("fxsave64 (%0)" :: "r"(fp) : "memory");               /* (the program's own FPU registers are live here) */
+    t->sig_restore = false;
+    if (!(lx->sa[n].flags & SA_NODEFER_)) t->sig_blocked |= SIGBIT(n);
+    t->sig_blocked = (t->sig_blocked | lx->sa[n].mask) & ~SIG_UNBLOCKABLE;
+    if (lx->sa[n].flags & SA_RESETHAND_) lx->sa[n].handler = 0;
+    f->rip = h; f->rsp = base; f->rdi = (uint64_t)n; f->rsi = (uint64_t)info; f->rdx = (uint64_t)uc; f->rax = 0;
+    f->rflags &= ~0x400ULL;                                                /* DF clear, as the ABI wants */
+}
+static uint64_t sig_return(struct frame *f) {                              /* rt_sigreturn: the handler's done */
+    struct task *t = current;
+    uint8_t *uc = (uint8_t *)f->rsp;                                       /* (the restorer's ret popped the address) */
+    if (!uok((uint64_t)uc, 304, false)) { kprintf("[linux] %s: bad signal frame\n", t->name); task_exit(139); }
+    uint64_t *g = (uint64_t *)(uc + 40);
+    f->r8 = g[0]; f->r9 = g[1]; f->r10 = g[2]; f->r11 = g[3]; f->r12 = g[4]; f->r13 = g[5]; f->r14 = g[6]; f->r15 = g[7];
+    f->rdi = g[8]; f->rsi = g[9]; f->rbp = g[10]; f->rbx = g[11]; f->rdx = g[12]; f->rcx = g[14];
+    f->rsp = g[15]; f->rip = g[16];
+    f->rflags = (f->rflags & ~0xDD5ULL) | (g[17] & 0xDD5ULL);              /* the flags a program may set (CF PF AF ZF SF TF? DF OF) */
+    uint64_t fp = g[23];
+    if (fp && !(fp & 15) && uok(fp, 512, false)) __asm__ volatile("fxrstor64 (%0)" :: "r"(fp) : "memory");
+    t->sig_blocked = *(uint64_t *)(uc + 296) & ~SIG_UNBLOCKABLE;
+    return g[13];                                                          /* rax, as it was */
+}
 /* ---------------- the system calls ---------------- */
 struct lstat { uint64_t dev, ino, nlink; uint32_t mode, uid, gid, pad; uint64_t rdev; int64_t size, blksize, blocks; uint64_t at[2], mt[2], ct[2]; int64_t r[3]; };
 static uint64_t path_ino(const char *p) { uint64_t h = 1469598103934665603ull; for (; p && *p; p++) h = (h ^ (uint8_t)*p) * 1099511628211ull; return h >> 1 | 1; }
@@ -462,7 +574,7 @@ static int64_t chan_read(struct lfd *f, uint8_t *buf, uint64_t n, bool user, boo
     while (!c->len) {
         if (!c->writers) return 0;                              /* nobody can write any more: end of file */
         if (nonblock) return (int64_t)E(EAGAIN_);
-        chan_wait(-1);
+        chan_wait(-1); if (sig_now()) return (int64_t)E(EINTR_);
     }
     if (user && !uok((uint64_t)buf, n, true)) return (int64_t)E(EFAULT_);   /* (another thread may have unmapped it meanwhile) */
     if (got) *got = 0;
@@ -506,7 +618,7 @@ static int64_t chan_write(struct lfd *f, const uint8_t *buf, uint64_t n, bool us
         if (n > CHAN_CAP) return (int64_t)E(EMSGSIZE_);
         while (CHAN_CAP - c->len < n || c->mcount == CHAN_MSGS) {
             if (nonblock) return (int64_t)E(EAGAIN_);
-            chan_wait(-1);
+            chan_wait(-1); if (sig_now()) return (int64_t)E(EINTR_);
             if (!c->readers) return (int64_t)E(EPIPE_);
         }
         if (user && !uok((uint64_t)buf, n, false)) return (int64_t)E(EFAULT_);
@@ -521,7 +633,7 @@ static int64_t chan_write(struct lfd *f, const uint8_t *buf, uint64_t n, bool us
         uint32_t space = CHAN_CAP - c->len;
         if (!space) {
             if (nonblock) { if (done) break; return (int64_t)E(EAGAIN_); }   /* (blocking: wait for room for the rest) */
-            chan_wait(-1);
+            chan_wait(-1); if (sig_now()) return done ? (int64_t)done : (int64_t)E(EINTR_);
             if (!c->readers) return done ? (int64_t)done : (int64_t)E(EPIPE_);
             continue;
         }
@@ -580,6 +692,7 @@ static uint64_t do_poll(struct lxproc *lx, uint64_t ufds, uint64_t nfds, int64_t
         if (count || ms == 0) return count;
         int64_t left = -1;
         if (ms > 0) { uint64_t now = uptime_ms(); if (now >= end) return 0; left = (int64_t)(end - now); }
+        if (sig_now()) return E(EINTR_);                         /* a signal: its handler runs first */
         if (snd_waiting) { snd_waiting = false; if (left < 0 || left > 5) left = 5; }
         if (timer_wake_at) {                                    /* a timerfd's deadline */
             uint64_t now = uptime_ns(), w = timer_wake_at > now ? (timer_wake_at - now + 999999) / 1000000 : 1;
@@ -641,6 +754,7 @@ static uint64_t do_epoll_wait(struct lxproc *lx, uint64_t epfd, uint64_t uev, in
         if (k || ms == 0) return (uint64_t)k;
         int64_t left = -1;
         if (ms > 0) { uint64_t now = uptime_ms(); if (now >= end) return 0; left = (int64_t)(end - now); }
+        if (sig_now()) return E(EINTR_);                         /* a signal: its handler runs first */
         if (snd_waiting) { snd_waiting = false; if (left < 0 || left > 5) left = 5; }
         if (timer_wake_at) {                                    /* a timerfd's deadline */
             uint64_t now = uptime_ns(), w = timer_wake_at > now ? (timer_wake_at - now + 999999) / 1000000 : 1;
@@ -737,7 +851,7 @@ static int64_t isock_connect(struct isock *s, const struct ipaddr *ip, uint16_t 
     s->h = h; s->peer = *ip; s->pport = port; s->peer_set = true; s->connecting = true;
     if (nb) return (int64_t)E(EINPROGRESS_);
     struct tcp_sock_info i;
-    while (!tcp_sock_info(s->h, s, &i) && i.state == 0) chan_wait(-1);
+    while (!tcp_sock_info(s->h, s, &i) && i.state == 0) { chan_wait(-1); if (sig_now()) return (int64_t)E(EINTR_); }
     s->connecting = false;
     if (i.state == 2 && i.err) { s->err = 0; return (int64_t)neterr(i.err); }
     return 0;
@@ -767,7 +881,7 @@ static int64_t isock_send(struct isock *s, const uint8_t *buf, uint64_t n, const
         long r = done < n ? tcp_sock_send(s->h, s, buf + done, (uint32_t)(n - done > (1u << 20) ? 1u << 20 : n - done)) : 0;
         if (r > 0) { done += (uint64_t)r; continue; }
         if (done == n) break;
-        if (r == NET_EAGAIN) { if (nb) break; chan_wait(-1); continue; }   /* (also while still connecting) */
+        if (r == NET_EAGAIN) { if (nb) break; chan_wait(-1); if (sig_now()) return (int64_t)E(EINTR_); continue; }   /* (also while still connecting) */
         if (done) break;
         return (int64_t)(r == NET_ERESET ? E(EPIPE_) : neterr(r));
     }
@@ -788,7 +902,7 @@ static int64_t isock_recv(struct isock *s, uint8_t *buf, uint64_t n, bool nb, bo
             if (from && r >= 0) { *from = s->peer; *fport = s->pport; }
         }
         if (r != NET_EAGAIN || nb) return r < 0 ? (int64_t)neterr(r) : r;
-        chan_wait(-1);
+        chan_wait(-1); if (sig_now()) return (int64_t)E(EINTR_);
     }
 }
 static uint64_t isock_new(struct lxproc *lx, int fam, int type, int flags) {
@@ -1338,6 +1452,7 @@ uint64_t linux_syscall(struct frame *f) {
         f->rdi = (uint64_t)(int64_t)(int32_t)f->rdi; break;      /* *at: a directory file or AT_FDCWD (-100) */
     }
     chan_woke = false;
+    current->sig_sysno = f->rax;
     uint64_t r = linux_syscall_(f);
     if (chan_woke) { chan_woke = false; task_yield(); }
     return r;
@@ -1427,7 +1542,7 @@ static uint64_t linux_syscall_(struct frame *f) {
         if (flags & ~(04000 | 02000000)) return E(EINVAL_);
         while (!l->qn) {
             if (fd->flags & 04000) return E(EAGAIN_);
-            chan_wait(-1);
+            chan_wait(-1); if (sig_now()) return E(EINTR_);
             if (a >= NFD || lx->fd[a].kind != FD_CHAN || lx->fd[a].lis != l) return E(EBADF_);   /* (closed meanwhile) */
         }
         int k = fd_new(lx, 0); if (k < 0) return E(EMFILE_);
@@ -1463,7 +1578,7 @@ static uint64_t linux_syscall_(struct frame *f) {
             struct axwin *x = fd->obj;
             if (n == 17) return E(ESPIPE_);
             if (c < sizeof(struct axwin_event)) return E(EINVAL_);
-            while (x->qh == x->qt) { if (fd->flags & 04000) return E(EAGAIN_); chan_wait(-1); }
+            while (x->qh == x->qt) { if (fd->flags & 04000) return E(EAGAIN_); chan_wait(-1); if (sig_now()) return E(EINTR_); }
             if (!uok(b, c, true)) return E(EFAULT_);
             uint64_t k = 0;
             while (x->qh != x->qt && k + sizeof(struct axwin_event) <= c) {
@@ -1486,7 +1601,7 @@ static uint64_t linux_syscall_(struct frame *f) {
                 if (x->ticks) break;
                 if (fd->flags & 04000) return E(EAGAIN_);
                 uint64_t now = uptime_ns();
-                chan_wait(x->next ? (int64_t)((x->next - now + 999999) / 1000000) : -1);
+                chan_wait(x->next ? (int64_t)((x->next - now + 999999) / 1000000) : -1); if (sig_now()) return E(EINTR_);
                 if (lx->fd[a].kind != FD_TIMER) return E(EBADF_);
             }
             if (!uok(b, 8, true)) return E(EFAULT_);
@@ -1497,7 +1612,7 @@ static uint64_t linux_syscall_(struct frame *f) {
             struct evfd *ev = fd->obj;
             if (n == 17) return E(ESPIPE_);
             if (c < 8) return E(EINVAL_);
-            while (!ev->count) { if (fd->flags & 04000) return E(EAGAIN_); chan_wait(-1); }
+            while (!ev->count) { if (fd->flags & 04000) return E(EAGAIN_); chan_wait(-1); if (sig_now()) return E(EINTR_); }
             if (!uok(b, 8, true)) return E(EFAULT_);
             uint64_t v = ev->sem ? 1 : ev->count;
             ev->count -= v; *(uint64_t *)b = v; chan_wake();
@@ -1538,7 +1653,7 @@ static uint64_t linux_syscall_(struct frame *f) {
             if (c < 8) return E(EINVAL_);
             uint64_t v = *(uint64_t *)b;
             if (v == ~0ULL) return E(EINVAL_);
-            while (ev->count + v < ev->count || ev->count + v == ~0ULL) { if (fd->flags & 04000) return E(EAGAIN_); chan_wait(-1); }
+            while (ev->count + v < ev->count || ev->count + v == ~0ULL) { if (fd->flags & 04000) return E(EAGAIN_); chan_wait(-1); if (sig_now()) return E(EINTR_); }
             ev->count += v; if (v) chan_wake();
             return 8;
         }
@@ -2230,6 +2345,32 @@ static uint64_t linux_syscall_(struct frame *f) {
         kfree(buf);
         return r < 0 ? E(ENOENT_) : 0;
     }
+    case 280: case 235: case 132: {                            /* utimensat, utimes, utime: the modified time (FAT keeps that one) */
+        char p[200], full[200]; uint64_t up = n == 280 ? b : a, tv = n == 280 ? c : b;
+        if (n == 280 && !up) {                                 /* futimens: the file of dirfd */
+            if (a >= NFD || !lx->fd[a].kind || !lx->fd[a].path[0]) return E(EBADF_);
+            strncpy0(full, lx->fd[a].path, sizeof full);
+        } else {
+            if (!ustr(p, up, sizeof p)) return E(EFAULT_);
+            if (n == 280 && p[0] != '/' && (int)a != -100) {  /* relative to a directory file */
+                if (a >= NFD || lx->fd[a].kind != FD_DIR) return E(EBADF_);
+                char tmp[200]; ksnprintf(tmp, sizeof tmp, "%s/%s", lx->fd[a].path, p); strncpy0(full, tmp, sizeof full);
+            } else path_join(lx->cwd, p, full, sizeof full);
+        }
+        int64_t when = (int64_t)(linux_now_ns() / 1000000000ull);
+        if (tv) {
+            if (!uok(tv, n == 132 ? 16 : 32, false)) return E(EFAULT_);
+            if (n == 280) {                                    /* struct timespec[2]: [1] is the modified time */
+                int64_t ns = ((int64_t *)tv)[3];
+                if (ns == (1 << 30) - 2) return 0;             /* UTIME_OMIT */
+                if (ns != (1 << 30) - 1) when = ((int64_t *)tv)[2];   /* (UTIME_NOW: now) */
+            } else when = n == 235 ? ((int64_t *)tv)[2] : ((int64_t *)tv)[1];   /* timeval[2] / utimbuf */
+        }
+        struct dunc_stat st;
+        if (vfs_stat(full, &st) != FS_OK) return E(ENOENT_);
+        int r = vfs_set_mtime(full, when);
+        return r == FS_OK ? 0 : E(EACCES_);
+    }
     case 82: case 264: case 316: {                             /* rename, renameat(2) */
         char p[200], q[200], f1[200], f2[200];
         if (!ustr(p, n == 82 ? a : b, sizeof p) || !ustr(q, n == 82 ? b : d, sizeof q)) return E(EFAULT_);
@@ -2380,12 +2521,86 @@ static uint64_t linux_syscall_(struct frame *f) {
         if (!uok(a, 4, true) || !uok(b, 4, true) || !uok(c, 4, true)) return E(EFAULT_);
         *(uint32_t *)a = *(uint32_t *)b = *(uint32_t *)c = 1000; return 0;
     case 112: return t->proc->pid;                             /* setsid */
-    case 62: case 200: case 234:                               /* kill, tkill, tgkill: ending itself */
-        if (n == 62 && a == (uint64_t)t->proc->pid && (b == 6 || b == 9 || b == 15)) { if (b == 6) lx_abort_trace(lx, f); task_exit(128 + (int)b); }
-        if (n != 62 && (c == 6 || c == 9)) { if (c == 6) lx_abort_trace(lx, f); task_exit(128 + (int)c); }
+    case 62: case 200: case 234: {                             /* kill, tkill, tgkill */
+        int sig = (int)(n == 62 || n == 200 ? b : c);
+        if (sig < 0 || sig > 64) return E(EINVAL_);
+        struct task *to = 0;
+        if (n == 62) {                                         /* a process: this one (no others to signal yet) */
+            if ((int)a != t->proc->pid && (int)a != 0 && (int)a != -1) return E(ESRCH_);
+            for (int i = 0; i < MAX_TASKS; i++)                /* the first of its threads that doesn't block it */
+                if (tasks[i].state && tasks[i].state != PS_ZOMBIE && tasks[i].lx == lx && (!to || !(tasks[i].sig_blocked & SIGBIT(sig ? sig : 1)))) {
+                    if (!to || (to->sig_blocked & SIGBIT(sig ? sig : 1))) to = &tasks[i];
+                }
+        } else {
+            int tid = (int)(n == 200 ? a : b);
+            for (int i = 0; i < MAX_TASKS; i++) if (tasks[i].state && tasks[i].state != PS_ZOMBIE && tasks[i].pid == tid && tasks[i].lx == lx) to = &tasks[i];
+        }
+        if (!to) return E(ESRCH_);
+        if (!sig) return 0;                                    /* (only asking whether it's there) */
+        if ((sig == 9 || ((sig == 6 || sig == 15) && !lx->sa[sig].handler)) && to == t) { if (sig == 6) lx_abort_trace(lx, f); task_exit(128 + sig); }
+        if (sig == 9) { task_kill(to->proc ? to->proc->pid : to->pid); return 0; }
+        sig_post(to, sig, t->proc->pid);
         return 0;
-    case 13: case 14: case 131: case 127: return 0;            /* rt_sigaction, rt_sigprocmask, sigaltstack, rt_sigpending */
-    case 15: return 0;                                         /* rt_sigreturn */
+    }
+    case 13: {                                                 /* rt_sigaction */
+        int sig = (int)a;
+        if (sig < 1 || sig > 64 || d != 8) return E(EINVAL_);
+        if (c) {
+            if (!uok(c, 32, true)) return E(EFAULT_);
+            uint64_t *o = (uint64_t *)c; o[0] = lx->sa[sig].handler; o[1] = lx->sa[sig].flags; o[2] = lx->sa[sig].restorer; o[3] = lx->sa[sig].mask;
+        }
+        if (b) {
+            if (sig == 9 || sig == 19) return E(EINVAL_);
+            if (!uok(b, 32, false)) return E(EFAULT_);
+            uint64_t *v = (uint64_t *)b;
+            if (v[0] > 1 && !(v[1] & SA_RESTORER_)) return E(EINVAL_);   /* (glibc always gives a restorer) */
+            lx->sa[sig].handler = v[0]; lx->sa[sig].flags = v[1]; lx->sa[sig].restorer = v[2]; lx->sa[sig].mask = v[3];
+            if (v[0] == 1) for (int i = 0; i < MAX_TASKS; i++) if (tasks[i].lx == lx) tasks[i].sig_pending &= ~SIGBIT(sig);
+        }
+        return 0;
+    }
+    case 14: {                                                 /* rt_sigprocmask */
+        if (d != 8) return E(EINVAL_);
+        if (c) { if (!uok(c, 8, true)) return E(EFAULT_); *(uint64_t *)c = t->sig_blocked; }
+        if (b) {
+            if (!uok(b, 8, false)) return E(EFAULT_);
+            uint64_t m = *(uint64_t *)b;
+            if (a == 0) t->sig_blocked |= m; else if (a == 1) t->sig_blocked &= ~m; else if (a == 2) t->sig_blocked = m; else return E(EINVAL_);
+            t->sig_blocked &= ~SIG_UNBLOCKABLE;
+        }
+        return 0;
+    }
+    case 127:                                                  /* rt_sigpending */
+        if (!uok(a, 8, true)) return E(EFAULT_);
+        *(uint64_t *)a = t->sig_pending & t->sig_blocked; return 0;
+    case 130: {                                                /* rt_sigsuspend: wait for a signal with this mask */
+        if (b != 8 || !uok(a, 8, false)) return E(EINVAL_);
+        t->sig_saved = t->sig_blocked; t->sig_restore = true;
+        t->sig_blocked = *(uint64_t *)a & ~SIG_UNBLOCKABLE;
+        while (!sig_now()) chan_wait(-1);
+        return E(EINTR_);                                      /* (its handler runs on the way back; then the old mask) */
+    }
+    case 128: {                                                /* rt_sigtimedwait: take one of these signals, no handler */
+        if (d != 8 || !uok(a, 8, false)) return E(EINVAL_);
+        uint64_t set = *(uint64_t *)a; bool forever; uint64_t ms = ts_ms(c, &forever);
+        uint64_t end = uptime_ms() + ms;
+        for (;;) {
+            uint64_t got = t->sig_pending & set;
+            if (got) {
+                int sn = __builtin_ctzll(got) + 1; t->sig_pending &= ~SIGBIT(sn);
+                if (b && uok(b, 128, true)) { memset((void *)b, 0, 128); *(int32_t *)b = sn; *(int32_t *)(b + 8) = -6; *(int32_t *)(b + 16) = t->sig_from; }
+                return (uint64_t)sn;
+            }
+            if (sig_now()) return E(EINTR_);
+            if (!forever && uptime_ms() >= end) return E(EAGAIN_);
+            chan_wait(forever ? -1 : (int64_t)(end - uptime_ms()));
+        }
+    }
+    case 131: {                                                /* sigaltstack: handlers run on the thread's own stack */
+        if (b && uok(b, 24, true)) { memset((void *)b, 0, 24); *(int32_t *)(b + 8) = 2; }   /* SS_DISABLE */
+        return 0;
+    }
+    case 15: return sig_return(f);                             /* rt_sigreturn */
     case 24: schedule(); return 0;                             /* sched_yield */
     case 204: {                                                /* sched_getaffinity */
         if (b < 8 || !uok(c, 8, true)) return E(EINVAL_);
@@ -2459,6 +2674,7 @@ static uint64_t linux_syscall_(struct frame *f) {
         }
         if (ms) task_sleep(ms); else schedule();
         if (t->killed) task_exit(-1);
+        if (sig_now()) return E(EINTR_);
         return 0;
     }
 
@@ -2474,6 +2690,7 @@ static uint64_t linux_syscall_(struct frame *f) {
                 if (!ms) return E(ETIMEDOUT_);
             }
             long r = futex_wait(a, (uint32_t)c, forever ? -1 : (int64_t)(ms ? ms : 1));
+            if (r == -DERR_TIMEDOUT && sig_now()) return E(EINTR_);
             return r == -DERR_AGAIN ? E(EAGAIN_) : r == -DERR_TIMEDOUT ? E(ETIMEDOUT_) : r == -DERR_FAULT ? E(EFAULT_) : 0;
         }
         if (op == 1 || op == 10) return futex_wake(t->mm, a, (int)c);   /* WAKE, WAKE_BITSET */

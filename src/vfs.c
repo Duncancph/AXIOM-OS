@@ -215,6 +215,17 @@ int64_t vfs_mtime(const char *path) {
     unlock();
     return t;
 }
+int vfs_set_mtime(const char *path, int64_t when) {
+    struct path p; char rel[PATH_MAX_];
+    if (!parse(path, &p)) return FS_EINVAL;
+    lock();
+    struct mount *m = route(&p, rel, sizeof rel);
+    int r;
+    if (m) r = m->ops->set_mtime ? m->ops->set_mtime(m->vol, rel, when) : FS_OK;   /* (no dates kept: nothing to do) */
+    else r = walk(&p, p.n) ? FS_OK : FS_ENOENT;
+    unlock();
+    return r;
+}
 int vfs_stat(const char *path, struct dunc_stat *st) {
     struct path p; char rel[PATH_MAX_];
     if (!parse(path, &p)) return FS_EINVAL;
