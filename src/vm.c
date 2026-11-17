@@ -350,9 +350,26 @@ bool mm_fault(struct mm *m, uint64_t addr, bool write, bool exec, uint64_t *page
     else {
         uint64_t pg = upage_alloc();
         if (!pg) return false;
-        *pte = pg | pte_flags(prot);
-        if (pages) (*pages)++;
+        if (m->fill && !m->fill(m, va, pg, pages)) { upage_free(pg); return false; }   /* (filled before anyone can see it) */
+        pte = pte_of(m->pml4, va, true);                    /* (fill may have added page tables) */
+        if (!pte) { upage_free(pg); return false; }
+        if (pte_kept(*pte)) upage_free(pg);                 /* (fill's read-ahead can't have put this one, but be safe) */
+        else { *pte = pg | pte_flags(prot); if (pages) (*pages)++; }
     }
+    __asm__ volatile("invlpg (%0)" ::"r"(va) : "memory");
+    return true;
+}
+bool mm_add_page(struct mm *m, uint64_t va, const void *data, uint64_t *pages) {
+    if (!m || (va & 4095) || !in_area(va, va + 4096)) return false;
+    int i = vma_find(m, va);
+    if (i >= m->nv || m->v[i].s > va || !m->v[i].prot) return false;
+    uint64_t *pte = pte_of(m->pml4, va, true);
+    if (!pte || pte_kept(*pte)) return false;
+    uint64_t pg = upage_alloc();
+    if (!pg) return false;
+    memcpy(mmio_virt(pg), data, 4096);
+    *pte = pg | pte_flags(m->v[i].prot);
+    if (pages) (*pages)++;
     __asm__ volatile("invlpg (%0)" ::"r"(va) : "memory");
     return true;
 }

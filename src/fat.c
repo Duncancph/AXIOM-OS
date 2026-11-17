@@ -10,13 +10,18 @@ static const char *strchr_(const char *s, char c) { for (; *s; s++) if (*s == c)
 #define EOC 0x0FFFFFF8u
 #define MAXSLOTS 21
 
+#define FC_N 64                          /* FAT sectors cached */
+#define POS_N 16
 struct fatvol {
     struct blockdev *bd;
     uint64_t base, fat_lba, data_lba;
     uint32_t bps, spc, rsvd, nfats, fatsz, root, nclus, cbytes, fsinfo, hint;
     int64_t free_count;
     bool fsinfo_marked;
-    struct { bool valid; uint32_t idx; uint8_t *data; } fc[8]; int fc_next;
+    struct { bool valid; uint32_t idx; uint8_t *data; } fc[FC_N]; int fc_next;
+    /* where reads last got to in a few files: big files are read a piece at a time, and each piece would
+     * otherwise follow the cluster chain from the start (first: the file's first cluster) */
+    struct { uint32_t first, idx, clus; } pos[POS_N]; int pos_next;
     char label[16];
 };
 
@@ -37,8 +42,8 @@ static void w16(uint8_t *p, uint16_t v) { p[0] = v; p[1] = v >> 8; }
 static void w32(uint8_t *p, uint32_t v) { p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24; }
 
 static uint8_t *fat_sec(struct fatvol *v, uint32_t idx) {
-    for (int i = 0; i < 8; i++) if (v->fc[i].valid && v->fc[i].idx == idx) return v->fc[i].data;
-    int s = v->fc_next; v->fc_next = (v->fc_next + 1) % 8;
+    for (int i = 0; i < FC_N; i++) if (v->fc[i].valid && v->fc[i].idx == idx) return v->fc[i].data;
+    int s = v->fc_next; v->fc_next = (v->fc_next + 1) % FC_N;
     v->fc[s].valid = false;
     if (rd(v, v->fat_lba + idx, 1, v->fc[s].data)) return 0;
     v->fc[s].valid = true; v->fc[s].idx = idx;
@@ -50,6 +55,24 @@ static int fat_get(struct fatvol *v, uint32_t c, uint32_t *out) {
     uint8_t *s = fat_sec(v, off / v->bps);
     if (!s) return FS_EIO;
     *out = r32(s + off % v->bps) & 0x0FFFFFFF;
+    return FS_OK;
+}
+
+/* the cluster holding a file's cluster number idx (0 = first), starting from a remembered position in the
+ * file when there is one; *out = EOC if the chain is shorter */
+static int seek_clus(struct fatvol *v, uint32_t first, uint64_t idx, uint32_t *out) {
+    uint32_t c = first; uint64_t at = 0;
+    if (first >= 2)
+        for (int i = 0; i < POS_N; i++)
+            if (v->pos[i].first == first && v->pos[i].idx <= idx && v->pos[i].idx >= at) { at = v->pos[i].idx; c = v->pos[i].clus; }
+    for (; at < idx && c >= 2 && c < EOC; at++) if (fat_get(v, c, &c)) return FS_EIO;
+    *out = at == idx ? c : EOC;
+    if (first >= 2 && c >= 2 && c < EOC) {
+        int k = -1;
+        for (int i = 0; i < POS_N; i++) if (v->pos[i].first == first) k = i;
+        if (k < 0) { k = v->pos_next; v->pos_next = (v->pos_next + 1) % POS_N; }
+        v->pos[k].first = first; v->pos[k].idx = (uint32_t)idx; v->pos[k].clus = c;
+    }
     return FS_OK;
 }
 
@@ -78,6 +101,7 @@ static int fat_set(struct fatvol *v, uint32_t c, uint32_t val) {
 }
 
 static int free_chain(struct fatvol *v, uint32_t c) {
+    memset(v->pos, 0, sizeof v->pos);                /* (remembered positions may be in this chain) */
     for (int guard = 0; c >= 2 && c < EOC && guard < 4000000; guard++) {
         uint32_t next;
         if (fat_get(v, c, &next) || fat_set(v, c, 0)) return FS_EIO;
@@ -445,15 +469,33 @@ static long f_read(void *vol, const char *rel, void *buf, uint64_t off, uint64_t
     if (len > size - off) len = size - off;
     uint8_t *cb = kmalloc(v->cbytes);
     if (!cb) return FS_ENOSPC;
-    uint64_t skip = off / v->cbytes, done = 0, inoff = off % v->cbytes;
-    for (uint64_t i = 0; i < skip && c >= 2 && c < EOC; i++) if (fat_get(v, c, &c)) { kfree(cb); return FS_EIO; }
+    uint64_t skip = off / v->cbytes, done = 0, inoff = off % v->cbytes, idx = skip;
+    uint32_t first = c;
+    if (seek_clus(v, first, skip, &c)) { kfree(cb); return FS_EIO; }
     while (done < len && c >= 2 && c < EOC) {
+        if (!inoff && len - done >= v->cbytes) {         /* whole clusters: a run of neighbours in one read, straight in */
+            uint32_t run = 1, last = c, nx;
+            while (run < 64 && (uint64_t)(run + 1) * v->cbytes <= len - done) {
+                if (fat_get(v, last, &nx)) { kfree(cb); return FS_EIO; }
+                if (nx != last + 1) break;
+                last = nx; run++;
+            }
+            if (rd(v, clus_lba(v, c), run * v->spc, (uint8_t *)buf + done)) { kfree(cb); return FS_EIO; }
+            done += (uint64_t)run * v->cbytes;
+            idx += run - 1;
+            if (fat_get(v, last, &c)) { kfree(cb); return FS_EIO; }
+            idx++;
+            if (done < len && c >= 2 && c < EOC) {           /* (remember where it got to) */
+                uint32_t chk; if (seek_clus(v, first, idx, &chk)) { kfree(cb); return FS_EIO; } c = chk;
+            }
+            continue;
+        }
         if (rd(v, clus_lba(v, c), v->spc, cb)) { kfree(cb); return FS_EIO; }
         uint64_t n = v->cbytes - inoff;
         if (n > len - done) n = len - done;
         memcpy((uint8_t *)buf + done, cb + inoff, n);
         done += n; inoff = 0;
-        if (fat_get(v, c, &c)) { kfree(cb); return FS_EIO; }
+        if (done < len) { idx++; if (seek_clus(v, first, idx, &c)) { kfree(cb); return FS_EIO; } }   /* (one step: from where it is) */
     }
     kfree(cb);
     return (long)done;
@@ -500,6 +542,57 @@ static long f_write(void *vol, const char *rel, const void *buf, uint64_t len) {
     }
     kfree(pd); kfree(old);
     return r ? r : (long)len;
+}
+
+static long f_append(void *vol, const char *rel, const void *buf, uint64_t len);
+/* write inside a file: only the clusters touched are read and written (databases write a page at a time);
+ * past the end it grows through f_append, with zeros in any gap */
+static long f_pwrite(void *vol, const char *rel, const void *buf, uint64_t off, uint64_t len) {
+    struct fatvol *v = vol;
+    struct dent *d = kmalloc(sizeof *d);
+    if (!d) return FS_ENOSPC;
+    int r = lookup(v, rel, d);
+    if (!r && (d->attr & 0x10)) r = FS_EISDIR;
+    if (!r && off + len > 0xFFFFFFFFULL) r = FS_ENOSPC;
+    uint32_t size = d->size, c = d->clus;
+    kfree(d);
+    if (r) return r;
+    if (off > size) {                                    /* a gap: zeros up to off */
+        uint8_t *z = kmalloc(65536);
+        if (!z) return FS_ENOSPC;
+        memset(z, 0, 65536);
+        for (uint64_t at = size; at < off && r >= 0;) {
+            uint64_t n = off - at < 65536 ? off - at : 65536;
+            r = (int)f_append(vol, rel, z, n); at += n;
+        }
+        kfree(z);
+        if (r < 0) return r;
+        return f_append(vol, rel, buf, len);
+    }
+    uint64_t inside = off + len > size ? size - off : len;   /* the part within the file, written in place */
+    if (inside) {
+        uint8_t *cb = kmalloc(v->cbytes);
+        if (!cb) return FS_ENOSPC;
+        uint64_t skip = off / v->cbytes, inoff = off % v->cbytes, done = 0, idx = skip;
+        uint32_t first = c;
+        if (seek_clus(v, first, skip, &c)) { kfree(cb); return FS_EIO; }
+        while (done < inside && c >= 2 && c < EOC) {
+            uint64_t n = v->cbytes - inoff;
+            if (n > inside - done) n = inside - done;
+            if (n < v->cbytes && rd(v, clus_lba(v, c), v->spc, cb)) { kfree(cb); return FS_EIO; }
+            memcpy(cb + inoff, (const uint8_t *)buf + done, n);
+            if (wr(v, clus_lba(v, c), v->spc, cb)) { kfree(cb); return FS_EIO; }
+            done += n; inoff = 0;
+            if (done < inside) { idx++; if (seek_clus(v, first, idx, &c)) { kfree(cb); return FS_EIO; } }
+        }
+        kfree(cb);
+        if (done < inside) return FS_EIO;                /* (the chain is shorter than the size says) */
+    }
+    if (inside < len) {                                  /* the rest goes on the end */
+        long a = f_append(vol, rel, (const uint8_t *)buf + inside, len - inside);
+        if (a < 0) return a;
+    }
+    return (long)len;
 }
 
 static int f_mkdir(void *vol, const char *rel) {
@@ -603,6 +696,12 @@ static long f_append(void *vol, const char *rel, const void *buf, uint64_t len) 
     if (r) { kfree(d); return r; }
     uint8_t *cb = kmalloc(v->cbytes);
     uint32_t size = d->size, first = d->clus, last = 0, c = first;
+    if (first >= 2 && size > v->cbytes) {                /* the last cluster: from a remembered position on */
+        uint64_t lastidx = (size - 1) / v->cbytes;
+        if (seek_clus(v, first, lastidx, &c) == FS_OK && c >= 2 && c < EOC) { uint32_t n; if (fat_get(v, c, &n) == FS_OK && n >= EOC) last = c, c = n; else c = first; }
+        else c = first;
+    }
+    if (!last)
     for (int guard = 0; c >= 2 && c < EOC && guard < 4000000; guard++) { last = c; if (fat_get(v, c, &c)) { r = FS_EIO; break; } }
     uint64_t done = 0;
     uint32_t used = size % v->cbytes;
@@ -675,7 +774,7 @@ static int f_setmtime(void *vol, const char *rel, int64_t when) {           /* (
     return r;
 }
 
-const struct fs_ops fat_ops = { f_list, f_read, f_write, f_mkdir, f_remove, f_rename, f_stat, f_space, f_append, f_mtime, f_setmtime };
+const struct fs_ops fat_ops = { f_list, f_read, f_write, f_mkdir, f_remove, f_rename, f_stat, f_space, f_append, f_mtime, f_setmtime, f_pwrite };
 
 /* ---------------- mount ---------------- */
 static bool is_fat32_vbr(const uint8_t *b) {
@@ -757,7 +856,7 @@ void *fat_open(struct blockdev *bd, uint64_t base, char *label_out, char *why, i
     v->data_lba = v->fat_lba + (uint64_t)v->nfats * v->fatsz;
     v->nclus = (tot - v->rsvd - v->nfats * v->fatsz) / v->spc;
     v->free_count = -1; v->hint = 2;
-    for (int i = 0; i < 8; i++) v->fc[i].data = kmalloc(v->bps);
+    for (int i = 0; i < FC_N; i++) v->fc[i].data = kmalloc(v->bps);
     /* label: volume label entry in the root folder, else the boot sector's */
     char lab[12] = "";
     memcpy(lab, vbr + 71, 11); lab[11] = 0;
@@ -831,6 +930,6 @@ int fat_format(struct blockdev *bd, uint64_t base, uint64_t count, const char *l
 void fat_unmount(void *vol) {
     struct fatvol *v = vol;
     if (!v) return;
-    for (int i = 0; i < 8; i++) kfree(v->fc[i].data);
+    for (int i = 0; i < FC_N; i++) kfree(v->fc[i].data);
     kfree(v);
 }

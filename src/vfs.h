@@ -18,6 +18,7 @@ struct fs_ops {
     int64_t (*mtime)(void *vol, const char *rel);      /* last change, Unix seconds (UTC); <0 if not known.
                                                           Optional (0: the file system keeps no dates) */
     int (*set_mtime)(void *vol, const char *rel, int64_t when);   /* optional, as mtime */
+    long (*pwrite)(void *vol, const char *rel, const void *buf, uint64_t off, uint64_t len);   /* in place (may be 0) */
 };
 
 int64_t vfs_mtime(const char *path);
@@ -32,6 +33,9 @@ int  vfs_list(const char *path, struct dunc_dirent *out, int max);       /* for 
 int  vfs_list_full(const char *path, struct vfs_dirent *out, int max);   /* full names (Linux programs' getdents) */
 long vfs_read(const char *path, void *buf, uint64_t off, uint64_t len);
 long vfs_write(const char *path, const void *buf, uint64_t len);
+/* write at an offset inside an existing file, growing it if needed (zeros fill any gap); only what changes is
+ * written. FS_EINVAL: this volume can't (the caller rewrites the file instead) */
+long vfs_pwrite(const char *path, const void *buf, uint64_t off, uint64_t len);
 long vfs_append(const char *path, const void *buf, uint64_t len);   /* creates the file if missing */
 int  vfs_mkdir(const char *path);
 int  vfs_delete(const char *path);                       /* recursive */

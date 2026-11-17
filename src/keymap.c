@@ -41,6 +41,9 @@ static int compose(int accent, int base) {
     return -1;
 }
 
+/* into the input queue, with the physical key (its USB usage code) in bits 16..23: the desktop gives it to the
+ * app as the key event's button (Linux programs use it for the key's position, as KeyboardEvent.code) */
+static void push_key(uint8_t usage, int c) { input_push(c | (int)usage << 16); }   /* (keys fit in 16 bits) */
 void kbd_hid_key(uint8_t u, uint8_t mods) {
     bool shift = mods & 0x22, ctrl = mods & 0x11, alt = mods & 0x04, altgr = (mods & 0x40) != 0, gui = mods & 0x88;
     int m = (shift ? KEYMOD_SHIFT : 0) | (ctrl ? KEYMOD_CTRL : 0) | (alt ? KEYMOD_ALT : 0) | (gui ? KEYMOD_SUPER : 0);
@@ -59,7 +62,7 @@ void kbd_hid_key(uint8_t u, uint8_t mods) {
     case 0x2B: special = '\t'; break;
     }
     if (u >= 0x3A && u <= 0x45) special = KEY_F1 + (u - 0x3A);
-    if (special) { dead = -1; input_push(special | ((special >= 0x100 || special == '\t' || special == '\n') ? m : 0)); return; }
+    if (special) { dead = -1; push_key(u, special | ((special >= 0x100 || special == '\t' || special == '\n') ? m : 0)); return; }
     int c = 0;
     if (u == 0x2C) c = ' ';
     else if (u >= 0x54 && u <= 0x63) c = "/*-+\n1234567890."[u - 0x54];          /* keypad */
@@ -73,7 +76,7 @@ void kbd_hid_key(uint8_t u, uint8_t mods) {
         if (!c) return;
         if (c >= KM_DEAD) {                                      /* accent key: wait for the letter */
             int a = c - KM_DEAD;
-            if (dead == a) { input_push(compose(a, ' ')); dead = -1; }   /* pressed twice: the accent itself */
+            if (dead == a) { push_key(u, compose(a, ' ')); dead = -1; }   /* pressed twice: the accent itself */
             else dead = a;
             return;
         }
@@ -81,18 +84,18 @@ void kbd_hid_key(uint8_t u, uint8_t mods) {
     }
     if (dead >= 0) {
         int r = compose(dead, c);
-        if (r < 0) { input_push(compose(dead, ' ')); r = c; }    /* no such letter: type the accent, then the key */
+        if (r < 0) { push_key(u, compose(dead, ' ')); r = c; }    /* no such letter: type the accent, then the key */
         dead = -1; c = r;
     }
-    if (gui) { input_push(KEYMOD_SUPER | lower(c)); return; }
+    if (gui) { push_key(u, KEYMOD_SUPER | lower(c)); return; }
     if (ctrl && !altgr) {
         int l = lower(c);
-        if (l >= 'a' && l <= 'z') input_push(shift ? (KEYMOD_CTRL | KEYMOD_SHIFT | l) : l - 'a' + 1);
-        else input_push(m | c);
+        if (l >= 'a' && l <= 'z') push_key(u, shift ? (KEYMOD_CTRL | KEYMOD_SHIFT | l) : l - 'a' + 1);
+        else push_key(u, m | c);
         return;
     }
-    if (alt && !altgr) { input_push(KEYMOD_ALT | c); return; }
-    input_push(c);
+    if (alt && !altgr) { push_key(u, KEYMOD_ALT | c); return; }
+    push_key(u, c);
 }
 
 /* the Windows/Super key on its own (pressed and released with nothing else) opens the menu */

@@ -37,7 +37,7 @@ struct lfd { int kind; int flags; uint64_t off; char path[200]; struct chan *rx,
                                 FD_WIN: a struct axwin (shared by duplicates), FD_INET: a struct isock; FD_CHAN after shutdown: its
                                 identity from before (compared only, never used) */
 struct shmmap;
-#define NFD 128
+#define NFD 1024                   /* (Linux's usual limit; Chromium keeps hundreds open) */
 struct lxproc {
     struct lfd fd[NFD];
     char cwd[200];
@@ -51,7 +51,10 @@ struct lxproc {
 };
 /* a range of a program's memory read from a file (its own segments, its loader's, mmap'd libraries): only
  * for /proc/self/maps, which Chromium (and debuggers) read to find code and print stack traces */
-struct fmap { uint64_t s, e, off; char path[120]; };
+/* a part of memory that came from a file (/proc/self/maps, crash reports). lazy: its pages are read from the
+ * file when first touched (lx_fill), up to data_end (zeros after: an ELF segment's bss, or past the end of
+ * the file); vpath is the file as AXIOM names it */
+struct fmap { uint64_t s, e, off; char path[120]; bool lazy; uint64_t data_end; char vpath[200]; };
 /* the file a code address is in (for crash reports) */
 static const struct fmap *fmap_in(struct lxproc *lx, uint64_t a) {
     if (!lx) return 0;
@@ -79,8 +82,51 @@ static void fmap_add(struct lxproc *lx, uint64_t s, uint64_t e, uint64_t off, co
         kfree(lx->fmaps); lx->fmaps = n; lx->capfmaps = nc;
     }
     struct fmap *f = &lx->fmaps[lx->nfmaps++];
+    memset(f, 0, sizeof *f);
     f->s = s; f->e = e; f->off = off;
     strncpy0(f->path, !strncmp(path, "/system/linux/", 14) ? path + 13 : path, sizeof f->path);   /* (as Linux paths see it) */
+}
+static void fmap_add_lazy(struct lxproc *lx, uint64_t s, uint64_t e, uint64_t off, const char *path, uint64_t data_end) {
+    fmap_add(lx, s, e, off, path);
+    if (!lx || !lx->nfmaps || lx->fmaps[lx->nfmaps - 1].s != s) return;
+    struct fmap *f = &lx->fmaps[lx->nfmaps - 1];
+    f->lazy = true; f->data_end = data_end; strncpy0(f->vpath, path, sizeof f->vpath);
+}
+/* m->fill for a Linux program: a new page inside a lazy file mapping gets its bytes from the file, and the
+ * pages around it (256 KiB, read in one go) are put in too, so a big program or file loads a piece at a time
+ * as it's used rather than all at once */
+static uint64_t fill_calls, fill_reads, fill_bytes, fill_us, fill_anon;   /* (Ctrl+\ dump) */
+#define FILL_CHUNK 262144                 /* (256 KiB: the disk reads it in one go) */
+static bool lx_fill(struct mm *m, uint64_t va, uint64_t pa, uint64_t *pages) {
+    struct lxproc *lx = m->fill_ctx;
+    if (!lx) return true;
+    struct fmap *f = 0;
+    for (int i = lx->nfmaps - 1; i >= 0; i--)                     /* (the newest mapping wins) */
+        if (lx->fmaps[i].lazy && va >= lx->fmaps[i].s && va < lx->fmaps[i].e) { f = &lx->fmaps[i]; break; }
+    fill_calls++;
+    if (!f) { fill_anon++; return true; }                        /* (not from a file: stays zero) */
+    uint64_t t0 = uptime_us();
+    uint64_t start = va & ~(uint64_t)(FILL_CHUNK - 1), end = start + FILL_CHUNK;
+    if (start < f->s) start = f->s;
+    if (end > f->e) end = f->e;
+    uint8_t *buf = kmalloc(FILL_CHUNK);
+    if (!buf) return false;
+    memset(buf, 0, FILL_CHUNK);
+    uint64_t data_to = end < f->data_end ? end : f->data_end;
+    if (data_to > start) {
+        long k = vfs_read(f->vpath, buf, f->off + (start - f->s), data_to - start);
+        fill_reads++; if (k > 0) fill_bytes += (uint64_t)k;
+        if (k < 0) {
+            static int said;
+            if (said++ < 3) kprintf("[linux] %s: can't read %s for its memory\n", current->name, f->vpath);
+        }
+    }
+    memcpy(mmio_virt(pa), buf + (va - start), 4096);         /* (where the kernel reaches that page) */
+    for (uint64_t p = start; p < end; p += 4096)                  /* the neighbours, if not there yet */
+        if (p != va) mm_add_page(m, p, buf + (p - start), pages);
+    kfree(buf);
+    fill_us += uptime_us() - t0;
+    return true;
 }
 static void fmap_cut(struct lxproc *lx, uint64_t s, uint64_t e) {   /* [s, e) unmapped or mapped over */
     for (int i = 0; i < lx->nfmaps;) {
@@ -196,6 +242,27 @@ static bool load_elf(struct mm *m, struct lxproc *lx, const char *path, uint64_t
             interp[l] = 0;
         }
     }
+    /* segments are read as they're used (lazy file mappings), unless two share a page (old layouts): then all now */
+    bool lazy = lx != 0;
+    uint64_t prev_end = 0;
+    for (int i = 0; i < n; i++) {
+        if (ph[i].type != 1) continue;
+        uint64_t s = (base + ph[i].vaddr) & ~4095ULL, end = (base + ph[i].vaddr + ph[i].memsz + 4095) & ~4095ULL;
+        if (s < prev_end || (ph[i].offset & 4095) != (ph[i].vaddr & 4095)) lazy = false;
+        prev_end = end;
+    }
+    if (lazy) {
+        for (int i = 0; i < n; i++) {
+            if (ph[i].type != 1) continue;
+            uint64_t s = (base + ph[i].vaddr) & ~4095ULL, end = (base + ph[i].vaddr + ph[i].memsz + 4095) & ~4095ULL;
+            int prot = (ph[i].flags & 4 ? DPROT_READ : 0) | (ph[i].flags & 2 ? DPROT_WRITE : 0) | (ph[i].flags & 1 ? DPROT_EXEC : 0);
+            if (mm_mmap(m, s, end - s, prot ? prot : DPROT_READ, DMAP_FIXED, 0) < 0) return false;
+            fmap_add_lazy(lx, s, end, ph[i].offset & ~4095ULL, path, base + ph[i].vaddr + ph[i].filesz);
+            if (!*phdr && ph[i].offset == 0) *phdr = base + ph[i].vaddr + phoff;
+        }
+        *entry = base + ent; *phnum = e->phnum;
+        return true;
+    }
     uint8_t *buf = kmalloc(65536);
     if (!buf) return false;
     for (int i = 0; i < n; i++) {
@@ -229,6 +296,7 @@ int linux_spawn(const char *path, int argc, char **argv, struct task *out) {
     struct lxproc *lx = kmalloc(sizeof *lx);
     if (!m || !lx) { if (m) mm_put(m); kfree(lx); return -1; }
     memset(lx, 0, sizeof *lx);
+    m->fill = lx_fill; m->fill_ctx = lx;
     uint64_t entry, phdr; int phnum; char interp[128]; bool fixed;
     if (!load_elf(m, lx, path, MAIN_BASE, &entry, &phdr, &phnum, interp, sizeof interp, &fixed)) {
         struct dunc_stat st;
@@ -290,6 +358,7 @@ void linux_task_exit(struct task *t) {
     if (lx->linelen) { lx->line[lx->linelen] = 0; kprintf("[%s] %s\n", t->name, lx->line); }
     for (int i = 0; i < NFD; i++) if (lx->fd[i].kind) fd_close(&lx->fd[i]);   /* (the other ends see end of file) */
     shm_forget_all(lx);
+    if (t->mm && t->mm->fill_ctx == lx) { t->mm->fill = 0; t->mm->fill_ctx = 0; }
     kfree(lx->fmaps);
     for (int i = 0; i < MAX_TASKS; i++) if (tasks[i].lx == lx) tasks[i].lx = 0;
     kfree(lx);
@@ -1418,13 +1487,17 @@ static void lx_abort_trace(struct lxproc *lx, struct frame *f) {
 /* Debugging a Linux program that hangs: Ctrl+\ (0x1C) on the serial line lists each Linux thread, the system
  * call it's in (vector 0x81) or where it was stopped, and the return addresses on its stack (file + offset) */
 void linux_dump_threads(void) {
+    uint64_t up = uptime_ms();
+    kprintf("[dump] page fills: %lu (%lu not from files), %lu file reads, %lu KiB, %lu ms\n", fill_calls, fill_anon, fill_reads, fill_bytes >> 10, fill_us / 1000);
+    for (int c = 0; c < ncpus_on; c++)                           /* how busy each core has been since start-up */
+        kprintf("[dump] core %d: busy %lu ms of %lu (%lu%%)\n", c, cpus[c].busy_us / 1000, up, up ? cpus[c].busy_us / 10 / up : 0);
     for (int i = 0; i < MAX_TASKS; i++) {
         struct task *t = &tasks[i];
         if (!t->state || !t->lx || !t->user || !t->kstack) continue;
         struct frame *f = (struct frame *)(t->kstack_top - sizeof *f);
-        kprintf("[dump] pid %d '%s' state %d: %s %lu (%lx, %lx, %lx) futex %lx rip %lx\n", t->pid, t->name, t->state,
+        kprintf("[dump] pid %d '%s' state %d: %s %lu (%lx, %lx, %lx) futex %lx rip %lx; core %d, %lu ms of CPU\n", t->pid, t->name, t->state,
                 f->vec == 0x81 ? "system call" : "interrupt", f->vec == 0x81 ? f->rax : f->vec, f->rdi, f->rsi, f->rdx,
-                t->futex_addr, f->rip);
+                t->futex_addr, f->rip, t->cpu, t->ticks / 1000);
         struct lxproc *lx = t->lx; int shown = 0;
         for (int k = -1; k < 1024 && shown < 16; k++) {
             uint64_t v;
@@ -1672,7 +1745,8 @@ static uint64_t linux_syscall_(struct frame *f) {
         if (fd->kind != FD_FILE || !(fd->flags & 3)) return E(EBADF_);
         struct dunc_stat st; uint64_t off = n == 18 ? d : fd->off;
         if (vfs_stat(fd->path, &st) == 0 && off == st.size) { if (vfs_append(fd->path, (const void *)b, c) < 0) return E(EINVAL_); }
-        else {                                                  /* writing inside the file: read, change, write back */
+        else if (vfs_pwrite(fd->path, (const void *)b, off, c) == (long)c) { }   /* in place: only what changes */
+        else {                                                  /* (a volume that can't: read, change, write back) */
             uint64_t sz = st.size > off + c ? st.size : off + c;
             uint8_t *buf = kmalloc(sz ? sz : 1); if (!buf) return E(ENOMEM_);
             memset(buf, 0, sz); vfs_read(fd->path, buf, 0, st.size);
@@ -1854,6 +1928,9 @@ static uint64_t linux_syscall_(struct frame *f) {
             return 0;
         }
         case 4: fd->flags = (fd->flags & ~(04000 | 02000)) | ((int)c & (04000 | 02000)); return 0;   /* F_SETFL: O_NONBLOCK, O_APPEND */
+        case 5: case 36:                                       /* F_GETLK, F_OFD_GETLK: nobody else holds a lock (one program per */
+            if (!uok(c, 32, true)) return E(EFAULT_);          /* file: locks are always granted), so say F_UNLCK */
+            *(int16_t *)c = 2; return 0;
         default: return 0;                                     /* F_GETFD / F_SETFD (no exec, so close-on-exec doesn't matter), locks */
         }
     }
@@ -2437,8 +2514,19 @@ static uint64_t linux_syscall_(struct frame *f) {
             o->refs++;
             return (uint64_t)r;
         }
-        if (!(fl & 0x20)) {                                    /* a file: read into private memory */
+        if (!(fl & 0x20)) {                                    /* a file: its pages are read when first touched */
             if (fd < 0 || fd >= NFD || lx->fd[fd].kind != FD_FILE) return E(EBADF_);
+            if (off & 4095) return E(EINVAL_);
+            struct dunc_stat fst;
+            if (vfs_stat(lx->fd[fd].path, &fst) == 0 && !fst.is_dir) {
+                long r = mm_mmap(t->mm, a, b, prot ? prot : DPROT_READ, dfl, &t->proc->pages);
+                if (r < 0) return E(ENOMEM_);
+                if (!prot) mm_mprotect(t->mm, r, b, 0);
+                uint64_t end = ((uint64_t)r + b + 4095) & ~4095ULL;
+                uint64_t data = fst.size > off ? fst.size - off : 0;
+                fmap_add_lazy(lx, (uint64_t)r, end, off, lx->fd[fd].path, (uint64_t)r + (data < b ? data : b));
+                return r;
+            }
             long r = mm_mmap(t->mm, a, b, DPROT_READ | DPROT_WRITE, dfl, &t->proc->pages);
             if (r < 0) return E(ENOMEM_);
             uint8_t *tmp = kmalloc(65536);
@@ -2619,7 +2707,25 @@ static uint64_t linux_syscall_(struct frame *f) {
         }
         return 0;
     }
-    case 97: if (!uok(b, 16, true)) return E(EFAULT_); { ((uint64_t *)b)[0] = a == 3 ? STACK_SIZE : ~0ULL; ((uint64_t *)b)[1] = ~0ULL; } return 0;   /* getrlimit */
+    case 97: if (!uok(b, 16, true)) return E(EFAULT_); { ((uint64_t *)b)[0] = a == 3 ? STACK_SIZE : a == 7 ? NFD : ~0ULL; ((uint64_t *)b)[1] = a == 7 ? NFD : ~0ULL; } return 0;   /* getrlimit */
+    case 98: {                                                 /* getrusage: CPU time (its threads, or this one); the rest 0 */
+        if (!uok(b, 144, true)) return E(EFAULT_);
+        memset((void *)b, 0, 144);
+        uint64_t us = 0;
+        if ((int)a == 1) us = t->ticks;                        /* RUSAGE_THREAD */
+        else for (int i = 0; i < MAX_TASKS; i++) if (tasks[i].state && tasks[i].lx == lx) us += tasks[i].ticks;
+        ((int64_t *)b)[0] = (int64_t)(us / 1000000); ((int64_t *)b)[1] = (int64_t)(us % 1000000);   /* ru_utime */
+        ((int64_t *)b)[4] = (int64_t)(t->proc ? t->proc->pages : t->pages) * 4;                       /* ru_maxrss (KiB) */
+        return 0;
+    }
+    case 85: return do_open(lx, -100, a, 01 | 0100 | 01000);   /* creat: O_WRONLY | O_CREAT | O_TRUNC */
+    case 27: {                                                 /* mincore: say every page is in memory (AXIOM doesn't page out) */
+        if (a & 4095) return E(EINVAL_);
+        uint64_t np = (b + 4095) / 4096;
+        if (!uok(c, np, true)) return E(EFAULT_);
+        memset((void *)c, 1, np);
+        return 0;
+    }
     case 63: {                                                 /* uname */
         if (!uok(a, 390, true)) return E(EFAULT_);
         char *u = (char *)a; memset(u, 0, 390);
@@ -2645,6 +2751,7 @@ static uint64_t linux_syscall_(struct frame *f) {
         if (!uok(b, 4, true)) return E(EFAULT_);
         *(int32_t *)b = 0; return 0;
     case 145: return 0;                                        /* sched_getscheduler: SCHED_OTHER */
+    case 144: return E(EPERM_);                                /* sched_setscheduler: realtime needs privileges (as for a user on Linux) */
     case 334: case 324: case 273: case 332: return E(ENOSYS_); /* rseq, membarrier, set_robust_list, statx */
     case 444: return E(EOPNOTSUPP_);                           /* landlock_create_ruleset: no Landlock (as a kernel without it) */
     case 157: return 0;                                        /* prctl */

@@ -59,7 +59,10 @@ struct axwin_clip { uint64_t data; uint64_t len; uint64_t seq; };   /* data: a p
 struct axwin_event { int32_t type, win, x, y, key, button; };
 enum {
     AXWIN_EV_KEY = 1,          /* key: a character 1..255 (Windows-1252; Ctrl+A..Z = 1..26) or AXWIN_KEY_*,
-                                  plus AXWIN_MOD_* bits for modifiers held with special keys */
+                                  plus AXWIN_MOD_* bits for modifiers held with special keys; the character is
+                                  from the keyboard layout chosen in AXIOM's Settings (accents typed with dead
+                                  keys arrive composed). button: the physical key as a USB HID usage code
+                                  (0x04 = A, the key left of Caps Lock's row...), 0 if not known */
     AXWIN_EV_MOUSE_DOWN,       /* x, y in the window's pixels; button: 1 left, 2 right */
     AXWIN_EV_MOUSE_UP,
     AXWIN_EV_MOUSE_MOVE,

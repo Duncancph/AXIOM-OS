@@ -257,6 +257,10 @@ struct mm {
     int refs;                          /* threads using it */
     struct vma *v; int nv, cap;
     volatile uint64_t tlb_gen;         /* bumped when mappings are taken away or reduced */
+    /* file mappings (Linux programs): a page fault that brings in a new page has it filled here before it's
+     * mapped; false: it can't be (the fault fails) */
+    bool (*fill)(struct mm *m, uint64_t va, uint64_t pa, uint64_t *pages);
+    void *fill_ctx;
 };
 struct mm *mm_new(void);
 void mm_put(struct mm *m);
@@ -266,6 +270,8 @@ long mm_mprotect(struct mm *m, uint64_t addr, uint64_t len, int prot);
 long mm_dontneed(struct mm *m, uint64_t addr, uint64_t len, uint64_t *pages);
 struct frame;
 bool mm_fault(struct mm *m, uint64_t addr, bool write, bool exec, uint64_t *pages);
+bool mm_add_page(struct mm *m, uint64_t va, const void *data, uint64_t *pages);   /* (fill's read-ahead) a page
+                                                         with these 4096 bytes at va, if va is mapped and has none yet */
 int mm_prot_at(struct mm *m, uint64_t addr);
 bool mm_map_shared(struct mm *m, uint64_t va, uint64_t pa, int prot);   /* a page owned elsewhere (not freed with the program) */
 void tlb_sync(void);                   /* before going back to an app: drop stale translations */
@@ -347,6 +353,7 @@ struct cpu {
     int id; uint32_t apic_id;
     volatile bool bkl_held, started;
     uint64_t last_switch_tsc;
+    uint64_t busy_us;                  /* time spent running tasks other than its idle one (Ctrl+\ dump) */
     uint64_t gdt[7] __attribute__((aligned(16)));
     struct tss64 tss;
     uint8_t *df_stack;

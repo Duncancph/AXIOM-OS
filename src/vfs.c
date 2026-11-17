@@ -281,6 +281,16 @@ long vfs_write(const char *path, const void *buf, uint64_t len) {
     return r;
 }
 
+long vfs_pwrite(const char *path, const void *buf, uint64_t off, uint64_t len) {
+    struct path p; char rel[PATH_MAX_];
+    if (!parse(path, &p) || p.n == 0) return FS_EINVAL;
+    lock();
+    struct mount *m = route(&p, rel, sizeof rel);
+    long r = m && m->ops->pwrite ? m->ops->pwrite(m->vol, rel, buf, off, len) : FS_EINVAL;
+    unlock();
+    return r;
+}
+
 long vfs_append(const char *path, const void *buf, uint64_t len) {
     struct dunc_stat st;
     if (vfs_stat(path, &st) == FS_ENOENT) return vfs_write(path, buf, len);

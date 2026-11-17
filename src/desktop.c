@@ -1320,6 +1320,7 @@ static void take_screenshot(void) {
 }
 
 static void handle_key(int k) {
+    int usage = (k >> 16) & 0xFF; k &= 0xFFFF;                /* (see keymap.c) */
     random_event(k);
     last_input = uptime_ms();
     if (screen_off) { screen_wake(); return; }               /* the key just wakes the screen */
@@ -1346,7 +1347,7 @@ static void handle_key(int k) {
     if (menu_open && k == 27) { toggle_menu(false); return; }
     int t = top_window();
     if (t < 0) return;
-    struct dunc_event e = { EV_KEY, wins[t].id, 0, 0, k, 0 };
+    struct dunc_event e = { EV_KEY, wins[t].id, 0, 0, k, usage };   /* button: the physical key (USB usage), 0 if unknown */
     event_push(wins[t].owner, &e);
 }
 

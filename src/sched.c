@@ -285,7 +285,11 @@ void sched_start(void) {
 static void account(void) {
     struct cpu *c = cpu_self();
     uint64_t now = rdtsc();
-    if (c->last_switch_tsc && c->cur) c->cur->ticks += (now - c->last_switch_tsc) / (tsc_hz() / 1000000);
+    if (c->last_switch_tsc && c->cur) {
+        uint64_t us = (now - c->last_switch_tsc) / (tsc_hz() / 1000000);
+        c->cur->ticks += us;
+        if (c->cur != c->idle) c->busy_us += us;
+    }
     c->last_switch_tsc = now;
 }
 uint64_t cpu_time_us(void) { account(); return uptime_us(); }
