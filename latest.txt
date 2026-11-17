@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 151
-notes More apps in Settings > Updates: installs big apps like the coming Chromium-based Vertex (signed, resumable downloads). Longer file names.
-file kernel b151/thane.elf.gz 19244688 0af04fb4630a78c7cb3e0e6da090910654a5ec8a89c2b76cc132507c87c8e730
-file initrd b151/initrd.tar.gz 1372160 7745e2284871177fc5c46a8d855538800c2dd442e6caea984c7d964aa4bd410e
-file bootx64 b151/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b151/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022100942dac6ba2934f9517531770abe9043c45d204d51c3ab01fee23c998a6014d4b02204d7fd0b635d5d7dc1e7e2b141a4c761cabb4e9e20fa5a6f3e2a1c96709b58999
+build 153
+notes Several apps can play sound at once (music, the browser, chimes); copy and paste with Linux programs; Notes can select all, copy and cut.
+file kernel b153/thane.elf.gz 19261984 ab5204294b20e5e7e362067408895ec455d03c8be178c76cc080fc61a558883d
+file initrd b153/initrd.tar.gz 1372160 1231f957653bafe98875a392e5d371ce90eb54ce141952edd3cdf1719d72a472
+file bootx64 b153/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b153/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 30440220166f794cac9a11a7efca08ecb6a6f08653c7c7a18da078c9ceb71087479b1de502207c38528ed4866e09dc8d7bb6e08a237d0025263203792398cb250455dc19e248
