@@ -1,3 +1,4 @@
+vertex
 gtk3
 abiword
 gnumeric

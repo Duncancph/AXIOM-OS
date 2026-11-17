@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 166
-notes Solitaire (Klondike, FreeCell, Spider and 80 more) in Settings > Apps. Linux programs can use signals, and installed apps keep their files' dates.
-file kernel b166/thane.elf.gz 19425536 aea42c14021b530f098e0a4301f73bf0e99b829ba3e5091e72e11fb3994b0cff
-file initrd b166/initrd.tar.gz 2365440 6ebbb2e01480bd3b1273c48c2ac11a84d5cfb146aee9369e8a2ec05cb8004013
-file bootx64 b166/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b166/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3046022100e80fcd2b0991230167e95642a8264ef337dbceddc795960c29666baba32796d702210080d58471e3fa99aa82971b4cd3f7bdd8ad925ea30cc2803835a29e062ba4bf69
+build 169
+notes Vertex 1.0, the full Chromium-based browser, in Settings > Apps. Faster disk writes and fairer multitasking.
+file kernel b169/thane.elf.gz 19459720 16ca59ed700de8bd53949615a6b40f60719d16b108eb16ca2febd4a082b93b11
+file initrd b169/initrd.tar.gz 2375680 dc806e091b60720b0629064def84eb3de925c52b104acfab89faca792886fc2e
+file bootx64 b169/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b169/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 30450220649bd0adb52950912f3c6d238152030df4322af249f2cc0cc9f4f762350dd9cd022100f93f0e8d8b0fecc54da1f89bbcc9ed96e17bdb4b8a4c8a2ce427856c52985098
