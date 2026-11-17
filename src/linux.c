@@ -56,7 +56,8 @@ struct lxproc {
 /* a part of memory that came from a file (/proc/self/maps, crash reports). lazy: its pages are read from the
  * file when first touched (lx_fill), up to data_end (zeros after: an ELF segment's bss, or past the end of
  * the file); vpath is the file as AXIOM names it */
-struct fmap { uint64_t s, e, off; char path[120]; bool lazy; uint64_t data_end; char vpath[200]; };
+struct fmap { uint64_t s, e, off; char path[120]; bool lazy; uint64_t data_end; char vpath[200];
+              uint64_t fid; };   /* fid: the file, for the page cache (0: not worked out yet; 1: can't be shared) */
 /* the file a code address is in (for crash reports) */
 static const struct fmap *fmap_in(struct lxproc *lx, uint64_t a) {
     if (!lx) return 0;
@@ -99,6 +100,35 @@ static void fmap_add_lazy(struct lxproc *lx, uint64_t s, uint64_t e, uint64_t of
  * as it's used rather than all at once */
 static uint64_t fill_calls, fill_reads, fill_bytes, fill_us, fill_anon;   /* (Ctrl+\ dump) */
 #define FILL_CHUNK 262144                 /* (256 KiB: the disk reads it in one go) */
+/* files a Linux program has opened for writing, renamed or deleted (by their path's hash): their pages aren't
+ * shared through the page cache, which knows a file only by its path, size and date (FAT's dates move in steps
+ * of 2 s), so it couldn't tell a rewritten file from the old one. (SQLite maps its databases read-only while it
+ * writes them.) Program files and libraries are only read, so they're the ones shared. */
+#define PCW_SLOTS 4096
+static uint64_t pc_written[PCW_SLOTS];
+static uint64_t path_hash(const char *p) {
+    uint64_t h = 1469598103934665603ull;
+    for (; *p; p++) h = (h ^ (uint8_t)*p) * 1099511628211ull;
+    return h | 1;
+}
+static bool pc_was_written(const char *p) {
+    uint64_t h = path_hash(p);
+    for (unsigned i = 0; i < PCW_SLOTS; i++) {
+        uint64_t *e = &pc_written[(h + i) % PCW_SLOTS];
+        if (!*e) return false;
+        if (*e == h) return true;
+    }
+    return true;                                       /* (full: share nothing new) */
+}
+static void pc_file_written(const char *p) {
+    uint64_t h = path_hash(p);
+    for (unsigned i = 0; i < PCW_SLOTS; i++) {
+        uint64_t *e = &pc_written[(h + i) % PCW_SLOTS];
+        if (*e == h) return;
+        if (!*e) { *e = h; return; }
+    }
+}
+
 static bool lx_fill(struct mm *m, uint64_t va, uint64_t pa, uint64_t *pages) {
     struct lxproc *lx = m->fill_ctx;
     if (!lx) return true;
@@ -111,6 +141,35 @@ static bool lx_fill(struct mm *m, uint64_t va, uint64_t pa, uint64_t *pages) {
     uint64_t start = va & ~(uint64_t)(FILL_CHUNK - 1), end = start + FILL_CHUNK;
     if (start < f->s) start = f->s;
     if (end > f->e) end = f->e;
+    /* read-only (program code, read-only data): from the page cache, shared with every program that maps it */
+    int prot = mm_prot_at(m, va);
+    if (prot && !(prot & DPROT_WRITE)) {
+        if (!f->fid) {                                         /* the file: its path, size and date */
+            struct dunc_stat st; int64_t mt = vfs_mtime(f->vpath);
+            uint64_t h = path_hash(f->vpath);
+            if (!pc_was_written(f->vpath) && vfs_stat(f->vpath, &st) == FS_OK) { h = (h ^ st.size) * 1099511628211ull; h = (h ^ (uint64_t)mt) * 1099511628211ull; f->fid = h | 2; }
+            else f->fid = 1;
+        }
+        if (f->fid != 1) {
+            #define PG_VALID(p) (uint32_t)((p) >= f->data_end ? 0 : f->data_end - (p) >= 4096 ? 4096 : f->data_end - (p))
+            if (mm_map_cached(m, va, f->fid, f->off + (va - f->s), PG_VALID(va), 0)) {   /* there already: no reading */
+                for (uint64_t p = start; p < end; p += 4096) if (p != va) mm_map_cached(m, p, f->fid, f->off + (p - f->s), PG_VALID(p), 0);
+                fill_us += uptime_us() - t0;
+                return true;                                   /* (mm_fault sees the page there and drops its own) */
+            }
+            uint8_t *cb = kmalloc(FILL_CHUNK);
+            if (cb) {
+                memset(cb, 0, FILL_CHUNK);
+                uint64_t to = end < f->data_end ? end : f->data_end;
+                if (to > start) { long k = vfs_read(f->vpath, cb, f->off + (start - f->s), to - start); fill_reads++; if (k > 0) fill_bytes += (uint64_t)k; }
+                bool ok = mm_map_cached(m, va, f->fid, f->off + (va - f->s), PG_VALID(va), cb + (va - start));
+                for (uint64_t p = start; ok && p < end; p += 4096) if (p != va) mm_map_cached(m, p, f->fid, f->off + (p - f->s), PG_VALID(p), cb + (p - start));
+                kfree(cb);
+                if (ok) { fill_us += uptime_us() - t0; return true; }
+            }
+            #undef PG_VALID
+        }
+    }
     uint8_t *buf = kmalloc(FILL_CHUNK);
     if (!buf) return false;
     memset(buf, 0, FILL_CHUNK);
@@ -1600,6 +1659,7 @@ static uint64_t do_open(struct lxproc *lx, int dirfd, uint64_t upath, int flags)
     } else if ((flags & 0300) == 0300) return E(EEXIST_);         /* O_CREAT|O_EXCL */
     if (exists && st.is_dir && acc) return E(EISDIR_);
     if ((flags & 0200000) && !st.is_dir) return E(ENOTDIR_);      /* O_DIRECTORY */
+    if (acc && !st.is_dir) pc_file_written(full);
     if (acc && (flags & 01000)) vfs_write(full, "", 0);            /* O_TRUNC */
     int fd = fd_new(lx, 0);
     if (fd < 0) return E(EMFILE_);
@@ -2776,6 +2836,7 @@ static uint64_t linux_syscall_(struct frame *f) {
         char p[200], full[200];
         if (!ustr(p, n == 263 ? b : a, sizeof p)) return E(EFAULT_);
         path_join(lx->cwd, p, full, sizeof full);
+        pc_file_written(full);
         return vfs_delete(full) == 0 ? 0 : E(ENOENT_);
     }
     case 86: case 265: {                                       /* link, linkat: FAT has no hard links, so a copy (same
@@ -2823,6 +2884,7 @@ static uint64_t linux_syscall_(struct frame *f) {
         char p[200], q[200], f1[200], f2[200];
         if (!ustr(p, n == 82 ? a : b, sizeof p) || !ustr(q, n == 82 ? b : d, sizeof q)) return E(EFAULT_);
         path_join(lx->cwd, p, f1, sizeof f1); path_join(lx->cwd, q, f2, sizeof f2);
+        pc_file_written(f1); pc_file_written(f2);
         if (n == 316 && (e & 1)) {                             /* RENAME_NOREPLACE */
             struct dunc_stat st; if (vfs_stat(f2, &st) == FS_OK) return E(EEXIST_);
         }

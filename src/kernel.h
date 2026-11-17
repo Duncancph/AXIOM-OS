@@ -264,7 +264,9 @@ struct mm {
 };
 struct mm *mm_new(void);
 void mm_put(struct mm *m);
-struct mm *mm_fork(struct mm *src, uint64_t *pages);   /* a copy (a Linux fork): own pages copied, shared ones mapped again */
+struct mm *mm_fork(struct mm *src, uint64_t *pages);
+bool mm_map_cached(struct mm *m, uint64_t va, uint64_t fid, uint64_t off, uint32_t valid, const void *data);   /* the page cache (vm.c) */
+uint64_t pcache_pages(void);   /* a copy (a Linux fork): own pages copied, shared ones mapped again */
 long mm_mmap(struct mm *m, uint64_t addr, uint64_t len, int prot, int flags, uint64_t *pages);
 long mm_munmap(struct mm *m, uint64_t addr, uint64_t len, uint64_t *pages);
 long mm_mprotect(struct mm *m, uint64_t addr, uint64_t len, int prot);

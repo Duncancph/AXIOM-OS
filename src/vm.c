@@ -8,11 +8,13 @@
 #define U 4ULL
 #define OWNED (1ULL << 9)     /* page belongs to this address space; free it on exit */
 #define SHARED (1ULL << 10)   /* page belongs to something else (a Linux program's shared memory): never freed here */
+#define CACHED (1ULL << 11)   /* (with SHARED) a page of the file page cache: counted, freed when nothing maps it */
 #define NX (1ULL << 63)       /* not executable (EFER.NXE is on) */
 #define ADDR(e) ((e) & 0x000FFFFFFFFFF000ULL)
 #define USER_PML4_INDEX 1     /* 0x8000000000 - 0x10000000000 */
 
 extern uint64_t boot_pml4[];
+static uint64_t pte_release(uint64_t pte);
 
 /* Programs copy the kernel's top-level page table entries when they're created, so the kernel
  * window must already exist: pre-create its PML4 entries at boot. */
@@ -106,7 +108,7 @@ void vm_destroy(uint64_t *pml4) {
                 if (!(l2[j] & P)) continue;
                 uint64_t *l1 = (uint64_t *)ADDR(l2[j]);
                 for (int k = 0; k < 512; k++)
-                    if ((l1[k] & OWNED) && ADDR(l1[k])) upage_free(ADDR(l1[k]));   /* (PROT_NONE pages too) */
+                    if (l1[k]) pte_release(l1[k]);                 /* (PROT_NONE pages too; cached ones counted down) */
                 page_free(l1);
             }
             page_free(l2);
@@ -217,7 +219,7 @@ static uint64_t pte_flags(int prot) {
 }
 /* new protection for a page that's there: keeps whether it's the program's own or shared */
 static uint64_t pte_reprot(uint64_t pte, int prot) {
-    return ADDR(pte) | (pte_flags(prot) & ~OWNED) | (pte & (OWNED | SHARED));
+    return ADDR(pte) | (pte_flags(prot) & ~OWNED) | (pte & (OWNED | SHARED | CACHED));
 }
 static bool pte_kept(uint64_t pte) { return (pte & (OWNED | SHARED)) && ADDR(pte); }
 
@@ -253,6 +255,82 @@ void tlb_sync(void) {
 }
 
 static bool in_area(uint64_t s, uint64_t e) { return s >= USER_MMAP && e <= USER_MMAP_END && s < e; }
+
+/* ---------------- the page cache: read-only pages of files, shared by every program that maps them ----------------
+ * A page is known by its file (an id the caller makes from the file's path, size and date), its offset in the file
+ * and how many of its bytes come from the file (the rest are zeros, e.g. where an ELF segment's bss starts). Each
+ * mapping of it is counted; when none is left, the page is freed. Pages are mapped read-only (SHARED | CACHED):
+ * a program that makes one writable (mprotect) gets its own copy first. */
+struct pce { uint64_t fid, off, pa; uint32_t valid; int maps; struct pce *knext, *pnext; };
+#define PC_BUCKETS 16384
+static struct pce **pc_key, **pc_pa;
+static uint64_t pc_pages;                                  /* pages in the cache now */
+static unsigned pc_khash(uint64_t fid, uint64_t off, uint32_t v) { uint64_t h = fid ^ (off * 0x9E3779B97F4A7C15ULL) ^ v; return (unsigned)(h ^ (h >> 29)) & (PC_BUCKETS - 1); }
+static unsigned pc_phash(uint64_t pa) { return (unsigned)((pa >> 12) * 2654435761u) & (PC_BUCKETS - 1); }
+static bool pc_init(void) {
+    if (pc_key) return true;
+    pc_key = kmalloc(PC_BUCKETS * sizeof *pc_key); pc_pa = kmalloc(PC_BUCKETS * sizeof *pc_pa);
+    if (!pc_key || !pc_pa) { kfree(pc_key); kfree(pc_pa); pc_key = pc_pa = 0; return false; }
+    memset(pc_key, 0, PC_BUCKETS * sizeof *pc_key); memset(pc_pa, 0, PC_BUCKETS * sizeof *pc_pa);
+    return true;
+}
+static struct pce *pc_by_pa(uint64_t pa) {
+    if (!pc_pa) return 0;
+    for (struct pce *e = pc_pa[pc_phash(pa)]; e; e = e->pnext) if (e->pa == pa) return e;
+    return 0;
+}
+static void pc_ref(uint64_t pa) { struct pce *e = pc_by_pa(pa); if (e) e->maps++; }
+static void pc_unref(uint64_t pa) {
+    struct pce *e = pc_by_pa(pa);
+    if (!e || --e->maps > 0) return;
+    for (struct pce **pp = &pc_key[pc_khash(e->fid, e->off, e->valid)]; *pp; pp = &(*pp)->knext) if (*pp == e) { *pp = e->knext; break; }
+    for (struct pce **pp = &pc_pa[pc_phash(e->pa)]; *pp; pp = &(*pp)->pnext) if (*pp == e) { *pp = e->pnext; break; }
+    upage_free(e->pa); pc_pages--;
+    kfree(e);
+}
+uint64_t pcache_pages(void) { return pc_pages; }
+/* a page table entry is going: let go of what it holds (a program's own page, or a cached one) */
+static uint64_t pte_release(uint64_t pte) {
+    if ((pte & CACHED) && ADDR(pte)) { pc_unref(ADDR(pte)); return 0; }
+    if ((pte & OWNED) && ADDR(pte)) { upage_free(ADDR(pte)); return 1; }
+    return 0;
+}
+/* map the cached page of (fid, off, valid) at va, read-only with the area's protection. If it isn't cached yet:
+ * with data (4096 bytes: the page as it should be), it is now; without, false (the caller reads the file) */
+bool mm_map_cached(struct mm *m, uint64_t va, uint64_t fid, uint64_t off, uint32_t valid, const void *data) {
+    if (!m || (va & 4095) || !in_area(va, va + 4096) || !pc_init()) return false;
+    int i = vma_find(m, va);
+    if (i >= m->nv || m->v[i].s > va || !m->v[i].prot || (m->v[i].prot & DPROT_WRITE)) return false;
+    uint64_t *pte = pte_of(m->pml4, va, true);
+    if (!pte || pte_kept(*pte)) return false;                 /* (there already) */
+    struct pce *e = 0;
+    for (e = pc_key[pc_khash(fid, off, valid)]; e; e = e->knext) if (e->fid == fid && e->off == off && e->valid == valid) break;
+    if (!e) {
+        if (!data) return false;
+        e = kmalloc(sizeof *e);
+        uint64_t pg = e ? upage_alloc() : 0;
+        if (!pg) { kfree(e); return false; }
+        memcpy(mmio_virt(pg), data, 4096);
+        e->fid = fid; e->off = off; e->valid = valid; e->pa = pg; e->maps = 0;
+        unsigned k = pc_khash(fid, off, valid), h = pc_phash(pg);
+        e->knext = pc_key[k]; pc_key[k] = e; e->pnext = pc_pa[h]; pc_pa[h] = e;
+        pc_pages++;
+    }
+    e->maps++;
+    *pte = e->pa | (pte_flags(m->v[i].prot) & ~OWNED) | SHARED | CACHED;
+    __asm__ volatile("invlpg (%0)" ::"r"(va) : "memory");
+    return true;
+}
+/* a cached page about to become writable here: this program gets its own copy (false: no memory) */
+static bool pte_uncache(uint64_t *pte) {
+    uint64_t pg = upage_alloc();
+    if (!pg) return false;
+    memcpy(mmio_virt(pg), mmio_virt(ADDR(*pte)), 4096);
+    uint64_t old = *pte;
+    *pte = pg | (old & ~(0x000FFFFFFFFFF000ULL | SHARED | CACHED)) | OWNED;
+    pc_unref(ADDR(old));
+    return true;
+}
 /* drop the pages of [s, e) (freeing the program's own) */
 static uint64_t drop_pages(struct mm *m, uint64_t s, uint64_t e) {
     uint64_t freed = 0;
@@ -263,7 +341,7 @@ static uint64_t drop_pages(struct mm *m, uint64_t s, uint64_t e) {
         t = next_level(t, (a >> 21) & 511, false);
         if (!t) { a = (a | ((1ULL << 21) - 1)) + 1 - 4096; continue; }      /* nothing in this 2 MiB */
         uint64_t *pte = &t[(a >> 12) & 511];
-        if (*pte) { if ((*pte & OWNED) && ADDR(*pte)) { upage_free(ADDR(*pte)); freed++; } *pte = 0; }
+        if (*pte) { freed += pte_release(*pte); *pte = 0; }
     }
     return freed;
 }
@@ -331,6 +409,7 @@ long mm_mprotect(struct mm *m, uint64_t addr, uint64_t len, int prot) {
         t = next_level(t, (a >> 21) & 511, false);
         if (!t) { a = (a | ((1ULL << 21) - 1)) + 1 - 4096; continue; }
         uint64_t *pte = &t[(a >> 12) & 511];
+        if ((*pte & CACHED) && (prot & DPROT_WRITE) && !pte_uncache(pte)) return -DERR_NOMEM;   /* (its own copy to write) */
         if (pte_kept(*pte)) *pte = pte_reprot(*pte, prot & 7);
     }
     tlb_shootdown(m);
@@ -379,7 +458,7 @@ struct mm *mm_fork(struct mm *src, uint64_t *pages) {
                 uint64_t va = ((uint64_t)USER_PML4_INDEX << 39) | ((uint64_t)i << 30) | ((uint64_t)j << 21) | ((uint64_t)k << 12);
                 uint64_t *pte = pte_of(m->pml4, va, true);
                 if (!pte) { mm_put(m); return 0; }
-                if (e & SHARED) { *pte = e; continue; }                         /* (its owner keeps it) */
+                if (e & SHARED) { *pte = e; if (e & CACHED) pc_ref(ADDR(e)); continue; }   /* (its owner keeps it) */
                 uint64_t pg = upage_alloc();
                 if (!pg) { mm_put(m); return 0; }
                 memcpy(mmio_virt(pg), mmio_virt(ADDR(e)), 4096);
@@ -410,7 +489,7 @@ bool mm_map_shared(struct mm *m, uint64_t va, uint64_t pa, int prot) {
     if (!m || (va & 4095) || !in_area(va, va + 4096)) return false;
     uint64_t *pte = pte_of(m->pml4, va, true);
     if (!pte) return false;
-    if ((*pte & OWNED) && ADDR(*pte)) upage_free(ADDR(*pte));
+    if (*pte) pte_release(*pte);
     *pte = pa | (pte_flags(prot & 7) & ~OWNED) | SHARED;
     __asm__ volatile("invlpg (%0)" ::"r"(va) : "memory");
     return true;
