@@ -463,13 +463,16 @@ out:
  * line in /apps (it then opens from the dock and menu as a Linux program). */
 #define MAXPKG 4
 struct pkg { char id[24], name[32], version[16], icon[16], desc[100], url[240], run[160], sha[65]; long size, isize, minb;
-             char have[16]; bool root; };   /* have: the installed version, "" if none; root: unpacks into the Linux
+             char have[16]; bool root; char req[24]; bool gz; };   /* have: the installed version, "" if none; root: unpacks into the Linux
                                                folder itself (lib/, usr/, opt/... the package brings what it needs) */
 static struct pkg pkgs[MAXPKG]; static int npkg, pk_busy = -1, pk_state; static bool pk_looked;
 static char pk_msg[160]; static uint32_t pk_col;
 static long pk_got, pk_total, pk_t0, pk_got0;
 enum { PK_IDLE, PK_DOWNLOAD, PK_VERIFY, PK_UNPACK, PK_DONE, PK_FAILED };
-static void pk_say(uint32_t col, const char *m) { strncpy0(pk_msg, m, sizeof pk_msg); pk_col = col; }
+static void pk_say(uint32_t col, const char *m) {
+    strncpy0(pk_msg, m, sizeof pk_msg); pk_col = col;
+    if (col == UI_RED && m[0]) { char l[300]; ksnprintf(l, sizeof l, "[apps] %s\n", m); sys_log(l); }   /* (the whole message, for the log) */
+}
 static void field_of(const char *t, long n, const char *name, char *out, int max) {
     out[0] = 0; int nl = (int)strlen(name);
     for (const char *p = t; p < t + n;) {
@@ -514,6 +517,8 @@ static void look_for_packages(void) {
             field_of(m.p, m.n, "installed-size", t, sizeof t); q->isize = katoi(t);
             field_of(m.p, m.n, "min-build", t, sizeof t); q->minb = katoi(t);
             field_of(m.p, m.n, "root", t, sizeof t); q->root = !strcmp(t, "yes");
+            field_of(m.p, m.n, "requires", q->req, sizeof q->req);       /* another package to install first */
+            field_of(m.p, m.n, "compression", t, sizeof t); q->gz = !strcmp(t, "gzip");
             bool ok = q->id[0] && q->url[0] && q->run[0] && strlen(q->sha) == 64 && q->size > 0;
             for (char *c = q->id; *c; c++) if (!((*c >= 'a' && *c <= 'z') || (*c >= '0' && *c <= '9') || *c == '-')) ok = false;   /* (it becomes a folder name) */
             if (ok) { installed_version(q->id, q->have, sizeof q->have); npkg++; }
@@ -598,13 +603,53 @@ static long untar(const char *tar, long tsize, const char *dir) {
     free(chunk);
     return files;
 }
+/* A gzip package archive is a series of gzip members (each at most GZ_MEMBER bytes once expanded, as
+ * tools/make-package.py --gzip writes them: still a normal .tar.gz to gzip and tar). It's expanded a member at a
+ * time into a plain tar next to it, which untar then reads. (The download's SHA-256 has been checked already.) */
+#define GZ_MEMBER (1 << 20)
+static void *gz_al(void *c, size_t n) { (void)c; return malloc(n); }
+static void gz_fr(void *c, void *p) { (void)c; free(p); }
+static long gz_expand(const char *gz, long gsize, const char *out) {
+    long inmax = GZ_MEMBER + (GZ_MEMBER >> 3) + 4096;            /* a member that didn't compress, and its header */
+    uint8_t *in = malloc(inmax), *ob = malloc(GZ_MEMBER);
+    if (!in || !ob) { free(in); free(ob); ksnprintf(untar_err, sizeof untar_err, "not enough memory"); return -1; }
+    struct img_alloc al = { 0, gz_al, gz_fr };
+    long off = 0, total = 0;
+    fs_write(out, "", 0);
+    while (off < gsize) {
+        long n = gsize - off; if (n > inmax) n = inmax;
+        if (fs_read(gz, in, off, n) != n) { ksnprintf(untar_err, sizeof untar_err, "reading the archive at %ld", off); total = -1; break; }
+        if (n < 18 || in[0] != 0x1f || in[1] != 0x8b || in[2] != 8) { ksnprintf(untar_err, sizeof untar_err, "not gzip at %ld", off); total = -1; break; }
+        long h = 10; uint8_t fl = in[3];
+        if (fl & 4) h += 2 + (in[10] | in[11] << 8);               /* FEXTRA */
+        if (fl & 8) { while (h < n && in[h]) h++; h++; }           /* FNAME */
+        if (fl & 16) { while (h < n && in[h]) h++; h++; }          /* FCOMMENT */
+        if (fl & 2) h += 2;                                        /* FHCRC */
+        size_t used = 0;
+        long k = h < n ? inflate_raw(in + h, (size_t)(n - h), ob, GZ_MEMBER, &used, &al) : -1;
+        if (k < 0) { ksnprintf(untar_err, sizeof untar_err, "a damaged or too large gzip member at %ld", off); total = -1; break; }
+        if (fs_append(out, ob, k) != k) { ksnprintf(untar_err, sizeof untar_err, "writing the archive (disk full?)"); total = -1; break; }
+        total += k; off += h + (long)used + 8;                     /* (the trailer: CRC-32 and size) */
+    }
+    free(in); free(ob);
+    return total;
+}
 static void pkg_install(int i) {
     struct pkg *q = &pkgs[i];
     if (q->minb > ubuild_now) { char m[120]; ksnprintf(m, sizeof m, "%s needs AXIOM build %ld or later: update AXIOM first.", q->name, q->minb); pk_say(UI_RED, m); return; }
+    if (q->req[0]) {                                           /* what it needs first (e.g. GTK for a GTK app) */
+        int j = -1; for (int k = 0; k < npkg; k++) if (!strcmp(pkgs[k].id, q->req)) j = k;
+        if (j < 0) { char m[120]; ksnprintf(m, sizeof m, "%s needs %s, which isn't offered here.", q->name, q->req); pk_say(UI_RED, m); return; }
+        if (!pkgs[j].have[0]) {
+            char m[120]; ksnprintf(m, sizeof m, "Installing %s first (%s needs it)...", pkgs[j].name, q->name); pk_say(UI_MUTED, m); draw();
+            pkg_install(j);
+            if (!pkgs[j].have[0]) return;                       /* (it said why) */
+        }
+    }
     pk_busy = i; pk_state = PK_DOWNLOAD;
     char tmp[160], dir[120];
     fs_mkdir("/system/linux/.downloads");
-    ksnprintf(tmp, sizeof tmp, "/system/linux/.downloads/%s-%s.tar", q->id, q->version);
+    ksnprintf(tmp, sizeof tmp, "/system/linux/.downloads/%s-%s.tar%s", q->id, q->version, q->gz ? ".gz" : "");
     if (q->root) strncpy0(dir, "/system/linux", sizeof dir); else ksnprintf(dir, sizeof dir, "/system/linux/opt/%s", q->id);
     struct dl d; memset(&d, 0, sizeof d); d.path = tmp; d.buf = malloc(1 << 20);
     if (!d.buf) { pk_say(UI_RED, "Not enough memory to download."); pk_state = PK_FAILED; return; }
@@ -659,7 +704,14 @@ static void pkg_install(int i) {
     }
     pk_state = PK_UNPACK; pk_say(UI_MUTED, "Unpacking..."); draw();
     fs_mkdir("/system/linux/opt"); fs_mkdir(dir);
-    long files = untar(tmp, q->size, dir);
+    long tsize = q->size;
+    if (q->gz) {
+        char plain[160]; ksnprintf(plain, sizeof plain, "/system/linux/.downloads/%s-%s.tar", q->id, q->version);
+        tsize = gz_expand(tmp, q->size, plain);
+        if (tsize < 0) { fs_delete(plain); char m[200]; ksnprintf(m, sizeof m, "Couldn't unpack it: %s", untar_err); pk_state = PK_FAILED; pk_busy = -1; pk_say(UI_RED, m); return; }
+        fs_delete(tmp); strncpy0(tmp, plain, sizeof tmp);
+    }
+    long files = untar(tmp, tsize, dir);
     if (files < 0) { char m[200]; ksnprintf(m, sizeof m, "Couldn't unpack it: %s", untar_err); pk_state = PK_FAILED; pk_busy = -1; pk_say(UI_RED, m); return; }
     fs_delete(tmp);
     /* the app's line in /apps: it runs as a Linux program from its folder */

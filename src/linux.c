@@ -98,7 +98,7 @@ enum { EPERM_ = 1, ENOENT_ = 2, EBADF_ = 9, EAGAIN_ = 11, ENOMEM_ = 12, EFAULT_ 
        EACCES_ = 13, EBUSY_ = 16, ENODEV_ = 19, ENOSPC_ = 28, EINVAL_ = 22, EMFILE_ = 24, ENOTTY_ = 25, ESPIPE_ = 29, EPIPE_ = 32, ERANGE_ = 34, ENOSYS_ = 38, ENOTSOCK_ = 88,
        EMSGSIZE_ = 90, ENOPROTOOPT_ = 92, EOPNOTSUPP_ = 95, EAFNOSUPPORT_ = 97, ETIMEDOUT_ = 110, EINTR_ = 4, EPROTONOSUPPORT_ = 93,
        EADDRINUSE_ = 98, ENETDOWN_ = 100, ENETUNREACH_ = 101, ECONNRESET_ = 104, ENOBUFS_ = 105, EISCONN_ = 106, ENOTCONN_ = 107,
-       ECONNREFUSED_ = 111, EHOSTUNREACH_ = 113, EALREADY_ = 114, EINPROGRESS_ = 115, EDESTADDRREQ_ = 89 };
+       ECONNREFUSED_ = 111, ENOTEMPTY_ = 39, EHOSTUNREACH_ = 113, EALREADY_ = 114, EINPROGRESS_ = 115, EDESTADDRREQ_ = 89 };
 
 static bool uok(uint64_t p, uint64_t n, bool w) { return n == 0 || user_ok(current->pml4, (const void *)p, n, w); }
 static bool ustr(char *dst, uint64_t src, size_t max) {
@@ -1320,7 +1320,7 @@ uint64_t linux_syscall(struct frame *f) {
     switch (f->rax) {
     case 0: case 1: case 3: case 5: case 8: case 16: case 17: case 18: case 19: case 20: case 32: case 33: case 72:
     case 77: case 138: case 217: case 285: case 292: case 44: case 45: case 46: case 47: case 48: case 232: case 281: case 54: case 55:
-    case 286: case 287: case 441: case 74: case 75: case 81: case 42: case 43: case 49: case 50: case 51: case 52: case 288: case 73: case 299: case 307:
+    case 221: case 286: case 287: case 441: case 74: case 75: case 81: case 42: case 43: case 49: case 50: case 51: case 52: case 288: case 73: case 299: case 307:
         f->rdi = (uint32_t)f->rdi; break;                        /* the first argument is a file */
     case 233: f->rdi = (uint32_t)f->rdi; f->rdx = (uint32_t)f->rdx; break;   /* epoll_ctl: two */
     case 9: f->r8 = (uint64_t)(int64_t)(int32_t)f->r8; f->rdx = (uint32_t)f->rdx; f->r10 = (uint32_t)f->r10; break;   /* mmap: fd (-1 for none), prot, flags */
@@ -1935,6 +1935,8 @@ static uint64_t linux_syscall_(struct frame *f) {
         long r = vfs_write(fd->path, buf, want); kfree(buf);
         return r < 0 ? E(EINVAL_) : 0;
     }
+    case 221:                                                  /* fadvise64: only advice */
+        return a < NFD && lx->fd[a].kind ? 0 : E(EBADF_);
     case 74: case 75:                                          /* fsync, fdatasync: writes go straight to the volume */
         return a < NFD && lx->fd[a].kind ? 0 : E(EBADF_);
     case 283: {                                                /* timerfd_create */
@@ -2222,7 +2224,21 @@ static uint64_t linux_syscall_(struct frame *f) {
         char p[200], q[200], f1[200], f2[200];
         if (!ustr(p, n == 82 ? a : b, sizeof p) || !ustr(q, n == 82 ? b : d, sizeof q)) return E(EFAULT_);
         path_join(lx->cwd, p, f1, sizeof f1); path_join(lx->cwd, q, f2, sizeof f2);
-        return vfs_rename(f1, f2) == 0 ? 0 : E(ENOENT_);
+        if (n == 316 && (e & 1)) {                             /* RENAME_NOREPLACE */
+            struct dunc_stat st; if (vfs_stat(f2, &st) == FS_OK) return E(EEXIST_);
+        }
+        int r = vfs_rename(f1, f2);
+        if (r == FS_EEXIST && strcmp(f1, f2)) {                /* Linux replaces a file that's there (how programs save) */
+            struct dunc_stat s1, s2;
+            if (vfs_stat(f1, &s1) != FS_OK) return E(ENOENT_);
+            if (vfs_stat(f2, &s2) == FS_OK && s2.is_dir) return s1.is_dir ? E(ENOTEMPTY_) : E(EISDIR_);
+            if (s1.is_dir) return E(ENOTDIR_);
+            if (vfs_delete(f2) != FS_OK) return E(EACCES_);
+            r = vfs_rename(f1, f2);
+        }
+        if (r == FS_OK || (r == FS_EEXIST && !strcmp(f1, f2))) return 0;
+        static int said; if (said++ < 10) kprintf("[linux] rename %s -> %s: %d\n", f1, f2, r);
+        return r == FS_ENOENT ? E(ENOENT_) : r == FS_ENOTDIR ? E(ENOTDIR_) : r == FS_ENOSPC ? E(ENOSPC_) : r == FS_EINVAL ? E(EINVAL_) : E(EACCES_);
     }
 
     /* ---- memory ---- */
