@@ -1,6 +1,6 @@
 /* Sound: Intel High Definition Audio (PCI class 04:03), as found in nearly every PC since 2004.
- * Finds the codec's speaker / headphone / line-out pins, routes them to a DAC, and plays
- * 48 kHz 16-bit stereo from one buffer. Volume (Settings > Sound) is applied in software. */
+ * Finds the codec's speaker / headphone / line-out pins, routes them to a DAC, and plays 48 kHz 16-bit stereo
+ * from one ring buffer, filled by the mixer below (every app's sound together; volume applied in software). */
 #include "kernel.h"
 
 #define RATE 48000
@@ -34,9 +34,8 @@ static struct hdac *C = &none;                 /* the one in use (or being set u
 #define dacs    (C->dacs)
 #define ndacs   (C->ndacs)
 #define ready   (C->ready)
-static uint64_t play_until;
-static bool streaming, paused;
-static uint64_t last_write;            /* a stream nobody writes to for 10 s is stopped (its app may have quit) */
+static bool streaming;                 /* the device stream is running */
+static int dev_kind;                   /* where the mix goes: 0 nowhere, 1 this HD Audio chip, 2 a Bluetooth speaker */
 
 static char rep[2500]; static int replen;  /* what was found, for Settings > Sound > Details */
 static void note(const char *f, ...) {
@@ -298,8 +297,8 @@ void hda_choose(void) {
     if (!pick) pick = &none;
     if (pick == C) return;
     if (streaming) stream_end();
-    if (play_until) { play_until = 0; stream_stop(); }
     C = pick;
+    if (dev_kind == 1) dev_kind = 0;           /* (the mixer starts the new one) */
     if (C != &none) note("playing through %s", C->hdmi ? "the monitor (HDMI)" : "the PC's sound chip (jack / speaker)");
 }
 const char *hda_report(void) { return rep; }
@@ -313,38 +312,7 @@ int hda_outputs(char *out, int n) {
 const char *hda_current(void) { return C == &none ? "" : C->hdmi ? "monitor" : "jack"; }
 
 static int vol_scale(void) { int v = settings_int("sound.volume"); if (v < 0) v = 0; if (v > 100) v = 100; return v * v; }   /* 0..10000 */
-/* sound for a Bluetooth speaker (bt.c), with the volume applied */
-static bool bt_streaming;
-static long bt_write(const int16_t *pcm, long frames, int rate) {
-    static int16_t tmp[4096];
-    int scale = vol_scale(); long done = 0;
-    while (done < frames) {
-        long n = frames - done < 2048 ? frames - done : 2048;
-        for (long i = 0; i < n * 2; i++) tmp[i] = (int16_t)((int32_t)pcm[done * 2 + i] * scale / 10000);
-        long t = bta_write(tmp, n, rate);
-        done += t;
-        if (t < n) break;
-    }
-    return done;
-}
-/* play 16-bit stereo 48 kHz samples (frames = sample pairs) */
-static int play(const int16_t *pcm, uint32_t frames) {
-    if (bta_active()) { if (bt_streaming) return -1; bt_write(pcm, frames, RATE); return 0; }   /* to the Bluetooth speaker */
-    if (!ready || streaming) return -1;                      /* music is playing: no chimes */
-    if (frames > (uint32_t)RATE * MAX_SECONDS) frames = RATE * MAX_SECONDS;
-    stream_stop();
-    int vol = settings_int("sound.volume"); if (vol < 0) vol = 0; if (vol > 100) vol = 100;
-    int scale = vol * vol;                     /* 0..10000: closer to how loud it sounds */
-    int16_t *o = (int16_t *)buf;
-    for (uint32_t i = 0; i < frames * 2; i++) o[i] = (int16_t)((int32_t)pcm[i] * scale / 10000);
-    memset(buf + frames * 4, 0, BUF_BYTES - frames * 4);
-    w8(sd_off, r8(sd_off) | 2);                /* run */
-    play_until = uptime_ms() + (uint64_t)frames * 1000 / RATE + 60;
-    return 0;
-}
-
-/* ---- streaming: the DMA buffer is a ring that the app keeps filling ahead of the sound chip ---- */
-static int srate = RATE;
+/* ---- the device stream: the DMA buffer is a ring the mixer keeps filling ahead of the sound chip (48 kHz) ---- */
 static uint64_t wtotal, rtotal, clear_to; static uint32_t last_lpib;
 static void set_format(int rate) {
     uint16_t fmt = rate == 44100 ? 0x4011 : 0x0011;          /* 44.1 or 48 kHz, 16 bits, 2 channels */
@@ -358,8 +326,7 @@ static void update_read(void) {                              /* how far the chip
 }
 /* Never let it play old samples again: the part of the buffer ahead of what's written is cleared to silence (a
  * quarter of the buffer ahead of the play position). It isn't counted as written, so the next samples follow
- * straight on (no added delay) and "queued" is only what the app wrote. If the app falls behind, the hardware
- * plays this silence and the next write starts at the play position. */
+ * straight on. If the mixer falls behind, the chip plays this silence and writing carries on from where it is. */
 static void stream_fill_silence(void) {
     update_read();
     uint64_t from = wtotal > rtotal ? wtotal : rtotal, want = rtotal + BUF_BYTES / 4;
@@ -371,9 +338,8 @@ static void stream_fill_silence(void) {
     }
     if (want > clear_to) clear_to = want;
 }
-static int stream_start(int rate) {
-    if (!ready || (rate != 44100 && rate != 48000)) return -1;
-    play_until = 0;
+static int stream_start(void) {
+    if (!ready) return -1;
     stream_stop();
     w8(sd_off, 1); for (int i = 0; i < 1000 && !(r8(sd_off) & 1); i++) udelay(10);    /* reset: position back to 0 */
     w8(sd_off, 0); for (int i = 0; i < 1000 && (r8(sd_off) & 1); i++) udelay(10);
@@ -382,43 +348,192 @@ static int stream_start(int rate) {
     w32(sd_off + 0x18, (uint32_t)(uintptr_t)bdl); w32(sd_off + 0x1C, 0);
     w32(sd_off + 0x08, BUF_BYTES); w16(sd_off + 0x0C, NBDL - 1);
     w8(sd_off + 2, 1 << 4);
-    srate = rate; set_format(rate);
+    set_format(RATE);
     memset(buf, 0, BUF_BYTES);
-    wtotal = (uint64_t)rate * 4 / 10; rtotal = 0; last_lpib = 0; clear_to = wtotal;   /* start with 0.1 s of silence */
-    streaming = true; paused = false; last_write = uptime_ms();
+    wtotal = (uint64_t)RATE * 4 / 50; rtotal = 0; last_lpib = 0; clear_to = wtotal;   /* start with 20 ms of silence */
+    streaming = true;
     w8(sd_off, r8(sd_off) | 2);
     return 0;
 }
-static long stream_write_k(const void *src_, uint64_t n);
-static long stream_write(uint64_t ua, uint64_t n) {
-    if (!streaming || (n && !user_ok(current->pml4, (const void *)ua, n, false))) return -1;
-    return stream_write_k((const void *)ua, n);
-}
-static long stream_write_k(const void *src_, uint64_t n) {     /* (the samples are already checked / in the kernel) */
-    if (!streaming) return -1;
+static long dev_hda_write(const int16_t *pcm, uint64_t frames) {   /* (already mixed, with the volume) */
     update_read();
     if (wtotal < rtotal) wtotal = rtotal;                  /* it ran dry: carry on from where it is */
-    uint64_t space = BUF_BYTES - (wtotal - rtotal) - 4096;
-    if ((int64_t)space <= 0) return 0;
-    if (n > space) n = space;
-    n &= ~3ull;
-    int vol = settings_int("sound.volume"); if (vol < 0) vol = 0; if (vol > 100) vol = 100;
-    int scale = vol * vol;
-    const int16_t *src = (const int16_t *)src_;
-    for (uint64_t i = 0; i < n / 2; i++) {
-        uint32_t at = (uint32_t)((wtotal + i * 2) % BUF_BYTES);
-        *(int16_t *)(buf + at) = (int16_t)((int32_t)src[i] * scale / 10000);
-    }
-    wtotal += n; last_write = uptime_ms();
-    return (long)n;
+    uint64_t n = frames * 4;
+    for (uint64_t i = 0; i < n / 2; i++) *(int16_t *)(buf + (wtotal + i * 2) % BUF_BYTES) = pcm[i];
+    wtotal += n;
+    return (long)frames;
 }
-static void stream_end(void) { if (!streaming || C == &none) return; streaming = false; stream_stop(); set_format(RATE); }
+static long dev_hda_queued(void) { update_read(); return wtotal > rtotal ? (long)((wtotal - rtotal) / 4) : 0; }
+static void stream_end(void) { if (!streaming || C == &none) return; streaming = false; stream_stop(); }
+
+/* ---- the mixer: every app (and Linux program) has its own stream; they're mixed into one at 48 kHz ----
+ * A stream is a ring of 16-bit stereo frames at its own rate (converted to 48 kHz by linear interpolation).
+ * A kernel task mixes every few milliseconds, keeping the device (the HD Audio chip, or a Bluetooth speaker)
+ * TARGET_MS ahead; the volume is applied to the mix. A stream's "queued" is what's in its ring plus what of it
+ * is mixed but not yet heard. Chimes are short streams of their own, so they play over music. */
+#define NSTREAM 8
+#define SRING (RATE * 4)                       /* frames per stream: 4 s (allocated when a stream first opens) */
+#define TARGET_MS 200                          /* how far ahead to mix (covers the kernel being busy for a while,
+                                                  loading a program from disk), less while a stream with a small
+                                                  buffer plays (mix_open) */
+struct mstream { bool used, paused, oneshot; int pid, rate, lead_ms; int16_t *ring; uint64_t wpos, rpos; uint32_t frac, step; int16_t last[2]; uint64_t heard_at; };
+static struct mstream ms[NSTREAM];
+static uint64_t dev_w, idle_since;    /* dev_w: frames mixed and handed to the device */
+static bool mixer_running;
+static long dev_queued(void) { return dev_kind == 1 ? dev_hda_queued() : dev_kind == 2 ? bta_queued_ms() * (RATE / 1000) : 0; }
+static uint64_t dev_heard(void) { long q = dev_queued(); return dev_w > (uint64_t)q ? dev_w - (uint64_t)q : 0; }
+static void dev_stop(void) {
+    if (dev_kind == 1) stream_end();
+    if (dev_kind == 2) bta_flush();
+    dev_kind = 0;
+}
+static int stream_alloc(int pid, int rate) {
+    for (int i = 0; i < NSTREAM; i++) if (!ms[i].used) {
+        struct mstream *m = &ms[i];
+        if (!m->ring) m->ring = kmalloc(SRING * 4);
+        if (!m->ring) return -1;
+        m->used = true; m->paused = false; m->oneshot = false; m->pid = pid; m->rate = rate; m->lead_ms = TARGET_MS;
+        m->wpos = m->rpos = 0; m->frac = 65536; m->step = (uint32_t)((uint64_t)rate * 65536 / RATE); m->last[0] = m->last[1] = 0; m->heard_at = 0;
+        return i;
+    }
+    return -1;
+}
+static void mixer_task(void *arg);
+static void mixer_wake(void) { if (!mixer_running) { mixer_running = true; task_create_kernel("Sound mixer", mixer_task, 0); } }
+/* buffer_frames: how much the source keeps queued (a Linux program's ALSA buffer). The mixer never runs further
+ * ahead than half of it, so that buffer never looks empty to the program (it would take that as an underrun) */
+int mix_open(int rate, long buffer_frames) {
+    if (rate < 8000 || rate > RATE) return -1;
+    if (!ready && !bta_active()) return -1;
+    int id = stream_alloc(0, rate);
+    if (id >= 0 && buffer_frames > 0) {
+        long l = buffer_frames * 1000 / rate / 2;
+        ms[id].lead_ms = (int)(l < 20 ? 20 : l > TARGET_MS ? TARGET_MS : l);
+    }
+    if (id >= 0) mixer_wake();
+    return id;
+}
+static long stream_put(struct mstream *m, const int16_t *pcm, long frames) {
+    long space = (long)(SRING - (m->wpos - m->rpos)), n = frames < space ? frames : space;
+    for (long i = 0; i < n; i++) { uint64_t at = (m->wpos + i) % SRING; m->ring[2 * at] = pcm[2 * i]; m->ring[2 * at + 1] = pcm[2 * i + 1]; }
+    m->wpos += n;
+    return n;
+}
+static void mix_pump(void);
+long mix_write(int id, const int16_t *pcm, long frames) {
+    if (id < 0 || id >= NSTREAM || !ms[id].used) return -1;
+    long n = stream_put(&ms[id], pcm, frames);
+    mix_pump();
+    return n;
+}
+long mix_queued(int id) {                                     /* frames (at the stream's rate) not yet heard */
+    if (id < 0 || id >= NSTREAM || !ms[id].used) return 0;
+    struct mstream *m = &ms[id];
+    uint64_t heard = dev_heard(), mixed_ahead = m->heard_at > heard ? m->heard_at - heard : 0;
+    return (long)(m->wpos - m->rpos) + (long)(mixed_ahead * (uint64_t)m->rate / RATE);
+}
+uint64_t mix_consumed(int id) { return id >= 0 && id < NSTREAM && ms[id].used ? ms[id].rpos : 0; }   /* frames taken from the stream so far */
+long mix_ahead(int id) {                                      /* frames (at the stream's rate) taken but not yet heard */
+    if (id < 0 || id >= NSTREAM || !ms[id].used) return 0;
+    uint64_t heard = dev_heard(); struct mstream *m = &ms[id];
+    return m->heard_at > heard ? (long)((m->heard_at - heard) * (uint64_t)m->rate / RATE) : 0;
+}
+void mix_pause(int id, bool on) { if (id >= 0 && id < NSTREAM && ms[id].used) ms[id].paused = on; }
+void mix_close(int id) { if (id >= 0 && id < NSTREAM) ms[id].used = false; }
+static int oneshot(const int16_t *pcm, long frames) {        /* a sound that plays once, over whatever else plays */
+    if (!ready && !bta_active()) return -1;
+    int id = stream_alloc(0, RATE);
+    if (id < 0) return -1;
+    ms[id].oneshot = true;
+    stream_put(&ms[id], pcm, frames);
+    mixer_wake();
+    mix_pump();
+    return 0;
+}
+
+/* mix n frames of every playing stream into out (32-bit sums), noting where each stream's sound ends up */
+static void mix_into(int32_t *out, long n) {
+    for (int k = 0; k < NSTREAM; k++) {
+        struct mstream *m = &ms[k];
+        if (!m->used || m->paused || m->wpos == m->rpos) continue;
+        long i = 0;
+        for (; i < n; i++) {
+            while (m->frac >= 65536) {
+                if (m->rpos == m->wpos) goto done;
+                uint64_t at = m->rpos % SRING; m->last[0] = m->ring[2 * at]; m->last[1] = m->ring[2 * at + 1];
+                m->rpos++; m->frac -= 65536;
+            }
+            if (m->rpos == m->wpos) break;
+            uint64_t at = m->rpos % SRING;
+            for (int c = 0; c < 2; c++) out[2 * i + c] += m->last[c] + (int32_t)(((int64_t)(m->ring[2 * at + c] - m->last[c]) * m->frac) >> 16);
+            m->frac += m->step;
+        }
+    done:
+        if (i) m->heard_at = dev_w + (uint64_t)i;
+    }
+}
+static void mix_pump(void) {
+    bool any = false;
+    for (int k = 0; k < NSTREAM; k++) {
+        struct mstream *m = &ms[k];
+        if (!m->used) continue;
+        if (m->pid && !task_alive(m->pid)) { m->used = false; continue; }   /* its app quit */
+        if (m->oneshot && m->wpos == m->rpos && dev_heard() >= m->heard_at) { m->used = false; continue; }
+        any = true;
+    }
+    uint64_t now = uptime_ms();
+    if (!any) { if (dev_kind && now - idle_since > 2000) dev_stop(); return; }
+    idle_since = now;
+    int want = bta_active() ? 2 : ready ? 1 : 0;
+    if (want != dev_kind) {
+        dev_stop();
+        if (want == 1 && stream_start() < 0) want = 0;
+        if (want == 2) bta_flush();
+        dev_kind = want;
+        dev_w = 0;
+        for (int k = 0; k < NSTREAM; k++) ms[k].heard_at = 0;
+    }
+    if (!dev_kind) return;
+    int lead = TARGET_MS;                                     /* the most demanding stream sets how far ahead to mix */
+    for (int k = 0; k < NSTREAM; k++) if (ms[k].used && !ms[k].oneshot && ms[k].lead_ms < lead) lead = ms[k].lead_ms;
+    long need = (long)lead * (RATE / 1000) - dev_queued();
+    /* only as much as some stream has: the chip plays the silence that's already ahead when nothing's there,
+     * and a stream whose next samples arrive a moment later then carries straight on (no gap written in) */
+    long have = 0;
+    for (int k = 0; k < NSTREAM; k++) {
+        struct mstream *m = &ms[k];
+        if (!m->used || m->paused || m->wpos == m->rpos) continue;
+        long out = (long)(((m->wpos - m->rpos) * (uint64_t)RATE + (uint64_t)m->rate - 1) / (uint64_t)m->rate);
+        if (out > have) have = out;
+    }
+    if (need > have) need = have;
+    static int32_t acc[2 * 1024]; static int16_t out[2 * 1024];
+    int scale = vol_scale();
+    while (need > 0) {
+        long n = need > 1024 ? 1024 : need;
+        memset(acc, 0, sizeof acc[0] * 2 * n);
+        mix_into(acc, n);
+        for (long i = 0; i < 2 * n; i++) {
+            int32_t v = (int32_t)((int64_t)acc[i] * scale / 10000);
+            out[i] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
+        }
+        long took = dev_kind == 1 ? dev_hda_write(out, (uint64_t)n) : bta_write(out, n, RATE);
+        dev_w += (uint64_t)n;                          /* (Bluetooth may take fewer when its queue is full: the rest is dropped) */
+        (void)took;
+        need -= n;
+    }
+}
+static void mixer_task(void *arg) {
+    (void)arg;
+    for (;;) {
+        mix_pump();
+        task_sleep(dev_kind ? 5 : 40);
+    }
+}
 
 void hda_tick(void) {
     if (C == &none) return;
-    if (play_until && uptime_ms() > play_until) { play_until = 0; stream_stop(); }
-    if (streaming && !paused) stream_fill_silence();
-    if (streaming && !paused && uptime_ms() - last_write > 10000) stream_end();
+    if (streaming) stream_fill_silence();
 }
 
 /* a soft two-note chime; style 0 = test sound, 1 = notification */
@@ -436,65 +551,42 @@ static int chime(int style) {
         int s = sine[ph >> 24] * env / 4096 * (style ? 3 : 5) / 10;
         pcm[2 * i] = pcm[2 * i + 1] = (int16_t)s;
     }
-    return play(pcm, frames);
+    return oneshot(pcm, frames);
 }
 
-static int bt_rate = RATE;
+/* the apps' sound (SOUND_*): one stream per app, found by its process id */
+static int app_stream(void) {
+    int pid = current->proc ? current->proc->pid : current->pid;
+    for (int i = 0; i < NSTREAM; i++) if (ms[i].used && ms[i].pid == pid && !ms[i].oneshot) return i;
+    return -1;
+}
 long sound_syscall(int op, uint64_t a, uint64_t b) {
-    if (bta_active() || (bt_streaming && op != SOUND_STREAM_START)) {          /* a Bluetooth speaker plays the sound */
-        switch (op) {
-        case SOUND_INFO: return 1;
-        case SOUND_STREAM_START: if (a != 44100 && a != 48000) return -1; bt_rate = (int)a; bta_flush(); bt_streaming = true; return 0;
-        case SOUND_STREAM_WRITE: {
-            if (!bt_streaming || (b && !user_ok(current->pml4, (const void *)a, b, false))) return -1;
-            if (!bta_active()) { bt_streaming = false; return -1; }        /* the speaker went away: the app starts again on this computer */
-            return bt_write((const int16_t *)a, (long)(b / 4), bt_rate) * 4;
-        }
-        case SOUND_STREAM_STATUS: return bt_streaming ? bta_queued_ms() : -1;
-        case SOUND_STREAM_STOP: bta_flush(); bt_streaming = false; return 0;
-        case SOUND_STREAM_PAUSE: if (!bt_streaming) return -1; bta_pause(a != 0); return 0;
-        default: break;                                                     /* chimes and short sounds: play() sends them */
-        }
-    }
-    if (op == SOUND_STREAM_START) bt_streaming = false;
+    int id = app_stream();
     switch (op) {
-    case SOUND_INFO: return ready ? 1 : 0;
+    case SOUND_INFO: return ready || bta_active() ? 1 : 0;
     case SOUND_TEST: return chime(0);
     case SOUND_EVENT: return chime(1);
-    case SOUND_STREAM_START: return stream_start((int)a);
-    case SOUND_STREAM_WRITE: return stream_write(a, b);
-    case SOUND_STREAM_STATUS: if (!streaming) return -1; update_read(); return wtotal > rtotal ? (long)((wtotal - rtotal) * 1000 / ((uint64_t)srate * 4)) : 0;
-    case SOUND_STREAM_STOP: stream_end(); return 0;
-    case SOUND_STREAM_PAUSE:
-        if (!streaming) return -1;
-        paused = a != 0; last_write = uptime_ms();
-        if (paused) w8(sd_off, r8(sd_off) & ~2); else { w8(sd_off, r8(sd_off) | 2); }
+    case SOUND_STREAM_START: {
+        if (a < 8000 || a > RATE || (!ready && !bta_active())) return -1;
+        if (id >= 0) mix_close(id);
+        id = stream_alloc(current->proc ? current->proc->pid : current->pid, (int)a);
+        if (id < 0) return -1;
+        mixer_wake();
         return 0;
+    }
+    case SOUND_STREAM_WRITE: {
+        if (id < 0 || (b && !user_ok(current->pml4, (const void *)a, b, false))) return -1;
+        return mix_write(id, (const int16_t *)a, (long)(b / 4)) * 4;
+    }
+    case SOUND_STREAM_STATUS: return id < 0 ? -1 : mix_queued(id) * 1000 / ms[id].rate;
+    case SOUND_STREAM_STOP: mix_close(id); return 0;
+    case SOUND_STREAM_PAUSE: if (id < 0) return -1; mix_pause(id, a != 0); return 0;
     case SOUND_PLAY_PCM: {
-        if (!ready) return -1;
-        if (b > (uint64_t)BUF_BYTES || (b && !user_ok(current->pml4, (const void *)a, b, false))) return -1;
-        static int16_t tmp[BUF_BYTES / 2];
-        memcpy(tmp, (const void *)a, b);
-        return play(tmp, (uint32_t)(b / 4));
+        if (b > (uint64_t)RATE * 4 * MAX_SECONDS || (b && !user_ok(current->pml4, (const void *)a, b, false))) return -1;
+        return oneshot((const int16_t *)a, (long)(b / 4));
     }
     }
     return -1;
-}
-
-/* For the kernel's own users (Linux programs' sound device, linux_snd.c): the same stream as SOUND_STREAM_*,
- * with samples already in kernel memory. */
-long sound_kwrite(const void *pcm, uint64_t bytes) {
-    if (bt_streaming) {
-        if (!bta_active()) { bt_streaming = false; return -1; }
-        return bt_write((const int16_t *)pcm, (long)(bytes / 4), bt_rate) * 4;
-    }
-    return stream_write_k(pcm, bytes);
-}
-long sound_queued_frames(void) {                           /* what's written but not yet played */
-    if (bt_streaming) return (long)bta_queued_ms() * bt_rate / 1000;
-    if (!streaming) return 0;
-    update_read();
-    return wtotal > rtotal ? (long)((wtotal - rtotal) / 4) : 0;
 }
 bool sound_ready(void) { return ready || bta_active(); }
 

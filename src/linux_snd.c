@@ -1,5 +1,6 @@
 /* Sound for Linux programs: the ALSA kernel interface (what libasound talks to), on top of AXIOM's sound stream
- * (the speakers through HD Audio, or a Bluetooth speaker). Enough for libasound's "hw" device and its "plug"
+ * (the speakers through HD Audio, or a Bluetooth speaker): each open playback device is a stream of its own in
+ * the mixer (hda.c), so several programs, and AXIOM's own apps, can play at once. Enough for libasound's "hw" device and its "plug"
  * converter in front of it, which is how Chromium and most Linux programs play sound:
  *   /dev/snd/controlC0   one card ("AXIOM"), one playback device, no mixer controls
  *   /dev/snd/pcmC0D0p    playback: 16-bit little-endian stereo at 44.1 or 48 kHz, interleaved, by write (RW) or
@@ -34,7 +35,7 @@ struct snd {
     uint64_t buffer, period, avail_min, start_threshold, stop_threshold, boundary;
     uint64_t appl, hw, pushed;          /* frames: written by the program, played, sent to the stream */
     void *ring;                         /* struct shm (linux.c): buffer frames */
-    bool owns_stream;
+    int sid;                            /* its stream in the mixer (hda.c), -1 if none */
     uint64_t trigger_ns;
 };
 
@@ -43,11 +44,11 @@ void *snd_open(int kind) {
     struct snd *s = kmalloc(sizeof *s);
     if (!s) return 0;
     memset(s, 0, sizeof *s);
-    s->refs = 1; s->kind = kind; s->state = ST_OPEN;
+    s->refs = 1; s->kind = kind; s->state = ST_OPEN; s->sid = -1;
     return s;
 }
 static void stop_stream(struct snd *s) {
-    if (s->owns_stream) { sound_syscall(SOUND_STREAM_STOP, 0, 0); s->owns_stream = false; }
+    if (s->sid >= 0) { mix_close(s->sid); s->sid = -1; }
 }
 void snd_put(void *o) {
     struct snd *s = o;
@@ -60,12 +61,13 @@ void snd_put(void *o) {
 /* ---- positions ---- */
 static void update_hw(struct snd *s) {
     if (s->state != ST_RUNNING && s->state != ST_DRAINING && s->state != ST_PAUSED) return;
-    long q = sound_queued_frames(); if (q < 0) q = 0;
-    uint64_t ours = s->pushed - s->hw;                  /* the stream may also hold silence it added itself */
-    if ((uint64_t)q < ours) ours = (uint64_t)q;
-    uint64_t hw = s->pushed - ours;
+    /* hw: what the mixer has taken from this device's frames (the ring is the buffer, as on Linux); what's
+     * taken but not yet heard (the mixer keeps the speakers ~200 ms ahead) is delay, not buffer */
+    uint64_t hw = mix_consumed(s->sid);
+    if (hw > s->pushed) hw = s->pushed;
     if (hw > s->hw) s->hw = hw;
 }
+static int64_t delay_of(struct snd *s) { update_hw(s); return (int64_t)(s->appl - s->hw) + (s->state == ST_RUNNING || s->state == ST_DRAINING || s->state == ST_PAUSED ? mix_ahead(s->sid) : 0); }
 static uint64_t avail(struct snd *s) { update_hw(s); uint64_t used = s->appl - s->hw; return used >= s->buffer ? 0 : s->buffer - used; }
 /* send the ring's frames [pushed, appl) to the sound stream */
 static void push(struct snd *s) {
@@ -77,10 +79,10 @@ static void push(struct snd *s) {
         lx_shm_rw(s->ring, at * 4, chunk, n * 4, false);
         uint64_t off = 0;
         while (off < n) {
-            long k = sound_kwrite(chunk + off * 2, (n - off) * 4);
+            long k = mix_write(s->sid, chunk + off * 2, (long)(n - off));
             if (k < 0) { s->pushed = s->appl; return; }       /* (the stream went away: drop it) */
-            if (!k) { sleep_ms(2); continue; }
-            off += (uint64_t)k / 4; s->pushed += (uint64_t)k / 4;
+            if (!k) { task_sleep(2); continue; }
+            off += (uint64_t)k; s->pushed += (uint64_t)k;
         }
     }
 }
@@ -95,8 +97,9 @@ static int commit(struct snd *s, uint64_t new_appl) {
 }
 static int start(struct snd *s) {
     if (s->state != ST_PREPARED) return -EBADFD_;
-    if (sound_syscall(SOUND_STREAM_START, (uint64_t)s->rate, 0) < 0) return -EIO_;
-    s->owns_stream = true; s->state = ST_RUNNING; s->trigger_ns = uptime_ns();
+    s->sid = mix_open(s->rate, (long)s->buffer);
+    if (s->sid < 0) return -EIO_;
+    s->state = ST_RUNNING; s->trigger_ns = uptime_ns();
     push(s);
     return 0;
 }
@@ -112,7 +115,7 @@ static long pcm_write(struct snd *s, uint64_t ubuf, uint64_t frames, bool nonblo
         if (!a) {
             if (nonblock) return done ? (long)done : -EAGAIN_;
             if (s->state == ST_PAUSED) { if (done) return (long)done; return -EAGAIN_; }
-            sleep_ms(2); continue;
+            task_sleep(2); continue;
         }
         uint64_t n = frames - done; if (n > a) n = a;
         uint64_t at = s->appl % s->buffer; if (n > s->buffer - at) n = s->buffer - at;
@@ -229,7 +232,7 @@ static void fill_status(struct snd *s, uint8_t *st) {               /* struct sn
     ts_now(st + 24);
     uint64_t b = s->boundary ? s->boundary : 0x4000000000000000ull;
     *(uint64_t *)(st + 40) = s->appl % b; *(uint64_t *)(st + 48) = s->hw % b;
-    *(int64_t *)(st + 56) = (int64_t)(s->appl - s->hw);
+    *(int64_t *)(st + 56) = delay_of(s);
     *(uint64_t *)(st + 64) = avail(s); *(uint64_t *)(st + 72) = avail(s);
     ts_now(st + 112);
 }
@@ -306,7 +309,7 @@ long snd_ioctl(void *o, uint32_t cmd, uint64_t arg, bool nonblock) {
         return 0;
     }
     case 0x80984120: case 0xc0984124: UARG(152, true); fill_status(s, (uint8_t *)arg); return 0;   /* STATUS, STATUS_EXT */
-    case 0x80084121: UARG(8, true); update_hw(s); *(int64_t *)arg = (int64_t)(s->appl - s->hw); return s->state == ST_XRUN ? -EPIPE_ : 0;   /* DELAY */
+    case 0x80084121: UARG(8, true); *(int64_t *)arg = delay_of(s); return s->state == ST_XRUN ? -EPIPE_ : 0;   /* DELAY */
     case 0x00004122: update_hw(s); return s->state == ST_XRUN ? -EPIPE_ : 0;            /* HWSYNC */
     case 0xc0884123: {                                                                   /* SYNC_PTR */
         UARG(136, true);
@@ -338,17 +341,17 @@ long snd_ioctl(void *o, uint32_t cmd, uint64_t arg, bool nonblock) {
         if (s->state == ST_PREPARED && s->appl > s->pushed) { int r = start(s); if (r) return r; }
         if (s->state != ST_RUNNING) { s->state = ST_SETUP; return 0; }
         s->state = ST_DRAINING;
-        for (;;) {
+        for (;;) {                                           /* until it has all been heard */
             update_hw(s);
-            if (s->hw >= s->appl) break;
+            if (s->hw >= s->appl && !mix_ahead(s->sid)) break;
             if (nonblock) return -EAGAIN_;
-            sleep_ms(5);
+            task_sleep(5);
         }
         stop_stream(s); s->state = ST_SETUP; return 0;
     }
     case 0x40044145:                                                                     /* PAUSE */
-        if (arg) { if (s->state != ST_RUNNING) return -EBADFD_; sound_syscall(SOUND_STREAM_PAUSE, 1, 0); s->state = ST_PAUSED; }
-        else { if (s->state != ST_PAUSED) return -EBADFD_; sound_syscall(SOUND_STREAM_PAUSE, 0, 0); s->state = ST_RUNNING; }
+        if (arg) { if (s->state != ST_RUNNING) return -EBADFD_; mix_pause(s->sid, true); s->state = ST_PAUSED; }
+        else { if (s->state != ST_PAUSED) return -EBADFD_; mix_pause(s->sid, false); s->state = ST_RUNNING; }
         return 0;
     case 0x40084146: return 0;                                                           /* REWIND: nothing taken back */
     case 0x40084149: {                                                                   /* FORWARD (mmap): the program filled n more */

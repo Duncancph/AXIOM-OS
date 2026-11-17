@@ -126,9 +126,15 @@ void settings_load(void);
 bool settings_check_password(const char *pw);
 void rtc_read_local(struct rtc_time *t);
 long sound_syscall(int op, uint64_t a, uint64_t b);
-long sound_kwrite(const void *pcm, uint64_t bytes);
-long sound_queued_frames(void);
 bool sound_ready(void);
+/* the mixer (hda.c): a stream per sound source, mixed at 48 kHz to the speakers or a Bluetooth speaker */
+int mix_open(int rate, long buffer_frames);   /* buffer_frames: 0 for a deep source */
+long mix_write(int id, const int16_t *pcm, long frames);   /* frames taken (0: full for now) */
+long mix_queued(int id);                                   /* frames not yet heard */
+uint64_t mix_consumed(int id);                             /* frames the mixer has taken from the stream */
+long mix_ahead(int id);                                    /* taken but not yet heard (the output's delay) */
+void mix_pause(int id, bool on);
+void mix_close(int id);
 void hda_init_all(void);
 void hda_tick(void);
 void sound_notify(void);
