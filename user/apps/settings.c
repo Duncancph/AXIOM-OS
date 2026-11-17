@@ -7,8 +7,8 @@
 #define WH 580
 #define SIDE 190
 static struct app a;
-enum { S_KEYB, S_MOUSE, S_TIME, S_DISPLAY, S_PERSONAL, S_SOUND, S_LOCK, S_POWER, S_UPDATES, S_STORAGE, S_DEVICES, S_ABOUT, NSECT };
-static const char *sect_names[NSECT] = { "Keyboard", "Mouse", "Date & time", "Display", "Personalise", "Sound", "Lock screen", "Power", "Updates", "Storage", "Devices", "About" };
+enum { S_KEYB, S_MOUSE, S_TIME, S_DISPLAY, S_PERSONAL, S_SOUND, S_LOCK, S_POWER, S_UPDATES, S_APPS, S_STORAGE, S_DEVICES, S_ABOUT, NSECT };
+static const char *sect_names[NSECT] = { "Keyboard", "Mouse", "Date & time", "Display", "Personalise", "Sound", "Lock screen", "Power", "Updates", "Apps", "Storage", "Devices", "About" };
 static int sect, hover = -1;
 
 /* ---- clickable regions, rebuilt on every draw ---- */
@@ -16,7 +16,7 @@ struct hit { int x, y, w, h, id; };
 static struct hit hits[96]; static int nhits;
 static void add_hit(int x, int y, int w, int h, int id) { if (nhits < 96) hits[nhits++] = (struct hit){ x, y, w, h, id }; }
 static int hit_at(int x, int y) { for (int i = nhits - 1; i >= 0; i--) if (ui_in(x, y, hits[i].x, hits[i].y, hits[i].w, hits[i].h)) return hits[i].id; return -1; }
-enum { H_SECT = 0, H_LIST = 100, H_TOGGLE = 300, H_BTN = 400, H_FIELD = 500, H_DISK = 600 };
+enum { H_SECT = 0, H_LIST = 100, H_TOGGLE = 300, H_BTN = 400, H_FIELD = 500, H_DISK = 600, H_PKG = 700 };
 
 static char sv[16][112];                       /* cached setting values */
 static const char *keys[16] = { "keyboard.layout", "time.zone", "time.rtc_local", "time.24h", "display.mode", "display.current",
@@ -461,11 +461,11 @@ out:
  * The archive (a tar) downloads straight to /system/linux/.downloads, resuming where it stopped (HTTP Range)
  * and hashing as it goes; once its SHA-256 matches, it unpacks into /system/linux/opt/<id> and the app gets a
  * line in /apps (it then opens from the dock and menu as a Linux program). */
-#define MAXPKG 4
+#define MAXPKG 32
 struct pkg { char id[24], name[32], version[16], icon[16], desc[100], url[240], run[160], sha[65]; long size, isize, minb;
              char have[16]; bool root; char req[24]; bool gz; };   /* have: the installed version, "" if none; root: unpacks into the Linux
                                                folder itself (lib/, usr/, opt/... the package brings what it needs) */
-static struct pkg pkgs[MAXPKG]; static int npkg, pk_busy = -1, pk_state; static bool pk_looked;
+static struct pkg pkgs[MAXPKG]; static int npkg, pk_busy = -1, pk_state, pk_scroll; static bool pk_looked;
 static char pk_msg[160]; static uint32_t pk_col;
 static long pk_got, pk_total, pk_t0, pk_got0;
 enum { PK_IDLE, PK_DOWNLOAD, PK_VERIFY, PK_UNPACK, PK_DONE, PK_FAILED };
@@ -725,32 +725,61 @@ static void pkg_install(int i) {
     char m[160]; ksnprintf(m, sizeof m, "%s %s is installed (%ld files). Open it from the dock or the AXIOM menu.", q->name, q->version, files);
     pk_say(UI_GREEN, m);
 }
-static void draw_packages(int y) {
+/* Settings > Apps: the signed packages, a row each (scrolls) */
+#define PK_ROW 70
+#define PK_TOP 100
+static void pk_size(long b, char *o, int n) {             /* 1.2 MB / 840 KB */
+    if (b < (1 << 20)) ksnprintf(o, n, "%ld KB", (b + 1023) >> 10);
+    else ksnprintf(o, n, "%ld MB", (b + (1 << 19)) >> 20);
+}
+static int pk_rows(void) { return (WH - PK_TOP - 56) / PK_ROW; }
+static void pk_fit(const struct font *f, const char *s, int maxw, char *out, int n) {   /* cut with "..." to fit */
+    strncpy0(out, s, n);
+    if (gfx_text_width(f, out) <= maxw) return;
+    for (int k = (int)strlen(out); k > 0; k--) { out[k] = 0; strncpy0(out + k, "...", n - k); if (gfx_text_width(f, out) <= maxw) return; out[k] = 0; }
+}
+static void draw_apps(void) {
+    heading("Apps", "More apps for AXIOM, signed like its updates. Linux desktop apps run in AXIOM windows.");
     int x = SIDE + 32, w = WW - SIDE - 64;
-    char b[200];
-    gfx_text(&a.c, &font_ui_bold, x, y, UI_TEXT, "More apps");
-    if (!pk_looked) { label(x, y + 24, UI_MUTED, "Big apps that aren't part of the system update, like the full Vertex browser."); button(x, y + 40, 160, "Look for apps", BTN_NORMAL, H_BTN + 35, false); }
-    else if (!npkg) label(x, y + 24, pk_msg[0] ? pk_col : UI_MUTED, pk_msg[0] ? pk_msg : "No apps have been published yet.");
-    for (int i = 0; i < npkg; i++) {
-        struct pkg *q = &pkgs[i]; int cy = y + 14 + i * 90;
-        ui_card(&a.c, x, cy, w, 80);
-        ksnprintf(b, sizeof b, "%s %s  -  %ld MB download, %ld MB installed", q->name, q->version, q->size >> 20, (q->isize ? q->isize : q->size) >> 20);
+    char b[200], t[200];
+    if (!pk_looked || !npkg) {
+        label(x, PK_TOP + 20, pk_msg[0] ? pk_col : UI_MUTED, pk_msg[0] ? pk_msg : pk_looked ? "No apps have been published yet." : "Looking for apps...");
+        if (pk_looked) button(x, PK_TOP + 40, 160, "Look again", BTN_NORMAL, H_BTN + 35, false);
+        return;
+    }
+    int rows = pk_rows();
+    if (pk_scroll > npkg - rows) pk_scroll = npkg - rows;
+    if (pk_scroll < 0) pk_scroll = 0;
+    for (int r = 0; r < rows && pk_scroll + r < npkg; r++) {
+        int i = pk_scroll + r; struct pkg *q = &pkgs[i]; int cy = PK_TOP + r * PK_ROW;
+        ui_card(&a.c, x, cy, w, PK_ROW - 8);
+        ksnprintf(b, sizeof b, "%s %s", q->name, q->version);
         gfx_text(&a.c, &font_ui_bold, x + 16, cy + 24, UI_TEXT, b);
-        label(x + 16, cy + 46, UI_MUTED, q->desc);
+        char s1[24], s2[24]; pk_size(q->size, s1, sizeof s1); pk_size(q->isize ? q->isize : q->size, s2, sizeof s2);
+        ksnprintf(t, sizeof t, "%s download, %s installed", s1, s2);
+        label(x + 24 + gfx_text_width(&font_ui_bold, b), cy + 24, HL_TEXT_FAINT, t);
         bool busy = pk_busy == i;
         if (busy && pk_state == PK_DOWNLOAD) {
             long secs = ((long)sys_time() - pk_t0) / 1000; long rate = secs > 0 ? (pk_got - pk_got0) / secs : 0;
-            int pw = w - 32, fill = pk_total ? (int)((int64_t)pw * pk_got / pk_total) : 0;
-            gfx_rrect(&a.c, x + 16, cy + 56, pw, 8, 4, 0x2A2A28, 255); gfx_rrect(&a.c, x + 16, cy + 56, fill, 8, 4, UI_ACCENT, 255);
+            int pw = w - 200, fill = pk_total ? (int)((int64_t)pw * pk_got / pk_total) : 0;
+            gfx_rrect(&a.c, x + 16, cy + 38, pw, 8, 4, 0x2A2A28, 255); gfx_rrect(&a.c, x + 16, cy + 38, fill, 8, 4, UI_ACCENT, 255);
             ksnprintf(b, sizeof b, "%ld of %ld MB  (%ld KB/s)", pk_got >> 20, pk_total >> 20, rate >> 10);
-            label(x + 16, cy + 76, UI_TEXT, b);
-        } else if (!busy) {
+            label(x + 24 + pw, cy + 47, UI_TEXT, b);
+        } else {
+            pk_fit(&font_ui, busy ? (pk_state == PK_VERIFY ? "Checking the download..." : "Unpacking...") : q->desc, w - 180, t, sizeof t);
+            label(x + 16, cy + 46, busy ? UI_TEXT : UI_MUTED, t);
+        }
+        if (!busy) {
             bool same = q->have[0] && !strcmp(q->have, q->version);
-            if (same) label(WW - 32 - 130, cy + 30, UI_GREEN, "Installed");
-            else button(WW - 32 - 150, cy + 14, 134, q->have[0] ? "Update" : "Install", BTN_PRIMARY, H_BTN + 36 + i, pk_busy >= 0);
+            if (same) label(x + w - 112, cy + 36, UI_GREEN, "Installed");
+            else button(x + w - 132, cy + 15, 116, q->have[0] ? "Update" : "Install", BTN_PRIMARY, H_PKG + i, pk_busy >= 0);
         }
     }
-    if (npkg && pk_msg[0]) label(x, y + 14 + npkg * 90 + 12, pk_col, pk_msg);
+    if (npkg > rows) {                                         /* scroll bar */
+        int th = rows * PK_ROW * rows / npkg, ty = PK_TOP + (rows * PK_ROW - th) * pk_scroll / (npkg - rows);
+        gfx_rrect(&a.c, WW - 22, ty, 4, th, 2, 0x3A3A36, 255);
+    }
+    if (pk_msg[0]) { pk_fit(&font_ui, pk_msg, w, t, sizeof t); label(x, PK_TOP + rows * PK_ROW + 18, pk_col, t); }
 }
 static void draw_updates(void) {
     char b[200];
@@ -784,7 +813,11 @@ static void draw_updates(void) {
         gfx_rrect(&a.c, x, py, w * inst.percent / 100, 10, 5, inst.state == 3 ? UI_RED : UI_ACCENT, 255);
         label(x, py + 30, inst.state == 3 ? UI_RED : UI_TEXT, inst.msg);
     }
-    if (!installing && ustate != U_INSTALLING) draw_packages(y + 186);
+    if (!installing && ustate != U_INSTALLING) {
+        gfx_text(&a.c, &font_ui_bold, x, y + 200, UI_TEXT, "More apps");
+        label(x, y + 224, UI_MUTED, "Apps that aren't part of AXIOM itself, like Vertex and Linux desktop apps.");
+        button(x, y + 240, 160, "Open Apps", BTN_NORMAL, H_BTN + 37, false);
+    }
     char url[120]; sys_setting_get("update.url", url, sizeof url);
     if (url[0]) { ksnprintf(b, sizeof b, "Source: %s", url); label(x, WH - 22, HL_TEXT_FAINT, b); }
 }
@@ -981,7 +1014,7 @@ void draw(void) {
     switch (sect) {
     case S_KEYB: draw_keyboard(); break; case S_MOUSE: draw_mouse(); break; case S_TIME: draw_time(); break; case S_DISPLAY: draw_display(); break; case S_PERSONAL: draw_personal(); break;
     case S_SOUND: if (show_snd) draw_report("Sound details", "The sound chips AXIOM found and how each was set up.", "sound.report", H_BTN + 12, "Nothing found.", 0); else draw_sound(); break; case S_LOCK: draw_lock(); break; case S_POWER: draw_power(); break;
-    case S_UPDATES: draw_updates(); break; case S_STORAGE: draw_storage(); break; case S_DEVICES: draw_devices(); break; case S_ABOUT: draw_about(); break;
+    case S_UPDATES: draw_updates(); break; case S_APPS: draw_apps(); break; case S_STORAGE: draw_storage(); break; case S_DEVICES: draw_devices(); break; case S_ABOUT: draw_about(); break;
     }
     if (msg[0]) label(SIDE + 32, WH - 24, msg_col, msg);
     if (confirm_disk >= 0) {                                 /* "erase this disk?" */
@@ -1030,6 +1063,7 @@ static void open_section(int s) {
     }
     if (s == S_STORAGE) ndisks = sys_disks(disks, 8);
     if (s == S_DEVICES) load_devices();
+    if (s == S_APPS && !pk_looked) { draw(); look_for_packages(); }   /* (shows "Looking..." meanwhile) */
     if (s == S_PERSONAL) { find_pictures(); char un[64] = ""; sys_setting_get("user.name", un, sizeof un); strncpy0(fields[3].s, un, sizeof fields[3].s); fields[3].len = strlen(fields[3].s); }
 }
 
@@ -1100,7 +1134,8 @@ static void click(int id, int mx) {
     }
     if (id == H_BTN + 31) check_updates();
     if (id == H_BTN + 35) { pk_msg[0] = 0; look_for_packages(); }
-    if (id >= H_BTN + 36 && id < H_BTN + 36 + MAXPKG && pk_busy < 0) pkg_install(id - H_BTN - 36);
+    if (id >= H_PKG && id < H_PKG + npkg && pk_busy < 0) pkg_install(id - H_PKG);
+    if (id == H_BTN + 37) { open_section(S_APPS); return; }
     if (id == H_BTN + 30 && ustate == U_AVAILABLE) install_update();
     if (id == H_BTN + 32) sys_power(1);
     if (id == H_BTN + 21) confirm_disk = -1;
@@ -1175,6 +1210,7 @@ int main(void) {
         }
         if (e.type == EV_MOUSE_DOWN && e.button == 1) { int h = hit_at(e.x, e.y); if (h >= 0) click(h, e.x); else if (confirm_disk < 0) focus = sect == S_KEYB ? 2 : -1; }
         if (e.type == EV_WHEEL && sect == S_DEVICES && dev_sel < 0) dev_scroll += e.key * 3;
+        if (e.type == EV_WHEEL && sect == S_APPS) pk_scroll += e.key;
         if (e.type == EV_WHEEL && sect == S_TIME) { list_scroll += e.key * 2; if (list_scroll > nlist - 9) list_scroll = nlist - 9; if (list_scroll < 0) list_scroll = 0; }
         if (e.type == EV_KEY) key(e.key);
         draw();

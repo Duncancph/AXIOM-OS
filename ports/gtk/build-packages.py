@@ -4,13 +4,14 @@ Both unpack into AXIOM's Linux folder (root=yes): lib/..., usr/share/..., as on 
 
   gtk3      the shared runtime: GTK 3 and its libraries, gdk-pixbuf loaders, fonts (DejaVu), fontconfig, XKB
             keyboard data, the MIME database (gdk-pixbuf needs it to tell PNG from JPEG), GSettings schemas,
-            the Adwaita icons (pre-rendered to PNG: no SVG loader, which would bring librsvg and ICU), the
+            the Adwaita icons, the
             en_GB.UTF-8 locale, and GTK's demo apps (its dock entry)
-  mousepad  Xfce's text editor: its own libraries (gtksourceview, libxml2, ICU) and data; requires gtk3
+  and the apps in APPS below (each requires gtk3): Mousepad, AbiWord, Gnumeric, Aisleriot, Mines
 
-  python3 ports/gtk/build-packages.py <out-dir>      -> <out-dir>/{gtk3,mousepad}.tar.gz and the staging folders
-Then sign each with tools/make-package.py (root=yes, requires=gtk3 for mousepad) and publish.
-Needs: libgtk-3-bin (gtk3-demo, gtk3-widget-factory), mousepad, librsvg2-bin (rsvg-convert), locales."""
+  python3 ports/gtk/build-packages.py <out-dir> [app...]   -> <out-dir>/<name>.tar.gz and the staging folders
+Then sign each with tools/make-package.py (root=yes, requires=gtk3 for the apps) and publish. Build them all
+together: each carries the machine's compiled GSettings schemas, which must include every app's.
+Needs: libgtk-3-bin, librsvg2-common (the SVG loader), locales, and the apps installed."""
 import gzip, os, re, shutil, subprocess, sys, tarfile
 
 OUT = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "/tmp/axiom-gtk")
@@ -56,43 +57,20 @@ def tar(stage, name):
     size = sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(stage) for f in fs)
     print("%s: %.1f MB archive, %.1f MB installed" % (path, os.path.getsize(path) / 1e6, size / 1e6))
 
-def icons(stage):
-    """Adwaita for GTK 3, as PNGs: the symbolic icons rendered at 16, 24 and 32 px, plus its own 16x16 PNGs."""
-    src = "/usr/share/icons/Adwaita"
-    base = os.path.join(stage, "usr/share/icons/Adwaita")
-    dirs = []
-    for size in (16, 24, 32):
-        for ctx in sorted(os.listdir(os.path.join(src, "symbolic"))):
-            sd = os.path.join(src, "symbolic", ctx)
-            if not os.path.isdir(sd): continue
-            rel = "symbolic-%d/%s" % (size, ctx)
-            os.makedirs(os.path.join(base, rel), exist_ok=True)
-            for f in sorted(os.listdir(sd)):
-                if f.endswith(".svg"):
-                    subprocess.run(["rsvg-convert", "-w", str(size), "-h", str(size), "-o",
-                                    os.path.join(base, rel, f[:-4] + ".png"), os.path.join(sd, f)], check=True)
-            dirs.append((rel, size, ctx))
-    for ctx in sorted(os.listdir(os.path.join(src, "16x16"))):
-        put(stage, os.path.join(src, "16x16", ctx), "usr/share/icons/Adwaita/16x16/" + ctx)
-        dirs.append(("16x16/" + ctx, 16, ctx))
-    with open(os.path.join(base, "index.theme"), "w") as f:
-        f.write("[Icon Theme]\nName=Adwaita\nComment=Adwaita, as PNGs for AXIOM\nInherits=hicolor\n")
-        f.write("Directories=%s\n\n" % ",".join(d for d, _, _ in dirs))
-        for d, size, ctx in dirs:
-            f.write("[%s]\nContext=%s\nSize=%d\nMinSize=%d\nMaxSize=%d\nType=Scalable\n\n" % (d, ctx.capitalize(), size, size, size))
-    put(stage, "/usr/share/icons/hicolor/index.theme", "usr/share/icons/hicolor/index.theme")
+# libraries most apps need, kept in gtk3 so each app doesn't bring its own copy (ICU alone is 36 MB); librsvg also
+# lets GTK draw the SVG icons itself
+SHARED = ["libxml2.so.2", "libicuuc.so.74", "libicui18n.so.74", "libicudata.so.74", "librsvg-2.so.2",
+          "libstdc++.so.6", "libgcc_s.so.1", "libxslt.so.1", "libunistring.so.5"]
 
 def gtk3():
     stage = os.path.join(OUT, "gtk3"); shutil.rmtree(stage, ignore_errors=True)
     apps = ["/usr/bin/gtk3-demo", "/usr/bin/gtk3-widget-factory"]
-    loaders = [os.path.join("/" + PIXBUF, "loaders", f) for f in sorted(os.listdir("/" + PIXBUF + "/loaders")) if "svg" not in f]
+    loaders = [os.path.join("/" + PIXBUF, "loaders", f) for f in sorted(os.listdir("/" + PIXBUF + "/loaders"))]
     for a in apps: put(stage, a, a[1:])
-    libs(stage, apps + loaders)
+    libs(stage, apps + loaders + [os.path.realpath("/lib/x86_64-linux-gnu/" + l) for l in SHARED])
     put(stage, "/lib64/ld-linux-x86-64.so.2", "lib64/ld-linux-x86-64.so.2")
     for l in loaders: put(stage, l, os.path.join(PIXBUF, "loaders", os.path.basename(l)))
-    cache = open("/" + PIXBUF + "/loaders.cache").read().split("\n\n")
-    with open(os.path.join(stage, PIXBUF, "loaders.cache"), "w") as f:
-        f.write("\n\n".join(b for b in cache if "svg" not in b.split("\n", 1)[0] and "svg" not in b[:200]))
+    put(stage, "/" + PIXBUF + "/loaders.cache", PIXBUF + "/loaders.cache")
     put(stage, "/usr/share/fonts/truetype/dejavu", "usr/share/fonts/truetype/dejavu")
     put(stage, "/etc/fonts", "etc/fonts")
     put(stage, "/usr/share/X11/xkb", "usr/share/X11/xkb")
@@ -101,20 +79,56 @@ def gtk3():
     put(stage, "/usr/share/glib-2.0/schemas/gschemas.compiled", "usr/share/glib-2.0/schemas/gschemas.compiled")
     os.makedirs(os.path.join(stage, "usr/lib/locale"), exist_ok=True)
     subprocess.run(["localedef", "-i", "en_GB", "-f", "UTF-8", os.path.join(stage, "usr/lib/locale/en_GB.UTF-8")], check=True)
-    icons(stage)
+    for d in ("scalable", "symbolic", "symbolic-up-to-32", "16x16", "index.theme"):        # (no cursors: AXIOM draws its own)
+        put(stage, "/usr/share/icons/Adwaita/" + d, "usr/share/icons/Adwaita/" + d)
+    put(stage, "/usr/share/icons/hicolor/index.theme", "usr/share/icons/hicolor/index.theme")
     tar(stage, "gtk3")
     return {os.path.basename(p) for p in os.listdir(os.path.join(stage, LIB))}
 
-def mousepad(base):
-    stage = os.path.join(OUT, "mousepad"); shutil.rmtree(stage, ignore_errors=True)
-    plugins = "/usr/lib/x86_64-linux-gnu/mousepad/plugins"
-    put(stage, "/usr/bin/mousepad", "usr/bin/mousepad")
-    put(stage, plugins, plugins[1:])
-    libs(stage, ["/usr/bin/mousepad"] + [os.path.join(plugins, f) for f in os.listdir(plugins)], exclude=base)
-    put(stage, "/usr/share/gtksourceview-4", "usr/share/gtksourceview-4")
-    # (the compiled schemas include Mousepad's: this replaces gtk3's copy with a superset)
+# The apps: the Debian packages whose files they bring (without docs, man pages, translations and help), the
+# programs (whose libraries come along, unless gtk3 has them), and what Settings shows.
+APPS = {
+    "mousepad": dict(debs=["mousepad", "libmousepad0", "libgtksourceview-4-0", "libgtksourceview-4-common",
+                           "libgspell-1-2", "libgspell-1-common"], bins=["/usr/bin/mousepad"]),
+    "abiword":  dict(debs=["abiword", "abiword-common", "libabiword-3.0", "libgoffice-0.10-10t64",
+                           "libgoffice-0.10-10-common", "libgsf-1-114", "libgsf-1-common"], bins=["/usr/bin/abiword"]),
+    "gnumeric": dict(debs=["gnumeric", "gnumeric-common", "libgoffice-0.10-10t64", "libgoffice-0.10-10-common",
+                           "libgsf-1-114", "libgsf-1-common"], bins=["/usr/bin/gnumeric"]),
+    "aisleriot": dict(debs=["aisleriot", "guile-3.0-libs", "libcanberra0t64", "libcanberra-gtk3-0t64"],
+                      bins=["/usr/games/sol"]),
+    "gnome-mines": dict(debs=["gnome-mines", "libgnome-games-support-1-3", "libgnome-games-support-common",
+                              "libhandy-1-0"], bins=["/usr/games/gnome-mines"]),
+}
+SKIP = ("/usr/share/doc/", "/usr/share/man/", "/usr/share/locale/", "/usr/share/help/", "/usr/share/lintian/",
+        "/usr/share/bug/", "/usr/share/metainfo/", "/usr/share/applications/", "/usr/share/icons/", "/usr/share/info/",
+        "/usr/share/gnome-shell/", "/usr/share/dbus-1/", "/usr/share/glib-2.0/schemas/")
+
+def is_elf(path):
+    try:
+        with open(path, "rb") as f: return f.read(4) == b"\x7fELF"
+    except OSError: return False
+
+def app(name, base):
+    spec = APPS[name]
+    stage = os.path.join(OUT, name); shutil.rmtree(stage, ignore_errors=True)
+    elves = list(spec["bins"])
+    for deb in spec["debs"]:
+        files = subprocess.run(["dpkg", "-L", deb], capture_output=True, text=True, check=True).stdout.split("\n")
+        # FAT has no symlinks: a library comes as its link's name (libfoo.so.1), not also as the file it points to
+        linked = {os.path.realpath(f) for f in files if f and os.path.islink(f) and not f.endswith(".so")}
+        for f in files:
+            if not f or not os.path.isfile(f) or f.startswith(SKIP) or f.startswith("/etc/"): continue
+            if os.path.islink(f) and f.endswith(".so"): continue                 # (for building against it)
+            if not os.path.islink(f) and f in linked: continue
+            put(stage, f, f[1:])
+            if is_elf(f): elves.append(f)
+    for b in spec["bins"]: put(stage, b, b[1:])
+    have = {os.path.basename(f) for r, _, fs in os.walk(stage) for f in fs}
+    libs(stage, elves, exclude=base | have)
+    # (the compiled schemas include every app's: this replaces gtk3's copy with a superset)
     put(stage, "/usr/share/glib-2.0/schemas/gschemas.compiled", "usr/share/glib-2.0/schemas/gschemas.compiled")
-    tar(stage, "mousepad")
+    tar(stage, name)
 
 os.makedirs(OUT, exist_ok=True)
-mousepad(gtk3())
+base = gtk3()
+for name in (sys.argv[2:] or APPS): app(name, base)
