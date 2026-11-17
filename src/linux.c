@@ -18,7 +18,7 @@ void linux_cpu_init(void) {
 }
 
 /* ---------------- a Linux program's state ---------------- */
-enum { FD_NONE, FD_TTY_IN, FD_TTY_OUT, FD_FILE, FD_DIR, FD_CHAN, FD_EVENT, FD_EPOLL, FD_SHM, FD_DEV, FD_WIN, FD_SND };
+enum { FD_NONE, FD_TTY_IN, FD_TTY_OUT, FD_FILE, FD_DIR, FD_CHAN, FD_EVENT, FD_EPOLL, FD_SHM, FD_DEV, FD_WIN, FD_SND, FD_TIMER };
 /* sound devices (linux_snd.c): /dev/snd/controlC0 and pcmC0D0p */
 void *snd_open(int kind); void snd_put(void *o); long snd_ioctl(void *o, uint32_t cmd, uint64_t arg, bool nonblock);
 long snd_write(void *o, uint64_t ubuf, uint64_t bytes, bool nonblock); int snd_ready(void *o, bool *waiting);
@@ -27,7 +27,10 @@ static bool snd_waiting;                                      /* a poll found a 
 struct chan;
 /* FD_CHAN: a pipe end or a socket-pair end. It reads from rx and writes to tx (either may be 0: a pipe's
  * other end, or after shutdown) and holds a reader count on rx and a writer count on tx. */
+struct ulisten;
 struct lfd { int kind; int flags; uint64_t off; char path[200]; struct chan *rx, *tx; bool sock; uint8_t stype;
+             struct ulisten *lis;   /* FD_CHAN: a listening socket (path in path[]); bound: path[] set */
+             int peer;              /* a connected socket: the other end's process (SO_PEERCRED) */
              uint8_t dev;    /* FD_DEV: which of devs[] */
              void *obj; };   /* FD_EVENT: a struct evfd, FD_EPOLL: a struct epoll, FD_SHM: a struct shm,
                                 FD_WIN: a struct axwin (shared by duplicates); FD_CHAN after shutdown: its
@@ -80,7 +83,8 @@ uint64_t linux_now_ns(void);
 #define E(x) ((uint64_t)-(long)(x))
 enum { EPERM_ = 1, ENOENT_ = 2, EBADF_ = 9, EAGAIN_ = 11, ENOMEM_ = 12, EFAULT_ = 14, EEXIST_ = 17, ENOTDIR_ = 20, EISDIR_ = 21,
        EACCES_ = 13, EBUSY_ = 16, ENODEV_ = 19, ENOSPC_ = 28, EINVAL_ = 22, EMFILE_ = 24, ENOTTY_ = 25, ESPIPE_ = 29, EPIPE_ = 32, ERANGE_ = 34, ENOSYS_ = 38, ENOTSOCK_ = 88,
-       EMSGSIZE_ = 90, ENOPROTOOPT_ = 92, EOPNOTSUPP_ = 95, EAFNOSUPPORT_ = 97, ETIMEDOUT_ = 110 };
+       EMSGSIZE_ = 90, ENOPROTOOPT_ = 92, EOPNOTSUPP_ = 95, EAFNOSUPPORT_ = 97, ETIMEDOUT_ = 110,
+       EADDRINUSE_ = 98, EISCONN_ = 106, ENOTCONN_ = 107, ECONNREFUSED_ = 111 };
 
 static bool uok(uint64_t p, uint64_t n, bool w) { return n == 0 || user_ok(current->pml4, (const void *)p, n, w); }
 static bool ustr(char *dst, uint64_t src, size_t max) {
@@ -223,16 +227,19 @@ int linux_spawn(const char *path, int argc, char **argv, struct task *out) {
     uint64_t sp = stop;
     uint64_t argp[16]; int na = argc < 16 ? argc : 16;
     for (int i = na - 1; i >= 0; i--) { uint64_t l = strlen(argv[i]) + 1; sp -= l; copy_to(m, sp, argv[i], l); argp[i] = sp; }
-    static const char *envs[] = { "HOME=/home", "PATH=/bin:/usr/bin", "LANG=en_GB.UTF-8", "TERM=dumb", "USER=user" };
-    uint64_t envp[5];
-    for (int i = 4; i >= 0; i--) { uint64_t l = strlen(envs[i]) + 1; sp -= l; copy_to(m, sp, envs[i], l); envp[i] = sp; }
+    /* (Wayland: desktop apps find AXIOM's compositor, axwl, at /tmp/wayland-0) */
+    static const char *envs[] = { "HOME=/home", "PATH=/bin:/usr/bin", "LANG=en_GB.UTF-8", "TERM=dumb", "USER=user",
+        "XDG_RUNTIME_DIR=/tmp", "WAYLAND_DISPLAY=wayland-0", "XDG_SESSION_TYPE=wayland", "GDK_BACKEND=wayland", "QT_QPA_PLATFORM=wayland" };
+    enum { NENV = sizeof envs / sizeof envs[0] };
+    uint64_t envp[NENV];
+    for (int i = NENV - 1; i >= 0; i--) { uint64_t l = strlen(envs[i]) + 1; sp -= l; copy_to(m, sp, envs[i], l); envp[i] = sp; }
     uint8_t rnd[16]; random_bytes(rnd, 16); sp -= 16; copy_to(m, sp, rnd, 16); uint64_t rndp = sp;
     sp -= strlen(path) + 1; copy_to(m, sp, path, strlen(path) + 1); uint64_t execfn = sp;
     uint64_t v[96]; int k = 0;
     v[k++] = na;
     for (int i = 0; i < na; i++) v[k++] = argp[i];
     v[k++] = 0;
-    for (int i = 0; i < 5; i++) v[k++] = envp[i];
+    for (int i = 0; i < NENV; i++) v[k++] = envp[i];
     v[k++] = 0;
     uint64_t aux[][2] = { { 3, phdr }, { 4, 56 }, { 5, (uint64_t)phnum }, { 6, 4096 }, { 7, ibase }, { 8, 0 }, { 9, entry },
                           { 11, 1000 }, { 12, 1000 }, { 13, 1000 }, { 14, 1000 }, { 16, 0 }, { 17, 100 }, { 23, 0 }, { 25, rndp }, { 31, execfn }, { 0, 0 } };
@@ -358,7 +365,26 @@ static void chan_drop(struct chan *c, bool reader) {
     }
     chan_wake();
 }
+/* a named, listening Unix socket (see "Unix sockets with names" below) */
+#define ULQ 32
+struct pend { struct chan *rx, *tx; int pid; };
+struct ulisten {
+    int refs;                                     /* (first, as fd_copy expects) */
+    char name[200]; uint8_t stype; int pid;
+    struct pend q[ULQ]; int qh, qn; bool closed;
+    struct ulisten *next;
+};
 struct evfd { int refs; uint64_t count; bool sem; };
+/* timerfd: a deadline (in uptime ns, 0: disarmed) and a repeat interval; expirations are counted when looked at */
+struct tfd { int refs; int clock; uint64_t next, interval, ticks; };
+static uint64_t timer_wake_at;                                 /* the soonest deadline a poll is waiting for */
+static void tfd_update(struct tfd *x) {
+    if (!x->next) return;
+    uint64_t now = uptime_ns();
+    if (now < x->next) return;
+    if (x->interval) { uint64_t k = (now - x->next) / x->interval + 1; x->ticks += k; x->next += k * x->interval; }
+    else { x->ticks++; x->next = 0; }
+}
 struct shm;
 static void shm_put(struct shm *o);
 #define AXQ 256
@@ -372,9 +398,10 @@ struct axwin {
 static void axwin_put(struct axwin *x);
 struct epitem { int fd; uint32_t events; uint64_t data; const void *id; bool off; };
 struct epoll { int refs, n, next; struct epitem it[NFD]; };
+static void ulisten_put(struct ulisten *l);
 static void fd_close(struct lfd *f) {
-    if (f->kind == FD_CHAN) { chan_drop(f->rx, true); chan_drop(f->tx, false); }
-    if ((f->kind == FD_EVENT || f->kind == FD_EPOLL) && f->obj && --*(int *)f->obj <= 0) { kfree(f->obj); chan_wake(); }   /* (refs come first in both) */
+    if (f->kind == FD_CHAN) { chan_drop(f->rx, true); chan_drop(f->tx, false); if (f->lis) ulisten_put(f->lis); }
+    if ((f->kind == FD_EVENT || f->kind == FD_EPOLL || f->kind == FD_TIMER) && f->obj && --*(int *)f->obj <= 0) { kfree(f->obj); chan_wake(); }   /* (refs come first in both) */
     if (f->kind == FD_SHM) shm_put(f->obj);
     if (f->kind == FD_WIN) axwin_put(f->obj);
     if (f->kind == FD_SND) snd_put(f->obj);
@@ -384,8 +411,8 @@ static void fd_copy(struct lfd *dst, const struct lfd *src) {      /* dup: one m
     if (dst == src) return;
     fd_close(dst);
     *dst = *src;
-    if (dst->kind == FD_CHAN) { if (dst->rx) dst->rx->readers++; if (dst->tx) dst->tx->writers++; }
-    if ((dst->kind == FD_EVENT || dst->kind == FD_EPOLL || dst->kind == FD_SHM || dst->kind == FD_WIN || dst->kind == FD_SND) && dst->obj) (*(int *)dst->obj)++;
+    if (dst->kind == FD_CHAN) { if (dst->rx) dst->rx->readers++; if (dst->tx) dst->tx->writers++; if (dst->lis) (*(int *)dst->lis)++; }
+    if ((dst->kind == FD_EVENT || dst->kind == FD_EPOLL || dst->kind == FD_SHM || dst->kind == FD_WIN || dst->kind == FD_SND || dst->kind == FD_TIMER) && dst->obj) (*(int *)dst->obj)++;
 }
 /* move bytes in or out of the ring (to / from a kernel buffer) */
 static void ring_put(struct chan *c, const uint8_t *s, uint32_t n) {
@@ -494,12 +521,19 @@ static int fd_ready(struct lxproc *lx, int fd) {
     case FD_TTY_OUT: return POLLOUT_;
     case FD_CHAN: {
         int r = 0;
+        if (f->lis) return f->lis->qn ? POLLIN_ : 0;            /* a listening socket: a connection to accept */
         if (f->rx) { if (f->rx->len || !f->rx->writers) r |= POLLIN_; if (!f->rx->writers) r |= f->sock ? POLLRDHUP_ | (f->tx ? 0 : POLLHUP_) : POLLHUP_; }
         else if (f->sock) r |= POLLIN_ | POLLRDHUP_;              /* shut down for reading: reads give end of file */
         if (f->tx) { if (!f->tx->readers) r |= f->sock ? POLLOUT_ | POLLHUP_ : POLLERR_; else if (f->tx->len < CHAN_CAP && f->tx->mcount < CHAN_MSGS) r |= POLLOUT_; }
         return r;
     }
     case FD_EVENT: { struct evfd *ev = f->obj; return (ev->count ? POLLIN_ : 0) | (ev->count < ~0ULL - 1 ? POLLOUT_ : 0); }
+    case FD_TIMER: {
+        struct tfd *x = f->obj; tfd_update(x);
+        if (x->ticks) return POLLIN_;
+        if (x->next && (!timer_wake_at || x->next < timer_wake_at)) timer_wake_at = x->next;   /* (wake the poll then) */
+        return 0;
+    }
     case FD_EPOLL: return epoll_scan(lx, f->obj, 0, 1) ? POLLIN_ : 0;
     case FD_WIN: { struct axwin *x = f->obj; return (x->qh != x->qt ? POLLIN_ : 0) | POLLOUT_; }
     case FD_SND: return snd_ready(f->obj, &snd_waiting);
@@ -523,7 +557,12 @@ static uint64_t do_poll(struct lxproc *lx, uint64_t ufds, uint64_t nfds, int64_t
         if (count || ms == 0) return count;
         int64_t left = -1;
         if (ms > 0) { uint64_t now = uptime_ms(); if (now >= end) return 0; left = (int64_t)(end - now); }
-        if (snd_waiting) { snd_waiting = false; if (left < 0 || left > 5) left = 5; }   /* (sound plays without waking anyone) */
+        if (snd_waiting) { snd_waiting = false; if (left < 0 || left > 5) left = 5; }
+        if (timer_wake_at) {                                    /* a timerfd's deadline */
+            uint64_t now = uptime_ns(), w = timer_wake_at > now ? (timer_wake_at - now + 999999) / 1000000 : 1;
+            timer_wake_at = 0;
+            if (left < 0 || (int64_t)w < left) left = (int64_t)w;
+        }   /* (sound plays without waking anyone) */
         chan_wait(left);
     }
 }
@@ -536,7 +575,7 @@ static uint64_t do_poll(struct lxproc *lx, uint64_t ufds, uint64_t nfds, int64_t
 #define EPOLLET_      (1u << 31)
 static const void *fd_id(const struct lfd *f) {               /* which open file an fd number refers to */
     if (f->kind == FD_CHAN) return f->obj ? f->obj : f->rx ? (const void *)f->rx : (const void *)f->tx;   /* (obj: kept from before shutdown) */
-    if (f->kind == FD_EVENT || f->kind == FD_EPOLL || f->kind == FD_SHM || f->kind == FD_WIN) return f->obj;
+    if (f->kind == FD_EVENT || f->kind == FD_EPOLL || f->kind == FD_SHM || f->kind == FD_WIN || f->kind == FD_TIMER) return f->obj;
     return f;
 }
 /* ready entries into out (12-byte struct epoll_event, packed), up to max; out 0: just count (no one-shot change) */
@@ -580,6 +619,11 @@ static uint64_t do_epoll_wait(struct lxproc *lx, uint64_t epfd, uint64_t uev, in
         int64_t left = -1;
         if (ms > 0) { uint64_t now = uptime_ms(); if (now >= end) return 0; left = (int64_t)(end - now); }
         if (snd_waiting) { snd_waiting = false; if (left < 0 || left > 5) left = 5; }
+        if (timer_wake_at) {                                    /* a timerfd's deadline */
+            uint64_t now = uptime_ns(), w = timer_wake_at > now ? (timer_wake_at - now + 999999) / 1000000 : 1;
+            timer_wake_at = 0;
+            if (left < 0 || (int64_t)w < left) left = (int64_t)w;
+        }
         chan_wait(left);
     }
 }
@@ -692,6 +736,58 @@ static int chan_fds(struct lxproc *lx, struct chan *r0, struct chan *w0, struct 
     if (w1) w1->writers++;
     out[0] = a; out[1] = b;
     return 0;
+}
+/* ---------------- Unix sockets with names (bind / listen / connect / accept) ----------------
+ * A listening socket is a name in a kernel table (not a file on disk: stat sees nothing there, which is what
+ * servers that clean up an old socket file expect). connect makes a socket pair's two chans, keeps the
+ * server's ends in the listener's queue, and accept hands them to a new file. Abstract names (a leading 0
+ * byte) are kept as "@name". */
+static struct ulisten *ulistens;
+static bool wayland_starting;
+static void ulisten_put(struct ulisten *l) {
+    if (--l->refs > 0) return;
+    for (struct ulisten **pp = &ulistens; *pp; pp = &(*pp)->next) if (*pp == l) { *pp = l->next; break; }
+    while (l->qn) {                                /* connections nobody accepted: their clients see the end */
+        struct pend *p = &l->q[l->qh]; chan_drop(p->rx, true); chan_drop(p->tx, false);
+        l->qh = (l->qh + 1) % ULQ; l->qn--;
+    }
+    kfree(l);
+    chan_wake();
+}
+/* a sockaddr_un from the program as a table name; false if it isn't one */
+static bool un_name(struct lxproc *lx, uint64_t ua, uint64_t len, char *out, size_t n) {
+    if (len < 3 || len > 110 || !uok(ua, len, false)) return false;
+    const char *sa = (const char *)ua;
+    if (*(uint16_t *)sa != 1) return false;        /* AF_UNIX */
+    const char *p = sa + 2; size_t pl = len - 2;
+    if (!p[0]) {                                   /* abstract: the bytes after the 0, as given */
+        if (pl - 1 + 2 > n) return false;
+        out[0] = '@'; memcpy(out + 1, p + 1, pl - 1); out[pl] = 0;
+        for (size_t i = 1; i < pl; i++) if (!out[i]) out[i] = '?';
+        return true;
+    }
+    char tmp[110]; size_t k = 0; while (k < pl && k < sizeof tmp - 1 && p[k]) { tmp[k] = p[k]; k++; } tmp[k] = 0;
+    path_join(lx->cwd, tmp, out, n);
+    return true;
+}
+static struct ulisten *ulisten_find(const char *name) {
+    for (struct ulisten *l = ulistens; l; l = l->next) if (!strcmp(l->name, name)) return l;
+    return 0;
+}
+/* write a sockaddr_un with name (or just the family) to the program's addr / addrlen */
+static void un_addr_out(uint64_t ua, uint64_t ulen, const char *name) {
+    if (!ua || !ulen || !uok(ulen, 4, true)) return;
+    uint32_t cap = *(uint32_t *)ulen;
+    uint8_t sa[110]; memset(sa, 0, sizeof sa); *(uint16_t *)sa = 1;
+    uint32_t len = 2;
+    if (name && name[0]) {
+        size_t nl = strlen(name); if (nl > 107) nl = 107;
+        if (name[0] == '@') { sa[2] = 0; memcpy(sa + 3, name + 1, nl - 1); len = 2 + (uint32_t)nl; }
+        else { memcpy(sa + 2, name, nl); len = 3 + (uint32_t)nl; }
+    }
+    uint32_t k = len < cap ? len : cap;
+    if (k && uok(ua, k, true)) memcpy((void *)ua, sa, k);
+    *(uint32_t *)ulen = len;
 }
 /* ---------------- /dev: the few devices every Linux program expects ---------------- */
 enum { DEV_NULL = 1, DEV_ZERO, DEV_FULL, DEV_RANDOM, DEV_URANDOM, DEV_WINDOW, DEV_SNDCTL, DEV_SNDPCM };
@@ -1007,7 +1103,7 @@ uint64_t linux_syscall(struct frame *f) {
     switch (f->rax) {
     case 0: case 1: case 3: case 5: case 8: case 16: case 17: case 18: case 19: case 20: case 32: case 33: case 72:
     case 77: case 138: case 217: case 285: case 292: case 44: case 45: case 46: case 47: case 48: case 232: case 281: case 54: case 55:
-    case 441: case 74: case 75: case 81:
+    case 286: case 287: case 441: case 74: case 75: case 81: case 42: case 43: case 49: case 50: case 51: case 52: case 288: case 73:
         f->rdi = (uint32_t)f->rdi; break;                        /* the first argument is a file */
     case 233: f->rdi = (uint32_t)f->rdi; f->rdx = (uint32_t)f->rdx; break;   /* epoll_ctl: two */
     case 9: f->r8 = (uint64_t)(int64_t)(int32_t)f->r8; f->rdx = (uint32_t)f->rdx; f->r10 = (uint32_t)f->r10; break;   /* mmap: fd (-1 for none), prot, flags */
@@ -1046,6 +1142,22 @@ static uint64_t linux_syscall_(struct frame *f) {
             if (!uok(b, c, true)) return E(EFAULT_);
             if (fd->dev == DEV_RANDOM || fd->dev == DEV_URANDOM) random_bytes((void *)b, c); else memset((void *)b, 0, c);
             return c;
+        }
+        if (fd->kind == FD_TIMER) {
+            struct tfd *x = fd->obj;
+            if (n == 17) return E(ESPIPE_);
+            if (c < 8) return E(EINVAL_);
+            for (;;) {
+                tfd_update(x);
+                if (x->ticks) break;
+                if (fd->flags & 04000) return E(EAGAIN_);
+                uint64_t now = uptime_ns();
+                chan_wait(x->next ? (int64_t)((x->next - now + 999999) / 1000000) : -1);
+                if (lx->fd[a].kind != FD_TIMER) return E(EBADF_);
+            }
+            if (!uok(b, 8, true)) return E(EFAULT_);
+            *(uint64_t *)b = x->ticks; x->ticks = 0;
+            return 8;
         }
         if (fd->kind == FD_EVENT) {
             struct evfd *ev = fd->obj;
@@ -1302,6 +1414,107 @@ static uint64_t linux_syscall_(struct frame *f) {
         ((int32_t *)a)[0] = fds[0]; ((int32_t *)a)[1] = fds[1];
         return 0;
     }
+    case 41: {                                                 /* socket: Unix sockets only */
+        int type = (int)b & 0xF;
+        if (a != 1) return E(EAFNOSUPPORT_);                   /* (the network is AXIOM's own, not Linux sockets) */
+        if (type != 1 && type != 2 && type != 5) return E(EINVAL_);
+        if ((b & ~(uint64_t)0xF) & ~(uint64_t)(04000 | 02000000)) return E(EINVAL_);
+        int k = fd_new(lx, 0); if (k < 0) return E(EMFILE_);
+        struct lfd *fd = &lx->fd[k];
+        memset(fd, 0, sizeof *fd);
+        fd->kind = FD_CHAN; fd->sock = true; fd->stype = (uint8_t)type; fd->flags = 2 | ((int)b & 04000);
+        return (uint64_t)k;
+    }
+    case 49: {                                                 /* bind */
+        if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
+        struct lfd *fd = &lx->fd[a];
+        if (fd->kind != FD_CHAN || !fd->sock) return E(ENOTSOCK_);
+        char nm[200];
+        if (!un_name(lx, b, c, nm, sizeof nm)) return E(EINVAL_);
+        if (fd->path[0] || fd->rx || fd->tx) return E(EINVAL_);
+        if (ulisten_find(nm)) return E(EADDRINUSE_);
+        strncpy0(fd->path, nm, sizeof fd->path);
+        return 0;
+    }
+    case 50: {                                                 /* listen */
+        if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
+        struct lfd *fd = &lx->fd[a];
+        if (fd->kind != FD_CHAN || !fd->sock) return E(ENOTSOCK_);
+        if (fd->lis) return 0;
+        if (!fd->path[0] || fd->rx || fd->tx) return E(EINVAL_);   /* (autobind isn't there) */
+        if (ulisten_find(fd->path)) return E(EADDRINUSE_);
+        struct ulisten *l = kmalloc(sizeof *l); if (!l) return E(ENOMEM_);
+        memset(l, 0, sizeof *l);
+        l->refs = 1; strncpy0(l->name, fd->path, sizeof l->name); l->stype = fd->stype; l->pid = t->proc->pid;
+        l->next = ulistens; ulistens = l;
+        fd->lis = l;
+        chan_wake();                                           /* (someone may be waiting for this name) */
+        return 0;
+    }
+    case 42: {                                                 /* connect */
+        if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
+        struct lfd *fd = &lx->fd[a];
+        if (fd->kind != FD_CHAN || !fd->sock) return E(ENOTSOCK_);
+        if (fd->lis) return E(EINVAL_);
+        if (fd->rx || fd->tx) return E(EISCONN_);
+        char nm[200];
+        if (!un_name(lx, b, c, nm, sizeof nm)) return E(EINVAL_);
+        struct ulisten *l = ulisten_find(nm);
+        if (!l && !strcmp(nm, "/system/linux/tmp/wayland-0") && !wayland_starting) {
+            /* a desktop app looking for the compositor: start AXIOM's (axwl) and give it a moment */
+            char *av[] = { "axwl", 0 };
+            wayland_starting = true;
+            struct dunc_stat ws; int pid = vfs_stat("/system/bin/axwl", &ws) == FS_OK ? linux_spawn("/system/bin/axwl", 1, av, 0) : -1;
+            for (uint64_t t0 = uptime_ms(); pid > 0 && !(l = ulisten_find(nm)) && task_alive(pid) && uptime_ms() - t0 < 5000;) chan_wait(100);
+            wayland_starting = false;
+            if (lx->fd[a].kind != FD_CHAN || fd->rx || fd->tx) return E(EBADF_);   /* (changed meanwhile) */
+        }
+        if (!l) return nm[0] == '@' ? E(ECONNREFUSED_) : E(ENOENT_);
+        if (l->stype != fd->stype) return E(ECONNREFUSED_);   /* (Linux: EPROTOTYPE) */
+        if (l->qn == ULQ) return (fd->flags & 04000) ? E(EAGAIN_) : E(ECONNREFUSED_);
+        struct chan *up = chan_new(fd->stype != 1), *down = chan_new(fd->stype != 1);
+        if (!up || !down) { if (up) { kfree(up->data); kfree(up); } if (down) { kfree(down->data); kfree(down); } return E(ENOMEM_); }
+        fd->tx = up; up->writers++; fd->rx = down; down->readers++;
+        fd->peer = l->pid;
+        struct pend *p = &l->q[(l->qh + l->qn) % ULQ]; l->qn++;
+        p->rx = up; up->readers++; p->tx = down; down->writers++; p->pid = t->proc->pid;
+        chan_wake();
+        return 0;
+    }
+    case 43: case 288: {                                       /* accept, accept4 */
+        if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
+        struct lfd *fd = &lx->fd[a];
+        if (fd->kind != FD_CHAN || !fd->sock) return E(ENOTSOCK_);
+        struct ulisten *l = fd->lis;
+        if (!l) return E(EINVAL_);
+        int flags = n == 288 ? (int)d : 0;
+        if (flags & ~(04000 | 02000000)) return E(EINVAL_);
+        while (!l->qn) {
+            if (fd->flags & 04000) return E(EAGAIN_);
+            chan_wait(-1);
+            if (a >= NFD || lx->fd[a].kind != FD_CHAN || lx->fd[a].lis != l) return E(EBADF_);   /* (closed meanwhile) */
+        }
+        int k = fd_new(lx, 0); if (k < 0) return E(EMFILE_);
+        struct pend p = l->q[l->qh]; l->qh = (l->qh + 1) % ULQ; l->qn--;
+        struct lfd *nf = &lx->fd[k];
+        memset(nf, 0, sizeof *nf);
+        nf->kind = FD_CHAN; nf->sock = true; nf->stype = l->stype; nf->flags = 2 | (flags & 04000);
+        nf->rx = p.rx; nf->tx = p.tx; nf->peer = p.pid;      /* (the queue's counts move to the file) */
+        strncpy0(nf->path, l->name, sizeof nf->path);
+        un_addr_out(b, c, 0);                                  /* the client is unnamed */
+        return (uint64_t)k;
+    }
+    case 51: case 52: {                                        /* getsockname, getpeername */
+        if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
+        struct lfd *fd = &lx->fd[a];
+        if (fd->kind != FD_CHAN || !fd->sock) return E(ENOTSOCK_);
+        if (n == 52 && !fd->rx && !fd->tx) return E(ENOTCONN_);
+        un_addr_out(b, c, n == 51 ? fd->path : 0);
+        return 0;
+    }
+    case 73:                                                   /* flock: one user, so every lock is granted */
+        if (a >= NFD || !lx->fd[a].kind) return E(EBADF_);
+        return 0;
     case 53: {                                                 /* socketpair */
         int type = (int)b & 0xF;
         if (a != 1) return E(EAFNOSUPPORT_);                   /* AF_UNIX only */
@@ -1337,9 +1550,10 @@ static uint64_t linux_syscall_(struct frame *f) {
         case 7: case 8: v = CHAN_CAP; break;                   /* SO_SNDBUF, SO_RCVBUF */
         case 39: v = 1; break;                                 /* SO_DOMAIN: AF_UNIX */
         case 16: case 12: v = 0; break;                        /* SO_PASSCRED, SO_PRIORITY */
-        case 17:                                               /* SO_PEERCRED: this program (both ends are its own) */
+        case 30: v = fd->lis ? 1 : 0; break;                   /* SO_ACCEPTCONN */
+        case 17:                                               /* SO_PEERCRED: the other end's program (a pair: this one) */
             if (*(uint32_t *)e < 12) return E(EINVAL_);
-            ((uint32_t *)d)[0] = (uint32_t)t->proc->pid; ((uint32_t *)d)[1] = 1000; ((uint32_t *)d)[2] = 1000;
+            ((uint32_t *)d)[0] = (uint32_t)(fd->peer ? fd->peer : t->proc->pid); ((uint32_t *)d)[1] = 1000; ((uint32_t *)d)[2] = 1000;
             *(uint32_t *)e = 12; return 0;
         default: return E(ENOPROTOOPT_);
         }
@@ -1393,6 +1607,45 @@ static uint64_t linux_syscall_(struct frame *f) {
     }
     case 74: case 75:                                          /* fsync, fdatasync: writes go straight to the volume */
         return a < NFD && lx->fd[a].kind ? 0 : E(EBADF_);
+    case 283: {                                                /* timerfd_create */
+        if (a != 0 && a != 1 && a != 7 && a != 8 && a != 9) return E(EINVAL_);   /* REALTIME, MONOTONIC, BOOTTIME (+_ALARM) */
+        if (b & ~(uint64_t)(04000 | 02000000)) return E(EINVAL_);
+        struct tfd *x = kmalloc(sizeof *x); if (!x) return E(ENOMEM_);
+        int k = fd_new(lx, 0); if (k < 0) { kfree(x); return E(EMFILE_); }
+        memset(x, 0, sizeof *x); x->refs = 1; x->clock = (int)a;
+        struct lfd *fd = &lx->fd[k]; memset(fd, 0, sizeof *fd);
+        fd->kind = FD_TIMER; fd->obj = x; fd->flags = 2 | ((int)b & 04000);
+        return k;
+    }
+    case 286: case 287: {                                      /* timerfd_settime, timerfd_gettime */
+        if (a >= NFD || lx->fd[a].kind != FD_TIMER) return a < NFD && lx->fd[a].kind ? E(EINVAL_) : E(EBADF_);
+        struct tfd *x = lx->fd[a].obj;
+        uint64_t old_spec = n == 286 ? d : b;                   /* where the old setting goes */
+        tfd_update(x);
+        if (old_spec) {
+            if (!uok(old_spec, 32, true)) return E(EFAULT_);
+            uint64_t now = uptime_ns(), left = x->next > now ? x->next - now : 0;
+            uint64_t *o = (uint64_t *)old_spec;
+            o[0] = x->interval / 1000000000ull; o[1] = x->interval % 1000000000ull;
+            o[2] = left / 1000000000ull; o[3] = left % 1000000000ull;
+            if (x->next && !left) o[3] = 1;
+        }
+        if (n == 287) return 0;
+        if (b & ~(uint64_t)3) return E(EINVAL_);                /* TFD_TIMER_ABSTIME, CANCEL_ON_SET */
+        if (!uok(c, 32, false)) return E(EFAULT_);
+        const int64_t *v = (const int64_t *)c;
+        if (v[0] < 0 || v[2] < 0 || (uint64_t)v[1] >= 1000000000ull || (uint64_t)v[3] >= 1000000000ull) return E(EINVAL_);
+        uint64_t interval = (uint64_t)v[0] * 1000000000ull + (uint64_t)v[1], val = (uint64_t)v[2] * 1000000000ull + (uint64_t)v[3];
+        x->ticks = 0; x->interval = interval;
+        if (!val) x->next = 0;
+        else if (b & 1) {                                       /* absolute, on the timer's clock */
+            uint64_t up = uptime_ns(), clk = (x->clock == 0 || x->clock == 8) ? linux_now_ns() : up;
+            x->next = val > clk ? up + (val - clk) : up;
+            if (!x->next) x->next = 1;
+        } else x->next = uptime_ns() + val;
+        chan_wake();                                            /* (pollers look again, for the new deadline) */
+        return 0;
+    }
     case 284: case 290: {                                      /* eventfd, eventfd2 */
         if (n == 290 && (b & ~(uint64_t)(1 | 04000 | 02000000))) return E(EINVAL_);   /* EFD_SEMAPHORE, NONBLOCK, CLOEXEC (Chromium checks) */
         struct evfd *ev = kmalloc(sizeof *ev); if (!ev) return E(ENOMEM_);

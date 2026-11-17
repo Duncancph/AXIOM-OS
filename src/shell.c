@@ -135,9 +135,12 @@ void shell_execute(char *line) {
     else if (!strcmp(c, "run")) {                         /* a Linux program: runs, and its output shows here when it ends */
         if (argc < 2) { kprintf("usage: run <program> [arguments]   (Linux x86-64 programs, static or position-independent)\n"); return; }
         char full[200];
+        bool bg = argc > 2 && !strcmp(argv[argc - 1], "&");   /* run <program> ... &: don't wait for it */
+        if (bg) argc--;
         if (argv[1][0] == '/') strncpy0(full, argv[1], sizeof full); else ksnprintf(full, sizeof full, "/home/%s", argv[1]);
-        int pid = linux_spawn(full, argc - 1, argv + 1, current && current->user ? current : 0);
-        if (pid > 0 && current && current->user) {
+        int pid = linux_spawn(full, argc - 1, argv + 1, current && current->user && !bg ? current : 0);
+        if (bg && pid > 0) kprintf("started %s (process %d)\n", argv[1], pid);
+        if (pid > 0 && current && current->user && !bg) {
             uint64_t t0 = uptime_ms();
             while (task_alive(pid) && !current->killed && uptime_ms() - t0 < 600000) task_sleep(10);
         }
