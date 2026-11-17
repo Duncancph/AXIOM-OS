@@ -12,6 +12,11 @@ void *kmalloc(size_t n) { return calloc(1, n ? n : 1); }
 void kfree(void *p) { free(p); }
 void rtc_read(struct rtc_time *t) { t->year = 2026; t->mon = 11; t->day = 14; t->hour = 9; t->min = 41; t->sec = 30; }
 void rtc_read_local(struct rtc_time *t) { rtc_read(t); t->utc_offset_min = 0; }
+int64_t days_from_civil(int64_t y, unsigned m, unsigned d) {   /* (as src/tz.c) */
+    y -= m <= 2; int64_t era = (y >= 0 ? y : y - 399) / 400; unsigned yoe = (unsigned)(y - era * 400);
+    unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1, doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + (int64_t)doe - 719468;
+}
 void random_bytes(void *b, size_t n) { memset(b, 0x5A, n); }
 void kprintf(const char *f, ...) { va_list a; va_start(a, f); vprintf(f, a); va_end(a); }
 
@@ -314,6 +319,10 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 40; i++) {   /* force the folder to grow beyond one cluster */
         char p[96], t[32]; snprintf(p, sizeof p, "/My Folder/Sub dir/document number %02d.txt", i); snprintf(t, sizeof t, "file %d\n", i);
         CHECK(o->write(v, p, t, strlen(t)) == (long)strlen(t), "write many %d", i);
+    }
+    {   /* dates: a file written now has today's date (the test's clock: 2026-11-14 09:41:30, UTC) */
+        int64_t t = o->mtime(v, "/My Folder/Sub dir/document number 00.txt");
+        CHECK(t >= 1794649290 - 2 && t <= 1794649290, "mtime %lld", (long long)t);
     }
     n = o->list(v, "/My Folder/Sub dir", d, 64);
     CHECK(n == 40, "list many (%d)", n);

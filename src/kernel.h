@@ -422,6 +422,7 @@ struct window *wm_create_at(struct task *t, int w, int h, const char *title, uin
 bool wm_pos(struct task *t, int id, int *x, int *y);      /* where its content is on the screen */
 bool wm_move(struct task *t, int id, int x, int y);       /* put its content there */
 bool wm_show(struct task *t, int id, bool show);
+bool wm_set_app(struct task *t, int id, const char *app_id, const char *name);   /* shown for another program */
 bool wm_set_cursor(struct task *t, int id, int shape);    /* the pointer's shape over it: AXWIN_CURSOR_* (axiom_window.h) */
 bool wm_resize(struct task *t, int id, int *nw, int *nh);
 int wm_id(struct window *w);

@@ -206,6 +206,15 @@ int vfs_list_full(const char *path, struct vfs_dirent *out, int max) {
     return n;
 }
 
+int64_t vfs_mtime(const char *path) {
+    struct path p; char rel[PATH_MAX_];
+    if (!parse(path, &p)) return -1;
+    lock();
+    struct mount *m = route(&p, rel, sizeof rel);
+    int64_t t = m && m->ops->mtime ? m->ops->mtime(m->vol, rel) : -1;
+    unlock();
+    return t;
+}
 int vfs_stat(const char *path, struct dunc_stat *st) {
     struct path p; char rel[PATH_MAX_];
     if (!parse(path, &p)) return FS_EINVAL;

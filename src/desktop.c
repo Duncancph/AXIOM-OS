@@ -33,7 +33,11 @@ struct window {
     bool move_events;                   /* WIN_MOVE_EVENTS: tell the app where its content is when it moves */
     int sent_x, sent_y;                 /* (the last position told) */
     int cursor;                         /* the pointer's shape over its content (WM_CURSOR_*) */
+    char app_id[24], app_name[32];      /* whose it really is, when the owner shows it for another program
+                                           (AXIOM's Wayland compositor: wm_set_app); "": the owner's */
 };
+static const char *win_app(const struct window *w) { return w->app_id[0] ? w->app_id : w->owner ? w->owner->app : 0; }
+static const char *win_name(const struct window *w) { return w->app_name[0] ? w->app_name : w->owner ? w->owner->name : w->title; }
 static inline int fw(struct window *w) { return w->popup ? w->w : w->w + 2; }
 static inline int fh(struct window *w) { return w->popup ? w->h : w->h + TITLE + 1; }
 static inline int cx0(struct window *w) { return w->popup ? w->x : w->x + 1; }       /* where its content starts */
@@ -227,7 +231,7 @@ static void pixel_icon(struct canvas *c, const char **rows, int nrows, int x, in
 
 static void bar_text(char *app, int na, char *clk, int nc) {
     int t = top_window();
-    strncpy0(app, t >= 0 ? wins[t].owner->name : "Desktop", na);
+    strncpy0(app, t >= 0 ? win_name(&wins[t]) : "Desktop", na);
     struct rtc_time tm; rtc_read_local(&tm);
     static const char *wd[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
     static const int mt[] = { 0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4 };
@@ -586,7 +590,7 @@ static struct rect power_rect(void) { return (struct rect){ (W - 560) / 2, HL_BA
 static struct rect power_btn(int k) { struct rect b = power_rect(); return (struct rect){ b.x + b.w - 360 + k * 180, b.y + b.h - 52, 166, 36 }; }  /* Cancel, anyway */
 static int windows_open(char *first, int n) {
     int c = 0;
-    for (int i = 0; i < MAX_WIN; i++) if (wins[i].used && !wins[i].popup) { if (!c && first) strncpy0(first, wins[i].owner ? wins[i].owner->name : wins[i].title, n); c++; }
+    for (int i = 0; i < MAX_WIN; i++) if (wins[i].used && !wins[i].popup) { if (!c && first) strncpy0(first, win_name(&wins[i]), n); c++; }
     return c;
 }
 static void power_start(int act) {
@@ -666,7 +670,7 @@ static void draw_switcher(void) {
         if (!w->used) continue;
         int y = s.y + 44 + i * 44;
         if (i == sw_sel) gfx_rrect(&cv, s.x + 10, y, s.w - 20, 40, 10, HL_CREAM, 40);
-        const struct app_entry *ae = w->owner && w->owner->appid[0] ? apps_find(w->owner->appid) : 0;
+        const struct app_entry *ae = win_app(w) && win_app(w)[0] ? apps_find(win_app(w)) : 0;
         const uint32_t *ic = hl_app_icon(ae ? ae->icon : "gear", 1);
         for (int j = 0; j < 34; j++) for (int k = 0; k < 34; k++) {
             uint32_t p = ic[j * 34 + k], al = p >> 24;
@@ -974,6 +978,15 @@ bool wm_show(struct task *t, int id, bool show) {
     else { int old = top_window(); w->minimized = true; damage_frame(w); focus_changed(old); if (capture_win == idx) capture_win = -1; }
     return true;
 }
+/* the window is shown for another program (a Wayland app shown by axwl): its app, for the top bar and the dock */
+bool wm_set_app(struct task *t, int id, const char *app_id, const char *name) {
+    struct window *w = find(t, id);
+    if (!w) return false;
+    strncpy0(w->app_id, app_id ? app_id : "", sizeof w->app_id);
+    strncpy0(w->app_name, name ? name : "", sizeof w->app_name);
+    damage_r(bar_rect()); damage_r(dock_area());
+    return true;
+}
 bool wm_set_cursor(struct task *t, int id, int shape) {
     struct window *w = find(t, id);
     if (!w) return false;
@@ -1096,7 +1109,7 @@ static void launch(int a) {
 static void activate_app(int a) {
     int top = top_window(), best = -1;
     for (int z = nz - 1; z >= 0; z--)
-        if (!wins[zorder[z]].popup && app_index(wins[zorder[z]].owner->app) == a) { best = zorder[z]; break; }
+        if (!wins[zorder[z]].popup && app_index(win_app(&wins[zorder[z]])) == a) { best = zorder[z]; break; }
     if (best < 0) { if (!app_running(a)) launch(a); return; }
     if (best == top) { int old = top; wins[best].minimized = true; damage_frame(&wins[best]); focus_changed(old); }
     else raise(best);

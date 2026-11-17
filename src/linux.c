@@ -98,7 +98,7 @@ enum { EPERM_ = 1, ENOENT_ = 2, EBADF_ = 9, EAGAIN_ = 11, ENOMEM_ = 12, EFAULT_ 
        EACCES_ = 13, EBUSY_ = 16, ENODEV_ = 19, ENOSPC_ = 28, EINVAL_ = 22, EMFILE_ = 24, ENOTTY_ = 25, ESPIPE_ = 29, EPIPE_ = 32, ERANGE_ = 34, ENOSYS_ = 38, ENOTSOCK_ = 88,
        EMSGSIZE_ = 90, ENOPROTOOPT_ = 92, EOPNOTSUPP_ = 95, EAFNOSUPPORT_ = 97, ETIMEDOUT_ = 110, EINTR_ = 4, EPROTONOSUPPORT_ = 93,
        EADDRINUSE_ = 98, ENETDOWN_ = 100, ENETUNREACH_ = 101, ECONNRESET_ = 104, ENOBUFS_ = 105, EISCONN_ = 106, ENOTCONN_ = 107,
-       ECONNREFUSED_ = 111, ENOTEMPTY_ = 39, EHOSTUNREACH_ = 113, EALREADY_ = 114, EINPROGRESS_ = 115, EDESTADDRREQ_ = 89 };
+       ECONNREFUSED_ = 111, ENOTEMPTY_ = 39, ESRCH_ = 3, EHOSTUNREACH_ = 113, EALREADY_ = 114, EINPROGRESS_ = 115, EDESTADDRREQ_ = 89 };
 
 static bool uok(uint64_t p, uint64_t n, bool w) { return n == 0 || user_ok(current->pml4, (const void *)p, n, w); }
 static bool ustr(char *dst, uint64_t src, size_t max) {
@@ -297,8 +297,9 @@ static void fill_stat(struct lstat *st, bool dir, uint64_t size, bool tty, const
     st->dev = 1; st->ino = path_ino(path);   /* (loaders tell files apart by these) */ st->nlink = 1; st->uid = st->gid = 1000;
     st->mode = tty ? 0020620 : dir ? 0040755 : 0100644;
     st->size = size; st->blksize = 4096; st->blocks = (size + 511) / 512;
-    uint64_t now = (uint64_t)(linux_now_ns() / 1000000000ull);
-    st->at[0] = st->mt[0] = st->ct[0] = now;
+    int64_t t = path && !tty ? vfs_mtime(path) : -1;            /* (the disk's date; else now) */
+    uint64_t when = t > 0 ? (uint64_t)t : (uint64_t)(linux_now_ns() / 1000000000ull);
+    st->at[0] = st->mt[0] = st->ct[0] = when;
 }
 static int fd_new(struct lxproc *lx, int from) {
     for (int i = from; i < NFD; i++) if (!lx->fd[i].kind) return i;
@@ -1107,6 +1108,15 @@ static uint64_t axwin_ioctl(struct lxproc *lx, struct lfd *fd, uint64_t req, uin
         struct axwin_rect *r = (struct axwin_rect *)arg;
         if (!x->id) { x->px = r->x + 1; x->py = r->y + 1; return 0; }   /* (+1: 0 means not said) */
         return wm_move(x->owner, x->id, r->x, r->y) ? 0 : E(ENOENT_);
+    }
+    case AXWIN_APP: {
+        if (!x->id) return E(ENOENT_);
+        if (!uok(arg, 4, false)) return E(EFAULT_);
+        int pid = *(int32_t *)arg;
+        for (int i = 0; i < MAX_TASKS; i++)
+            if (tasks[i].state && tasks[i].state != PS_ZOMBIE && tasks[i].pid == pid)
+                return wm_set_app(x->owner, x->id, tasks[i].app ? tasks[i].app : "", tasks[i].name) ? 0 : E(ENOENT_);
+        return E(ESRCH_);
     }
     case AXWIN_SHOW: case AXWIN_CURSOR: {
         if (!x->id) return E(ENOENT_);

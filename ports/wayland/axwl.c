@@ -124,6 +124,8 @@ static void present(struct toplevel *t) {
         t->win = be_create(gw, gh, t->title);
         if (!t->win) { fprintf(stderr, "axwl: couldn't make a window\n"); return; }
         t->ww = gw; t->wh = gh;
+        pid_t pid = 0; wl_client_get_credentials(wl_resource_get_client(s->res), &pid, 0, 0);
+        if (pid > 0) be_app(t->win, pid);              /* (so AXIOM shows it as the app's, not axwl's) */
         extern void watch_window(struct toplevel *t);
         watch_window(t);
     }

@@ -39,6 +39,7 @@ void be_destroy(struct bwin *b) {
 uint32_t *be_pixels(struct bwin *b, int *w, int *h, int *stride) { *w = b->w; *h = b->h; *stride = b->w; return b->px; }
 void be_flush(struct bwin *b, int x, int y, int w, int h) {}
 void be_title(struct bwin *b, const char *t) { strncpy(b->title, t, 63); fprintf(stderr, "[test] window %d title '%s'\n", b->id, t); }
+void be_app(struct bwin *b, int pid) { fprintf(stderr, "[test] window %d is process %d's\n", b->id, pid); }
 int be_fd(struct bwin *b) { return b->pipe[0]; }
 static void push(struct bwin *b, int type, int x, int y, int key, int button) {
     struct axwin_event e = { type, b->id, x, y, key, button };

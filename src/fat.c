@@ -639,7 +639,22 @@ static long f_append(void *vol, const char *rel, const void *buf, uint64_t len) 
     return r ? r : (long)len;
 }
 
-const struct fs_ops fat_ops = { f_list, f_read, f_write, f_mkdir, f_remove, f_rename, f_stat, f_space, f_append };
+/* the entry's write date and time (local time on FAT, as AXIOM writes them) as Unix seconds */
+int64_t days_from_civil(int64_t y, unsigned m, unsigned d);
+static int64_t f_mtime(void *vol, const char *rel) {
+    struct fatvol *v = vol; struct dent *d = kmalloc(sizeof *d);
+    if (!d) return -1;
+    int r = lookup(v, rel, d);
+    uint16_t t = d->raw[22] | d->raw[23] << 8, dt = d->raw[24] | d->raw[25] << 8;
+    kfree(d);
+    if (r || !dt) return -1;                                  /* (the root, or no date) */
+    unsigned y = 1980 + (dt >> 9), mo = (dt >> 5) & 15, dd = dt & 31;
+    if (mo < 1 || mo > 12 || dd < 1) return -1;
+    struct rtc_time now; rtc_read_local(&now);
+    return days_from_civil(y, mo, dd) * 86400 + (t >> 11) * 3600 + ((t >> 5) & 63) * 60 + (t & 31) * 2 - now.utc_offset_min * 60;
+}
+
+const struct fs_ops fat_ops = { f_list, f_read, f_write, f_mkdir, f_remove, f_rename, f_stat, f_space, f_append, f_mtime };
 
 /* ---------------- mount ---------------- */
 static bool is_fat32_vbr(const uint8_t *b) {

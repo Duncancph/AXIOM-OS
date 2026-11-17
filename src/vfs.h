@@ -15,8 +15,11 @@ struct fs_ops {
     int  (*stat)(void *vol, const char *rel, struct dunc_stat *st);
     void (*space)(void *vol, uint64_t *total, uint64_t *free);
     long (*append)(void *vol, const char *rel, const void *buf, uint64_t len);   /* file must exist */
+    int64_t (*mtime)(void *vol, const char *rel);      /* last change, Unix seconds (UTC); <0 if not known.
+                                                          Optional (0: the file system keeps no dates) */
 };
 
+int64_t vfs_mtime(const char *path);                 /* when a file last changed (Unix seconds), <0 if not known */
 int  vfs_mount(const char *label, const char *kind, const struct fs_ops *ops, void *vol, char *path_out);
 /* mount a folder of a volume at a path, e.g. ("/home", "/home") or ("/system/config", "/config") */
 int  vfs_mount_at(const char *at, const char *sub, const char *label, const char *kind, const struct fs_ops *ops, void *vol);

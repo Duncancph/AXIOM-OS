@@ -28,6 +28,7 @@ void be_destroy(struct bwin *b) { if (b->px) munmap(b->px, b->maplen); close(b->
 uint32_t *be_pixels(struct bwin *b, int *w, int *h, int *stride) { *w = b->info.w; *h = b->info.h; *stride = b->info.stride / 4; return b->px; }
 void be_flush(struct bwin *b, int x, int y, int w, int h) { struct axwin_rect r = { x, y, w, h }; ioctl(b->fd, AXWIN_FLUSH, &r); }
 void be_title(struct bwin *b, const char *t) { char c[64] = { 0 }; strncpy(c, t, 63); ioctl(b->fd, AXWIN_TITLE, c); }
+void be_app(struct bwin *b, int pid) { ioctl(b->fd, AXWIN_APP, &pid); }
 int be_fd(struct bwin *b) { return b->fd; }
 /* (the file is non-blocking: this returns 0 once the queue is empty, so the event loop goes back to waiting) */
 int be_event(struct bwin *b, struct axwin_event *e) { return read(b->fd, e, sizeof *e) == (ssize_t)sizeof *e; }

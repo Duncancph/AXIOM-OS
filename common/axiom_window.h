@@ -52,6 +52,8 @@ struct axwin_clip { uint64_t data; uint64_t len; uint64_t seq; };   /* data: a p
 #define AXWIN_CLIP_SET 0x4158000Au /* struct axwin_clip *: copy len bytes from data (at most 1 MiB); seq comes back */
 #define AXWIN_CLIP_GET 0x4158000Bu /* struct axwin_clip *: data, len = room there; comes back with len = the whole
                                       text's length (copied: as much as fits) and seq. data 0: just len and seq */
+#define AXWIN_APP    0x4158000Cu   /* int *: the process this window is really for (a compositor showing an app's
+                                      window): the top bar and the dock show it as that app */
 
 /* events: the same layout as AXIOM's own (struct dunc_event) */
 struct axwin_event { int32_t type, win, x, y, key, button; };
