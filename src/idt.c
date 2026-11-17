@@ -29,6 +29,12 @@ static void user_fault(struct frame *f) {
     ksnprintf(msg, sizeof msg, "%s and was stopped (at %lx). Other apps are unaffected.", what, f->rip);
     kprintf("[protect] '%s' (pid %d): %s at rip=%lx addr=%lx -> terminated\n", current->name, current->pid,
             f->vec < 20 ? names[f->vec] : "exception", f->rip, cr2);
+    if (current->lx) {                                     /* a Linux program: which library, and where the stack came from */
+        linux_where("crashed in", f->rip);
+        uint64_t *sp = (uint64_t *)f->rsp;
+        for (int i = 0, shown = 0; i < 64 && shown < 8 && user_ok(current->pml4, sp + i, 8, false); i++)
+            if (linux_where_quiet(sp[i])) { linux_where("  called from", sp[i]); shown++; }
+    }
     char title[64]; ksnprintf(title, sizeof title, "%s crashed", current->name);
     desktop_notify(title, msg);
     task_exit(-1);

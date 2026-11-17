@@ -16,6 +16,9 @@ cat > config.h <<'H'
 #define HAVE_SYS_PRCTL_H 1
 #define PACKAGE "wayland"
 #define PACKAGE_VERSION "1.22.0"
+/* AXIOM has no mremap: make wl_shm grow pools by mapping again (wl_os_mremap_maymove) */
+#include <sys/mman.h>
+#undef MREMAP_MAYMOVE
 H
 sed -e 's/@WAYLAND_VERSION_MAJOR@/1/; s/@WAYLAND_VERSION_MINOR@/22/; s/@WAYLAND_VERSION_MICRO@/0/; s/@WAYLAND_VERSION@/1.22.0/' \
     "$SRC/src/wayland-version.h.in" > wayland-version.h

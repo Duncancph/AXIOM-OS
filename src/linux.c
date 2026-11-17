@@ -50,6 +50,18 @@ struct lxproc {
 /* a range of a program's memory read from a file (its own segments, its loader's, mmap'd libraries): only
  * for /proc/self/maps, which Chromium (and debuggers) read to find code and print stack traces */
 struct fmap { uint64_t s, e, off; char path[120]; };
+/* the file a code address is in (for crash reports) */
+static const struct fmap *fmap_at(uint64_t a) {
+    struct lxproc *lx = current ? current->lx : 0;
+    if (!lx) return 0;
+    for (int i = 0; i < lx->nfmaps; i++) if (a >= lx->fmaps[i].s && a < lx->fmaps[i].e) return &lx->fmaps[i];
+    return 0;
+}
+bool linux_where_quiet(uint64_t a) { return fmap_at(a) != 0; }
+void linux_where(const char *what, uint64_t a) {
+    const struct fmap *f = fmap_at(a);
+    if (f) kprintf("[protect] %s %s+%lx\n", what, f->path, a - f->s + f->off);
+}
 static void fmap_add(struct lxproc *lx, uint64_t s, uint64_t e, uint64_t off, const char *path) {
     if (!lx) return;
     if (lx->nfmaps == lx->capfmaps) {
@@ -1800,7 +1812,14 @@ static uint64_t linux_syscall_(struct frame *f) {
         char p[200], full[200];
         if (!ustr(p, n == 83 ? a : b, sizeof p)) return E(EFAULT_);
         path_join(lx->cwd, p, full, sizeof full);
-        return vfs_mkdir(full) == 0 ? 0 : E(EEXIST_);
+        if (vfs_mkdir(full) == 0) return 0;
+        /* why not, as Linux says it (GLib's mkdir -p goes on to make the parents only after ENOENT) */
+        struct dunc_stat st;
+        if (vfs_stat(full, &st) == FS_OK) return E(EEXIST_);
+        char par[200]; strncpy0(par, full, sizeof par);
+        char *sl = 0; for (char *q = par; *q; q++) if (*q == '/') sl = q;
+        if (sl && sl != par) { *sl = 0; if (vfs_stat(par, &st) != FS_OK) return E(ENOENT_); if (!st.is_dir) return E(ENOTDIR_); }
+        return E(EACCES_);
     }
     case 87: case 263: case 84: {                              /* unlink, unlinkat, rmdir */
         char p[200], full[200];
@@ -1917,6 +1936,10 @@ static uint64_t linux_syscall_(struct frame *f) {
         }
         return 0;
     case 25: return E(ENOMEM_);                                /* mremap: callers fall back */
+    case 26:                                                   /* msync: shared mappings are the memfd's own pages,
+                                                                  and file mappings aren't written back: nothing to do */
+        if (a & 4095) return E(EINVAL_);
+        return 0;
     case 12: {                                                 /* brk */
         struct task *P = t->proc;
         if (!P->heap_top) P->heap_top = USER_HEAP;

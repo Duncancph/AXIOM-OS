@@ -279,6 +279,8 @@ struct lxproc;
 void linux_cpu_init(void);                 /* the syscall instruction (each core) */
 uint64_t linux_syscall(struct frame *f);
 int linux_spawn(const char *path, int argc, char **argv, struct task *out);   /* -> pid */
+void linux_where(const char *what, uint64_t addr);   /* print which file (and offset) a Linux program's address is in */
+bool linux_where_quiet(uint64_t addr);
 void linux_task_exit(struct task *t);
 void linux_dump_threads(void);            /* Ctrl+\ on the serial line: where each Linux thread is (debugging) */
 bool task_alive(int pid);
