@@ -345,6 +345,9 @@ extern struct task tasks[MAX_TASKS];
 void fpu_cpu_init(void);                        /* each core: let apps use SSE and AVX (sched.c) */
 void fpu_save(uint8_t *area);
 void fpu_restore(const uint8_t *area);
+uint32_t fpu_user_size(void);
+void fpu_save_user(uint8_t *area);
+void fpu_restore_user(const uint8_t *area, bool whole);
 /* ---- cores (smp.c) ----
  * One core runs kernel code at a time (the "big kernel lock", taken on every way into the kernel and
  * dropped on the way back to an app); apps run on every core at once. Kernel threads stay on core 0. */

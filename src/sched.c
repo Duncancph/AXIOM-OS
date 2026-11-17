@@ -279,6 +279,7 @@ void sched_ap_enter(struct cpu *c) {
  * halves; AVX-512 stays off, which programs see with xgetbv). Without it, programs that check only CPUID's
  * AVX2 bit (libopus) crash with an invalid instruction, and the rest (video decoders) fall back to SSE. */
 static uint64_t xcr0;                                           /* 0: no XSAVE, FXSAVE is used */
+static uint32_t xsize = 512;                                    /* the size of the state it saves */
 void fpu_save(uint8_t *area) {
     if (xcr0) __asm__ volatile("xsave64 (%0)" :: "r"(area), "a"((uint32_t)xcr0), "d"((uint32_t)(xcr0 >> 32)) : "memory");
     else __asm__ volatile("fxsave64 (%0)" :: "r"(area) : "memory");
@@ -300,6 +301,34 @@ void fpu_cpu_init(void) {
     uint32_t mxcsr = 0x1F80;
     __asm__ volatile("fninit; ldmxcsr %0" :: "m"(mxcsr));
 }
+/* a Linux program's signal frame: its FPU state as Linux lays it out (XSAVE, with the sizes in the FXSAVE area's
+ * software bytes and a closing magic number), so AVX registers survive a signal handler too */
+uint32_t fpu_user_size(void) { return xcr0 ? xsize + 4 : 512; }
+void fpu_save_user(uint8_t *area) {
+    fpu_save(area);
+    if (!xcr0) return;
+    *(uint32_t *)(area + 464) = 0x46505853;                     /* FP_XSTATE_MAGIC1 */
+    *(uint32_t *)(area + 468) = xsize + 4;                      /* extended size */
+    *(uint64_t *)(area + 472) = xcr0;
+    *(uint32_t *)(area + 480) = xsize;
+    *(uint32_t *)(area + xsize) = 0x46505845;                   /* FP_XSTATE_MAGIC2 */
+}
+/* puts back what a program's signal frame holds; it may have changed it, so what would fault is cleaned first */
+void fpu_restore_user(const uint8_t *area, bool whole) {   /* (whole: all of fpu_user_size() is readable) */
+    static uint8_t buf[MAX_CPUS][1024] __attribute__((aligned(64)));
+    uint8_t *b = buf[cpu_self()->id];
+    bool x = xcr0 && whole && *(const uint32_t *)(area + 464) == 0x46505853;
+    uint32_t n = x ? xsize : 512;
+    memcpy(b, area, n);
+    *(uint32_t *)(b + 24) &= 0xFFFF;                            /* MXCSR's reserved bits */
+    if (x) {
+        *(uint64_t *)(b + 512) &= xcr0;                         /* XSTATE_BV; the rest of the header must be 0 */
+        memset(b + 520, 0, 56);
+        fpu_restore(b);
+    } else if (xcr0) {                                          /* (a plain FXSAVE area: the upper AVX halves stay) */
+        __asm__ volatile("fxrstor64 (%0)" :: "r"(b) : "memory");
+    } else fpu_restore(b);
+}
 static void fpu_init(void) {
     uint32_t a, b, c, d;
     __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
@@ -310,7 +339,11 @@ static void fpu_init(void) {
             xcr0 = want;
             fpu_cpu_init();
             __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0xD), "c"(0));
-            if (b > sizeof fx_init) { xcr0 = 3; fpu_cpu_init(); }        /* (it would not fit: SSE only) */
+            if (b > sizeof fx_init) {                           /* (it would not fit: SSE only) */
+                xcr0 = 3; fpu_cpu_init();
+                __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0xD), "c"(0));
+            }
+            xsize = b;
         }
     }
     fpu_cpu_init();

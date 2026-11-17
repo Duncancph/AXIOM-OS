@@ -69,6 +69,14 @@ static void *big_reader(void *arg) {
     return (void *)got;
 }
 
+/* a read waiting on a socket another thread shuts down (as Chromium stops its audio thread) */
+static volatile long sd_r = -9;
+static void *sd_reader(void *a) { char c; sd_r = read(*(int *)a, &c, 1); return 0; }
+static volatile long sd_w = -9; static volatile int sd_errno;
+static void *sd_writer(void *a) {
+    static char big[1 << 20]; long r = write(*(int *)a, big, sizeof big);   /* (more than fits: it waits) */
+    sd_errno = r < 0 ? errno : 0; sd_w = r; return 0;
+}
 int main(void) {
     char buf[256];
     setvbuf(stdout, 0, _IOLBF, 0);
@@ -437,6 +445,25 @@ int main(void) {
     close(ep2);
     if (early_ns) printf("timed waits ended up to %lld ns early\n", early_ns);
     CHECK(early_ns == 0);
+
+    {
+        signal(SIGPIPE, SIG_IGN);
+        int sd[2]; CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sd) == 0);
+        pthread_t t; pthread_create(&t, 0, sd_reader, &sd[0]); usleep(50000);
+        CHECK(sd_r == -9);                                       /* (still waiting) */
+        CHECK(shutdown(sd[0], SHUT_RDWR) == 0);
+        for (int i = 0; i < 200 && sd_r == -9; i++) usleep(10000);
+        CHECK(sd_r == 0);                                        /* the shutdown ended the read: end of file */
+        pthread_join(t, 0);
+        close(sd[0]); close(sd[1]); CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sd) == 0);
+        pthread_create(&t, 0, sd_writer, &sd[1]); usleep(50000);
+        CHECK(sd_w == -9);
+        CHECK(shutdown(sd[1], SHUT_WR) == 0);
+        for (int i = 0; i < 200 && sd_w == -9; i++) usleep(10000);
+        CHECK(sd_w != -9);                                       /* the shutdown ended the write */
+        pthread_join(t, 0);
+        close(sd[0]); close(sd[1]);
+    }
 
     printf("%s: %d checks, %d failed\n", fails ? "FAILED" : "PASSED", checks, fails);
     return fails != 0;

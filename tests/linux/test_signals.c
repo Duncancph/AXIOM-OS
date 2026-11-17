@@ -24,6 +24,20 @@ static volatile long restart_r = -2; static volatile int restart_h;
 static void h_count(int s) { restart_h++; }
 static void *reader2(void *a) { char c; restart_r = read(pfd[0], &c, 1); return 0; }
 static void *sleeper(void *a) { char c; while (read(pfd[0], &c, 1) < 0 && errno == EINTR) ; return 0; }   /* (as code that retries) */
+/* AVX: a thread keeps a pattern in ymm1's upper half while signals interrupt it; the handler overwrites ymm1 */
+static volatile int avx_stop, avx_bad, avx_sigs; static volatile long avx_loops;
+static void h_avx(int s) { avx_sigs++; __asm__ volatile("vpcmpeqd %%ymm1, %%ymm1, %%ymm1" ::: "xmm1"); }
+static void *avx_keeper(void *a) {
+    static const unsigned long pat[4] = { 0x1111111111111111UL, 0x2222222222222222UL, 0x3333333333333333UL, 0x4444444444444444UL };
+    unsigned long out[4];
+    __asm__ volatile("vmovdqu %0, %%ymm1" :: "m"(pat) : "xmm1");
+    while (!avx_stop) {
+        __asm__ volatile("vmovdqu %%ymm1, %0" : "=m"(out) :: "memory");
+        if (memcmp(out, pat, sizeof out)) { avx_bad++; __asm__ volatile("vmovdqu %0, %%ymm1" :: "m"(pat) : "xmm1"); }
+        avx_loops++;
+    }
+    return 0;
+}
 static void msleep(int ms) { struct timespec t = { ms / 1000, (ms % 1000) * 1000000L }; nanosleep(&t, 0); }
 int main(void) {
     struct sigaction sa; memset(&sa, 0, sizeof sa);
@@ -71,5 +85,12 @@ int main(void) {
         if (round == 19) CHECK(1, "stop-the-world 20 times: both threads stop (the busy one stops working) and go on");
     }
     stop_busy = 1; pthread_join(b, 0); write(pfd[1], "x", 1); pthread_join(s, 0);
+    if (__builtin_cpu_supports("avx")) {
+        memset(&sa, 0, sizeof sa); sa.sa_handler = h_avx; sigaction(SIGUSR2, &sa, 0);
+        pthread_t k; pthread_create(&k, 0, avx_keeper, 0); msleep(20);
+        for (int i = 0; i < 200; i++) { pthread_kill(k, SIGUSR2); msleep(2); }
+        avx_stop = 1; pthread_join(k, 0);
+        CHECK(avx_sigs > 100 && !avx_bad && avx_loops > 0, "AVX registers kept across %d handlers (%d changed)", avx_sigs, avx_bad);
+    }
     printf("%s\n", fails ? "SOME FAILED" : "PASS"); return fails != 0;
 }

@@ -458,12 +458,13 @@ void linux_signals(struct frame *f) {
         bool never = sc == 7 || sc == 271 || sc == 23 || sc == 270 || sc == 232 || sc == 281 || sc == 441 || sc == 35 || sc == 230 || sc == 130 || sc == 128 || sc == 34;
         if (!never) { f->rax = sc; f->rip -= 2; }                          /* (back to the syscall instruction) */
     }
-    /* the frame, as Linux's: [restorer address] ucontext siginfo ... FPU state (fxsave), below the red zone */
+    /* the frame, as Linux's: [restorer address] ucontext siginfo ... FPU state (XSAVE), below the red zone */
     uint64_t sp = f->rsp - 128;
-    uint64_t fp = (sp - 512) & ~63ULL;
+    uint32_t fsz = fpu_user_size();
+    uint64_t fp = (sp - fsz) & ~63ULL;
     uint64_t base = ((fp - (8 + 304 + 128)) & ~15ULL) - 8;                 /* (rsp % 16 == 8 at the handler, as after a call) */
-    if (!uok(base, fp + 512 - base, true)) sig_frame_fail(f, n);
-    uint8_t *fr = (uint8_t *)base; memset(fr, 0, fp + 512 - base);
+    if (!uok(base, fp + fsz - base, true)) sig_frame_fail(f, n);
+    uint8_t *fr = (uint8_t *)base; memset(fr, 0, fp + fsz - base);
     *(uint64_t *)fr = lx->sa[n].restorer;
     uint8_t *uc = fr + 8, *info = uc + 304;
     uint64_t *g = (uint64_t *)(uc + 40);                                   /* uc_mcontext: r8..r15 rdi rsi rbp rbx rdx rax rcx rsp rip eflags */
@@ -476,7 +477,7 @@ void linux_signals(struct frame *f) {
     *(uint64_t *)(uc + 16) = 0; *(uint32_t *)(uc + 24) = 2;                /* uc_stack: SS_DISABLE */
     *(int32_t *)info = n; *(int32_t *)(info + 8) = -6;                     /* si_code: SI_TKILL */
     *(int32_t *)(info + 16) = t->sig_from; *(int32_t *)(info + 20) = 1000;
-    __asm__ volatile("fxsave64 (%0)" :: "r"(fp) : "memory");               /* (the program's own FPU registers are live here) */
+    fpu_save_user((uint8_t *)fp);                                         /* (the program's own FPU registers are live here) */
     t->sig_restore = false;
     if (!(lx->sa[n].flags & SA_NODEFER_)) t->sig_blocked |= SIGBIT(n);
     t->sig_blocked = (t->sig_blocked | lx->sa[n].mask) & ~SIG_UNBLOCKABLE;
@@ -494,7 +495,8 @@ static uint64_t sig_return(struct frame *f) {                              /* rt
     f->rsp = g[15]; f->rip = g[16];
     f->rflags = (f->rflags & ~0xDD5ULL) | (g[17] & 0xDD5ULL);              /* the flags a program may set (CF PF AF ZF SF TF? DF OF) */
     uint64_t fp = g[23];
-    if (fp && !(fp & 15) && uok(fp, 512, false)) __asm__ volatile("fxrstor64 (%0)" :: "r"(fp) : "memory");
+    if (fp && !(fp & 15) && uok(fp, 512, false))
+        fpu_restore_user((const uint8_t *)fp, uok(fp, fpu_user_size(), false));
     t->sig_blocked = *(uint64_t *)(uc + 296) & ~SIG_UNBLOCKABLE;
     return g[13];                                                          /* rax, as it was */
 }
@@ -673,6 +675,9 @@ static int64_t chan_read(struct lfd *f, uint8_t *buf, uint64_t n, bool user, boo
         if (!c->writers) return 0;                              /* nobody can write any more: end of file */
         if (nonblock) return (int64_t)E(EAGAIN_);
         chan_wait(-1); if (sig_now()) return (int64_t)E(EINTR_);
+        /* another thread shut it down (or closed it) meanwhile: end of file, as on Linux, and c may be gone.
+         * (Chromium stops its audio thread that way: CancelableSyncSocket::Shutdown wakes the read it waits in) */
+        if (f->rx != c) return 0;
     }
     if (user && !uok((uint64_t)buf, n, true)) return (int64_t)E(EFAULT_);   /* (another thread may have unmapped it meanwhile) */
     if (got) *got = 0;
@@ -717,7 +722,7 @@ static int64_t chan_write(struct lfd *f, const uint8_t *buf, uint64_t n, bool us
         while (CHAN_CAP - c->len < n || c->mcount == CHAN_MSGS) {
             if (nonblock) return (int64_t)E(EAGAIN_);
             chan_wait(-1); if (sig_now()) return (int64_t)E(EINTR_);
-            if (!c->readers) return (int64_t)E(EPIPE_);
+            if (f->tx != c || !c->readers) return (int64_t)E(EPIPE_);   /* (shut down meanwhile: c may be gone) */
         }
         if (user && !uok((uint64_t)buf, n, false)) return (int64_t)E(EFAULT_);
         anc_attach(c, a, n);
@@ -732,7 +737,7 @@ static int64_t chan_write(struct lfd *f, const uint8_t *buf, uint64_t n, bool us
         if (!space) {
             if (nonblock) { if (done) break; return (int64_t)E(EAGAIN_); }   /* (blocking: wait for room for the rest) */
             chan_wait(-1); if (sig_now()) return done ? (int64_t)done : (int64_t)E(EINTR_);
-            if (!c->readers) return done ? (int64_t)done : (int64_t)E(EPIPE_);
+            if (f->tx != c || !c->readers) return done ? (int64_t)done : (int64_t)E(EPIPE_);
             continue;
         }
         uint32_t k = n - done < space ? (uint32_t)(n - done) : space;
