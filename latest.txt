@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 171
-notes Linux programs can start other programs (fork, exec, posix_spawn, scripts). Fixes a crash in Linux programs that duplicate files.
-file kernel b171/thane.elf.gz 19499096 151aa0cf954bd81e7bd8146aa1504d8cbfd0877125d562a0a7f00923d016a649
-file initrd b171/initrd.tar.gz 2385920 2bdda2286dd851cc0a041d1ddb4474eab09f1b1da4d7344bc28d24f5561af994
-file bootx64 b171/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b171/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3044022028cb76d3a2f1ef5f78d5a1abdb988137c2f09d1d595562699bb0f929378f7e15022067dc089a08885745497abdb820e49a8d3c01759bbc5b2af93ee07883a08c7689
+build 172
+notes YouTube plays in Vertex's visible tab, with sound. Linux programs keep their AVX registers across signals.
+file kernel b172/thane.elf.gz 19500888 7af00dfe1175cfd2dc8054864d738e8cd0b31f7e3405d8b49a5605983b30126c
+file initrd b172/initrd.tar.gz 2385920 ff3728018e8ee32635ebdcd9d412afe1355cc7492d81b9c44d7a49ed32e5e022
+file bootx64 b172/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b172/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3044022061bb0fc65746b7afec319981cc741790f9cfce8eb48f54a59c6dac92d2053b8702204984b20774ad55d78c864fcd5396e49816e7c394ae4c629629d6d9d42baa5654
