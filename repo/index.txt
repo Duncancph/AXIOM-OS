@@ -1,3 +1,4 @@
 # clan repository: id|Name|version|icon|description
 editor|Editor|0.4|code|A text editor with line numbers
 clock|Clock|1.0|clock|An analog and digital clock
+merrow|Merrow Lake|1.0|photo|Drain a mountain lake: a 3D remake of Merrow Lake Drainage
