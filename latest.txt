@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 153
-notes Several apps can play sound at once (music, the browser, chimes); copy and paste with Linux programs; Notes can select all, copy and cut.
-file kernel b153/thane.elf.gz 19261984 ab5204294b20e5e7e362067408895ec455d03c8be178c76cc080fc61a558883d
-file initrd b153/initrd.tar.gz 1372160 1231f957653bafe98875a392e5d371ce90eb54ce141952edd3cdf1719d72a472
-file bootx64 b153/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b153/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 30440220166f794cac9a11a7efca08ecb6a6f08653c7c7a18da078c9ceb71087479b1de502207c38528ed4866e09dc8d7bb6e08a237d0025263203792398cb250455dc19e248
+build 154
+notes Linux programs see long file names in folders; folders with long names can be deleted.
+file kernel b154/thane.elf.gz 19263592 f2e0567f9c7e65b4512dac626c30085c66962e7b6d0ecfb05c93781f28e09f86
+file initrd b154/initrd.tar.gz 1372160 dfec9f3ba29cace535e13795071a423a5b4bba0124ae56030ae31fa1e9e599a7
+file bootx64 b154/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b154/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304502205a9563d8e4ffcf0f2044d33626dfe982f9d8a288bc4336bfb2a907903b59d4eb022100cab612f4bcc72f12fdda051533b4589d95d33f2e0d6aeb6d796b633250259cfe
