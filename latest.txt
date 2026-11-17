@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 169
-notes Vertex 1.0, the full Chromium-based browser, in Settings > Apps. Faster disk writes and fairer multitasking.
-file kernel b169/thane.elf.gz 19459720 16ca59ed700de8bd53949615a6b40f60719d16b108eb16ca2febd4a082b93b11
-file initrd b169/initrd.tar.gz 2375680 dc806e091b60720b0629064def84eb3de925c52b104acfab89faca792886fc2e
-file bootx64 b169/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b169/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 30450220649bd0adb52950912f3c6d238152030df4322af249f2cc0cc9f4f762350dd9cd022100f93f0e8d8b0fecc54da1f89bbcc9ed96e17bdb4b8a4c8a2ce427856c52985098
+build 171
+notes Linux programs can start other programs (fork, exec, posix_spawn, scripts). Fixes a crash in Linux programs that duplicate files.
+file kernel b171/thane.elf.gz 19499096 151aa0cf954bd81e7bd8146aa1504d8cbfd0877125d562a0a7f00923d016a649
+file initrd b171/initrd.tar.gz 2385920 2bdda2286dd851cc0a041d1ddb4474eab09f1b1da4d7344bc28d24f5561af994
+file bootx64 b171/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b171/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3044022028cb76d3a2f1ef5f78d5a1abdb988137c2f09d1d595562699bb0f929378f7e15022067dc089a08885745497abdb820e49a8d3c01759bbc5b2af93ee07883a08c7689
