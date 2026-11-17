@@ -7,7 +7,7 @@ it as `/`.
 
 | Package       | What it brings | Download | Installed |
 |---------------|----------------|---------:|----------:|
-| `gtk3`        | GTK 3.24 and its libraries, pixbuf loaders (SVG too), DejaVu fonts, fontconfig, XKB data, the MIME database, GSettings schemas, the Adwaita icons, the en_GB.UTF-8 locale, GTK's demo apps, and libraries most apps share (ICU, libxml2, librsvg) | 34 MB | 88 MB |
+| `gtk3`        | GTK 3.24 and its libraries, pixbuf loaders (SVG too), DejaVu fonts, fontconfig, XKB data, the MIME database, GSettings schemas, the Adwaita icons, the en_GB.UTF-8 locale, iconv's character sets, GTK's demo apps, and libraries most apps share (ICU, libxml2, librsvg) | 39 MB | 101 MB |
 | `abiword`     | AbiWord, a word processor (Word, OpenDocument, RTF) | 25 MB | 68 MB |
 | `gnumeric`    | Gnumeric, a spreadsheet (Excel, OpenDocument, CSV) | 8 MB | 20 MB |
 | `mousepad`    | Mousepad, Xfce's text editor | 0.8 MB | 4 MB |
@@ -41,6 +41,9 @@ apps). The archives can live anywhere on the web. AXIOM's own are on the `update
   once instead of each app bringing its own copy. librsvg also lets GTK draw the Adwaita SVG icons itself.
 - **No symlinks.** FAT has none, so a library comes under the name its link has (the one the loader asks
   for), not as a second copy under the file's own name.
+- **Test from the packages alone.** A chroot made of just the unpacked packages (no `/proc`, nothing else from
+  the build machine) shows what an app misses on AXIOM. AbiWord crashed there and on AXIOM without iconv's
+  gconv modules or its own window icon, but ran on the full build machine.
 - **One locale.** AXIOM gives Linux programs `LANG=en_GB.UTF-8`, so the package includes that locale and
   GTK stops falling back to the C locale.
 - **No cursor theme.** AXIOM draws its own pointer.

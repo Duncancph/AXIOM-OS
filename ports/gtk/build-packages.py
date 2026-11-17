@@ -71,6 +71,8 @@ def gtk3():
     put(stage, "/lib64/ld-linux-x86-64.so.2", "lib64/ld-linux-x86-64.so.2")
     for l in loaders: put(stage, l, os.path.join(PIXBUF, "loaders", os.path.basename(l)))
     put(stage, "/" + PIXBUF + "/loaders.cache", PIXBUF + "/loaders.cache")
+    put(stage, "/usr/lib/x86_64-linux-gnu/gconv", "usr/lib/x86_64-linux-gnu/gconv")      # iconv's character sets (AbiWord
+                                                                                          # crashes without them)
     put(stage, "/usr/share/fonts/truetype/dejavu", "usr/share/fonts/truetype/dejavu")
     put(stage, "/etc/fonts", "etc/fonts")
     put(stage, "/usr/share/X11/xkb", "usr/share/X11/xkb")
@@ -100,7 +102,7 @@ APPS = {
                               "libhandy-1-0"], bins=["/usr/games/gnome-mines"]),
 }
 SKIP = ("/usr/share/doc/", "/usr/share/man/", "/usr/share/locale/", "/usr/share/help/", "/usr/share/lintian/",
-        "/usr/share/bug/", "/usr/share/metainfo/", "/usr/share/applications/", "/usr/share/icons/", "/usr/share/info/",
+        "/usr/share/bug/", "/usr/share/metainfo/", "/usr/share/applications/", "/usr/share/info/",
         "/usr/share/gnome-shell/", "/usr/share/dbus-1/", "/usr/share/glib-2.0/schemas/")
 
 def is_elf(path):
