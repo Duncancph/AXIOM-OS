@@ -21,7 +21,7 @@ void user_entry(void);
 static inline uint64_t read_cr3(void) { uint64_t v; __asm__ volatile("mov %%cr3,%0" : "=r"(v)); return v; }
 static inline void write_cr3(uint64_t v) { __asm__ volatile("mov %0,%%cr3" ::"r"(v) : "memory"); }
 
-static uint8_t fx_init[512] __attribute__((aligned(16)));   /* a clean FPU/SSE state for new apps */
+static uint8_t fx_init[1024] __attribute__((aligned(64)));  /* a clean FPU/SSE/AVX state for new apps */
 
 static struct task *alloc_task(const char *name) {
     for (int i = 0; i < MAX_TASKS; i++)
@@ -175,7 +175,7 @@ long task_clone(const struct frame *f, uint64_t rsp, uint64_t fs, uint64_t clear
     struct task *t = alloc_task(nm);
     if (!t) return -DERR_AGAIN;
     t->user = true;
-    __asm__ volatile("fxsave64 %0" : "=m"(t->fx) :: "memory");     /* (its parent's floating-point state) */
+    fpu_save(t->fx);                                                /* (its parent's floating-point state) */
     t->mm = current->mm; t->mm->refs++;
     t->pml4 = t->mm->pml4; t->proc = p; t->lx = current->lx;
     strncpy0(t->appid, p->appid, sizeof t->appid); t->app = t->appid;
@@ -252,16 +252,47 @@ void sched_ap_enter(struct cpu *c) {
 
 /* Apps may use floating point (SSE): the kernel itself never does (-mgeneral-regs-only), so the registers
  * always hold the state of the last app that ran; it is saved and restored around each switch between apps. */
-static void fpu_init(void) {
+/* AVX too, where the processor has it: the registers are then saved with XSAVE (x87, SSE and the AVX upper
+ * halves; AVX-512 stays off, which programs see with xgetbv). Without it, programs that check only CPUID's
+ * AVX2 bit (libopus) crash with an invalid instruction, and the rest (video decoders) fall back to SSE. */
+static uint64_t xcr0;                                           /* 0: no XSAVE, FXSAVE is used */
+void fpu_save(uint8_t *area) {
+    if (xcr0) __asm__ volatile("xsave64 (%0)" :: "r"(area), "a"((uint32_t)xcr0), "d"((uint32_t)(xcr0 >> 32)) : "memory");
+    else __asm__ volatile("fxsave64 (%0)" :: "r"(area) : "memory");
+}
+void fpu_restore(const uint8_t *area) {
+    if (xcr0) __asm__ volatile("xrstor64 (%0)" :: "r"(area), "a"((uint32_t)xcr0), "d"((uint32_t)(xcr0 >> 32)) : "memory");
+    else __asm__ volatile("fxrstor64 (%0)" :: "r"(area) : "memory");
+}
+void fpu_cpu_init(void) {
     uint64_t cr0, cr4;
     __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
     cr0 &= ~(1ull << 2); cr0 |= 1ull << 1;                      /* EM off, MP on */
     __asm__ volatile("mov %0, %%cr0" :: "r"(cr0));
     __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
     cr4 |= (1ull << 9) | (1ull << 10);                          /* OSFXSR, OSXMMEXCPT */
+    if (xcr0) cr4 |= 1ull << 18;                                /* OSXSAVE */
     __asm__ volatile("mov %0, %%cr4" :: "r"(cr4));
+    if (xcr0) __asm__ volatile("xsetbv" :: "c"(0), "a"((uint32_t)xcr0), "d"((uint32_t)(xcr0 >> 32)));
     uint32_t mxcsr = 0x1F80;
-    __asm__ volatile("fninit; ldmxcsr %0; fxsave64 %1" :: "m"(mxcsr), "m"(fx_init) : "memory");
+    __asm__ volatile("fninit; ldmxcsr %0" :: "m"(mxcsr));
+}
+static void fpu_init(void) {
+    uint32_t a, b, c, d;
+    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
+    if (c & (1u << 26)) {                                       /* XSAVE */
+        __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0xD), "c"(0));
+        uint64_t want = a & 7;                                  /* x87, SSE, AVX (as far as it has them) */
+        if ((want & 3) == 3) {
+            xcr0 = want;
+            fpu_cpu_init();
+            __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0xD), "c"(0));
+            if (b > sizeof fx_init) { xcr0 = 3; fpu_cpu_init(); }        /* (it would not fit: SSE only) */
+        }
+    }
+    fpu_cpu_init();
+    fpu_save(fx_init);
+    LOG_INFO("Floating point: %s\n", xcr0 & 4 ? "SSE and AVX (XSAVE)" : xcr0 ? "SSE (XSAVE)" : "SSE");
 }
 
 void sched_init(void) {
@@ -324,9 +355,9 @@ void schedule(void) {
     account();
     if (next == current) { current->state = PS_RUNNING; if (!current->user) __asm__ volatile("sti"); return; }
     struct task *prev = current;
-    if (prev->user && prev->state != PS_ZOMBIE) __asm__ volatile("fxsave64 %0" : "=m"(prev->fx) :: "memory");
+    if (prev->user && prev->state != PS_ZOMBIE) fpu_save(prev->fx);
     if (next->user) {
-        __asm__ volatile("fxrstor64 %0" :: "m"(next->fx) : "memory");
+        fpu_restore(next->fx);
         __asm__ volatile("wrmsr" :: "c"(0xC0000100), "a"((uint32_t)next->fs_base), "d"((uint32_t)(next->fs_base >> 32)));   /* its %fs (thread-local storage) */
     }
     if (prev->state == PS_RUNNING) { prev->state = PS_READY; prev->rq = ++rq_seq; }

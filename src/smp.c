@@ -19,15 +19,17 @@ void smp_settled(void) {
     if (t && !strcmp(t, "1")) settings_set("system.cores_trying", "0");
 }
 
-static volatile int bkl;
+/* A ticket lock: cores get it in the order they asked (a plain test-and-set lock let one core lose the race
+ * for seconds while the others kept dropping and retaking it, e.g. while waiting for the disk) */
+static volatile uint32_t bkl_next, bkl_serving;
 void bkl_lock(void) {
-    while (__atomic_exchange_n(&bkl, 1, __ATOMIC_ACQUIRE))
-        while (__atomic_load_n(&bkl, __ATOMIC_RELAXED)) cpu_relax();
+    uint32_t me = __atomic_fetch_add(&bkl_next, 1, __ATOMIC_RELAXED);
+    while (__atomic_load_n(&bkl_serving, __ATOMIC_ACQUIRE) != me) cpu_relax();
     cpu_self()->bkl_held = true;
 }
 void bkl_unlock(void) {
     cpu_self()->bkl_held = false;
-    __atomic_store_n(&bkl, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&bkl_serving, bkl_serving + 1, __ATOMIC_RELEASE);
 }
 
 void *acpi_table(const char *sig);
@@ -50,8 +52,7 @@ static void ap_main(void) {
     cpu_setup(c);
     ((volatile uint64_t *)TRAMP)[7] = 5;
     idt_load();
-    uint32_t mxcsr = 0x1F80;
-    __asm__ volatile("fninit; ldmxcsr %0" :: "m"(mxcsr));
+    fpu_cpu_init();                                      /* (SSE and AVX, as the first core) */
     wrmsr_(0x277, bsp_pat);                              /* same memory types (write-combining screen) */
     lapic_ap_init();
     c->started = true;

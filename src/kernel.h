@@ -311,7 +311,7 @@ struct task {
     uint64_t heap_top;         /* end of the app's heap (starts at USER_HEAP) */
     struct dunc_event evq[EVQ_SIZE]; int evh, evt;
     int nwin;
-    uint8_t fx[512] __attribute__((aligned(16)));   /* the app's floating-point / SSE registers (FXSAVE) */
+    uint8_t fx[1024] __attribute__((aligned(64)));  /* the app's floating-point / SSE / AVX registers (XSAVE, or FXSAVE) */
     char *capture; size_t cap_len, cap_max;
     char arg[256];             /* start-up argument (e.g. a file to open) */
     char appid[24];
@@ -339,6 +339,9 @@ struct frame {
     uint64_t vec, err, rip, cs, rflags, rsp, ss;
 };
 extern struct task tasks[MAX_TASKS];
+void fpu_cpu_init(void);                        /* each core: let apps use SSE and AVX (sched.c) */
+void fpu_save(uint8_t *area);
+void fpu_restore(const uint8_t *area);
 /* ---- cores (smp.c) ----
  * One core runs kernel code at a time (the "big kernel lock", taken on every way into the kernel and
  * dropped on the way back to an app); apps run on every core at once. Kernel threads stay on core 0. */

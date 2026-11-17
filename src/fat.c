@@ -19,6 +19,7 @@ struct fatvol {
     int64_t free_count;
     bool fsinfo_marked;
     struct { bool valid; uint32_t idx; uint8_t *data; } fc[FC_N]; int fc_next;
+    int dirty;                       /* 1 + the cached FAT sector changed but not yet written (0: none) */
     /* where reads last got to in a few files: big files are read a piece at a time, and each piece would
      * otherwise follow the cluster chain from the start (first: the file's first cluster) */
     struct { uint32_t first, idx, clus; } pos[POS_N]; int pos_next;
@@ -41,14 +42,26 @@ static uint32_t r32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (
 static void w16(uint8_t *p, uint16_t v) { p[0] = v; p[1] = v >> 8; }
 static void w32(uint8_t *p, uint32_t v) { p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24; }
 
-static uint8_t *fat_sec(struct fatvol *v, uint32_t idx) {
-    for (int i = 0; i < FC_N; i++) if (v->fc[i].valid && v->fc[i].idx == idx) return v->fc[i].data;
-    int s = v->fc_next; v->fc_next = (v->fc_next + 1) % FC_N;
-    v->fc[s].valid = false;
-    if (rd(v, v->fat_lba + idx, 1, v->fc[s].data)) return 0;
-    v->fc[s].valid = true; v->fc[s].idx = idx;
-    return v->fc[s].data;
+/* Changes to the FAT are made in its cached sector and written (to every copy) once the operation moves on
+ * to another sector or ends (fat_flush): freeing or allocating a big file's clusters one sector write each
+ * took seconds, with the rest of the system waiting. */
+static int fat_flush(struct fatvol *v) {
+    if (!v->dirty) return FS_OK;
+    int s = v->dirty - 1; v->dirty = 0;
+    for (uint32_t k = 0; k < v->nfats; k++)
+        if (wr(v, v->fat_lba + (uint64_t)k * v->fatsz + v->fc[s].idx, 1, v->fc[s].data)) return FS_EIO;
+    return FS_OK;
 }
+static int fat_slot(struct fatvol *v, uint32_t idx) {        /* the cache slot holding FAT sector idx, or -1 */
+    for (int i = 0; i < FC_N; i++) if (v->fc[i].valid && v->fc[i].idx == idx) return i;
+    int s = v->fc_next; v->fc_next = (v->fc_next + 1) % FC_N;
+    if (v->dirty == s + 1 && fat_flush(v)) return -1;
+    v->fc[s].valid = false;
+    if (rd(v, v->fat_lba + idx, 1, v->fc[s].data)) return -1;
+    v->fc[s].valid = true; v->fc[s].idx = idx;
+    return s;
+}
+static uint8_t *fat_sec(struct fatvol *v, uint32_t idx) { int s = fat_slot(v, idx); return s < 0 ? 0 : v->fc[s].data; }
 
 static int fat_get(struct fatvol *v, uint32_t c, uint32_t *out) {
     uint32_t off = c * 4;
@@ -88,27 +101,28 @@ static void mark_fsinfo(struct fatvol *v) {   /* tell other systems the free cou
     kfree(s);
 }
 
-static int fat_set(struct fatvol *v, uint32_t c, uint32_t val) {
+static int fat_put(struct fatvol *v, uint32_t c, uint32_t val) {       /* (written by fat_flush) */
     uint32_t off = c * 4, idx = off / v->bps;
-    uint8_t *s = fat_sec(v, idx);
-    if (!s) return FS_EIO;
-    uint8_t *p = s + off % v->bps;
+    int s = fat_slot(v, idx);
+    if (s < 0) return FS_EIO;
+    if (v->dirty && v->dirty != s + 1 && fat_flush(v)) return FS_EIO;
+    uint8_t *p = v->fc[s].data + off % v->bps;
     w32(p, (r32(p) & 0xF0000000) | (val & 0x0FFFFFFF));
     mark_fsinfo(v);
-    for (uint32_t k = 0; k < v->nfats; k++)
-        if (wr(v, v->fat_lba + (uint64_t)k * v->fatsz + idx, 1, s)) return FS_EIO;
+    v->dirty = s + 1;
     return FS_OK;
 }
+static int fat_set(struct fatvol *v, uint32_t c, uint32_t val) { return fat_put(v, c, val) ? FS_EIO : fat_flush(v); }
 
 static int free_chain(struct fatvol *v, uint32_t c) {
     memset(v->pos, 0, sizeof v->pos);                /* (remembered positions may be in this chain) */
     for (int guard = 0; c >= 2 && c < EOC && guard < 4000000; guard++) {
         uint32_t next;
-        if (fat_get(v, c, &next) || fat_set(v, c, 0)) return FS_EIO;
+        if (fat_get(v, c, &next) || fat_put(v, c, 0)) { fat_flush(v); return FS_EIO; }
         if (v->free_count >= 0) v->free_count++;
         c = next;
     }
-    return FS_OK;
+    return fat_flush(v);
 }
 
 /* Allocate a chain of n clusters (n >= 1). Optionally zero them. */
@@ -119,13 +133,13 @@ static int alloc_chain(struct fatvol *v, uint32_t n, uint32_t *first, bool zero)
     if (zero) memset(z, 0, v->cbytes);
     *first = 0;
     while (got < n) {
-        if (scanned++ > v->nclus) { if (*first) free_chain(v, *first); kfree(z); *first = 0; return FS_ENOSPC; }
+        if (scanned++ > v->nclus) { fat_flush(v); if (*first) free_chain(v, *first); kfree(z); *first = 0; return FS_ENOSPC; }
         if (c >= v->nclus + 2) c = 2;
         uint32_t val;
-        if (fat_get(v, c, &val)) { kfree(z); return FS_EIO; }
+        if (fat_get(v, c, &val)) { fat_flush(v); kfree(z); return FS_EIO; }
         if (val == 0) {
-            if (fat_set(v, c, 0x0FFFFFFF)) { kfree(z); return FS_EIO; }
-            if (prev) { if (fat_set(v, prev, c)) { kfree(z); return FS_EIO; } } else *first = c;
+            if (fat_put(v, c, 0x0FFFFFFF)) { fat_flush(v); kfree(z); return FS_EIO; }
+            if (prev) { if (fat_put(v, prev, c)) { fat_flush(v); kfree(z); return FS_EIO; } } else *first = c;
             if (zero && wr(v, clus_lba(v, c), v->spc, z)) { kfree(z); return FS_EIO; }
             if (v->free_count > 0) v->free_count--;
             prev = c; got++;
@@ -134,7 +148,7 @@ static int alloc_chain(struct fatvol *v, uint32_t n, uint32_t *first, bool zero)
     }
     v->hint = c;
     kfree(z);
-    return FS_OK;
+    return fat_flush(v);
 }
 
 /* ---------------- directories ---------------- */
@@ -313,6 +327,27 @@ static int sfn_cb(struct fatvol *v, struct dent *d, void *c) {
     return 0;
 }
 
+/* the ~N numbers in use for a basis (its first k characters, cut short to make room for ~N) and extension */
+#define TILDE_MAX 65536
+struct tilde_ctx { const uint8_t *sfn; int k; uint8_t *used; };
+static int tilde_cb(struct fatvol *v, struct dent *d, void *c) {
+    (void)v;
+    struct tilde_ctx *t = c;
+    if (memcmp(d->sfn + 8, t->sfn + 8, 3)) return 0;            /* another extension */
+    int at = -1;
+    for (int i = 1; i < 8; i++) if (d->sfn[i] == '~') { at = i; break; }
+    if (at < 0) return 0;
+    uint32_t n = 0; int i = at + 1;
+    for (; i < 8 && d->sfn[i] >= '0' && d->sfn[i] <= '9'; i++) n = n * 10 + (d->sfn[i] - '0');
+    if (i == at + 1 || n >= TILDE_MAX) return 0;
+    int nl = i - at;                                             /* "~N" */
+    for (; i < 8; i++) if (d->sfn[i] != ' ') return 0;
+    if (at != (t->k + nl <= 8 ? t->k : 8 - nl)) return 0;       /* the basis, as cut short for this ~N */
+    if (memcmp(d->sfn, t->sfn, at)) return 0;
+    t->used[n / 8] |= 1 << (n % 8);
+    return 0;
+}
+
 /* Build the 8.3 name; returns true if a long-name entry is needed. */
 static bool make_sfn(struct fatvol *v, uint32_t dclus, const char *name, uint8_t *sfn, uint8_t *caseflags) {
     memset(sfn, ' ', 11);
@@ -358,7 +393,13 @@ static bool make_sfn(struct fatvol *v, uint32_t dclus, const char *name, uint8_t
         if (c >= 'a' && c <= 'z') c -= 32;
         sfn[8 + j++] = sfn_char(c) ? c : '_';
     }
+    /* the lowest ~N not taken: one pass over the folder notes the numbers in use (trying ~1, ~2... with a
+     * pass each was slow in folders of thousands of similar names, such as a browser's cache) */
+    struct tilde_ctx tc = { sfn, k, 0 };
+    tc.used = kmalloc(TILDE_MAX / 8);
+    if (tc.used) { memset(tc.used, 0, TILDE_MAX / 8); dir_iter(v, dclus, tilde_cb, &tc); }
     for (int n = 1; n < 1000000; n++) {
+        if (tc.used && n < TILDE_MAX && (tc.used[n / 8] >> (n % 8) & 1)) continue;
         char num[8]; ksnprintf(num, sizeof num, "~%d", n);
         int nl = strlen(num), base = k + nl <= 8 ? k : 8 - nl;
         memset(sfn, ' ', 8);
@@ -371,10 +412,12 @@ static bool make_sfn(struct fatvol *v, uint32_t dclus, const char *name, uint8_t
         }
         if (!kk) sfn[kk++] = '_';
         memcpy(sfn + kk, num, nl);
+        if (tc.used && n < TILDE_MAX) break;                    /* (known free) */
         struct sfn_ctx sc = { sfn, false };
         dir_iter(v, dclus, sfn_cb, &sc);
         if (!sc.taken) break;
     }
+    kfree(tc.used);
     return true;
 }
 
