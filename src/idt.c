@@ -21,7 +21,12 @@ static void user_fault(struct frame *f) {
         else if (cr2 < 0x1000 + USER_BASE) what = "It used an invalid (null) pointer";
         else what = "It accessed memory it doesn't own";
         break;
-    case 13: what = "It used a bad memory address (or a privileged instruction)"; break;
+    case 13: {                                             /* (int3 from a program faults this way: its own failed check) */
+        uint8_t op = 0;
+        if (user_ok(current->pml4, (const void *)f->rip, 1, false)) op = *(volatile uint8_t *)f->rip;
+        what = op == 0xCC ? "It stopped itself (one of its own checks failed)" : "It used a bad memory address (or a privileged instruction)";
+        break;
+    }
     case 6:  what = "It ran an invalid instruction"; break;
     case 0:  what = "It divided by zero"; break;
     default: what = f->vec < 20 ? names[f->vec] : "CPU exception"; break;
