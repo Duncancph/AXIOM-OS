@@ -1,0 +1,16 @@
+AXIOM package 1
+id evince
+name Document Viewer
+version 46.3.1
+icon list
+description Reads PDF, PostScript, DjVu, TIFF and XPS documents (Evince).
+min-build 177
+size 18376438
+sha256 fa12f37754246fbd36db9bcab10359ac2a8990df2ba2544f31d7639129f88025
+url https://raw.githubusercontent.com/Duncancph/AXIOM-OS/updates/packages/evince.tar.gz
+installed-size 60557164
+root yes
+requires gtk3
+compression gzip
+run usr/bin/evince
+signature 3046022100aafcd143dbbcc30257d4d477b830a79e0c346c0a3ef3262b19a7c086b6be1afc0221009f483927fed98528d396b174e117163840275611bb0c18ce1b98989fd9cd9c89

@@ -5,12 +5,12 @@ version 1.12.56
 icon calc
 description A spreadsheet: opens and saves Excel and OpenDocument files.
 min-build 165
-size 8520611
-sha256 b40f100785be42fc4dedff34d921510ada177eb15bd2dba78535cfcb66ae3c69
+size 8522338
+sha256 323bc5059dd33d386e6209b9d905131c7eb0e437f7a4581d1040c222cba3da57
 url https://raw.githubusercontent.com/Duncancph/AXIOM-OS/updates/packages/gnumeric.tar.gz
-installed-size 21235699
+installed-size 21241186
 root yes
 requires gtk3
 compression gzip
 run usr/bin/gnumeric
-signature 3046022100eedd636c6b39facdd6fc4a88091d75c8e27760192f68a69efb47c9f6cf2c3b4d022100d3bd09a46af9710d44a2e47cde004cbf0b6743f767948ad649c240b3fc76edb1
+signature 304402206227bedab6d7a22f304d339d7047bf0371a14d18663ec816a61e7eff5ad6995a022060885ef760ba03b369b35047ff4ef62ff6558b96fbd50800b5b24cd76b7a42bb

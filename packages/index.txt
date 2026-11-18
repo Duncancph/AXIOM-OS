@@ -5,3 +5,12 @@ gnumeric
 mousepad
 gnome-mines
 aisleriot
+evince
+ristretto
+galculator
+thunar
+geany
+iagno
+qt5
+featherpad
+speedcrunch

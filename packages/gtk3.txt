@@ -5,11 +5,11 @@ version 3.24.41
 icon gear
 description Runs GTK 3 apps on AXIOM. Opens GTK's demo.
 min-build 165
-size 38625948
-sha256 008c81045916529bdbb619e5d6c517a9541a84d27ae3cb98cbc3a6aa5feefe81
+size 38627909
+sha256 f4038b508c7f698c3a563f7cadc4164ed9ea28a59f6b805e50fb6d6249cf4aed
 url https://raw.githubusercontent.com/Duncancph/AXIOM-OS/updates/packages/gtk3.tar.gz
-installed-size 101075759
+installed-size 101081246
 root yes
 compression gzip
 run usr/bin/gtk3-demo
-signature 3046022100b8c45d8277d5d62708e66d0d378319111d18478801e5ca7113105365105df7bc022100a53dd15368fce20c2191ce16bd30624bd68b2887a27dbe0519580a8f9c31eb93
+signature 3044022064f277a40a4dc3271ba7f93f64635a90bc0ea451ea3c9bc09e267a8703b911e7022025189231372c70a9d492b130446e37eb876eb3910009554229649116cda1bbe3

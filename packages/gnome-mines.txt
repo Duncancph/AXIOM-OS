@@ -5,12 +5,12 @@ version 40.1
 icon shield
 description Find the hidden mines (GNOME Mines).
 min-build 165
-size 619518
-sha256 a3d90a2be47469d321baf5107812430e45a5ced061cefe73a82d156c456789ce
+size 621174
+sha256 676f2be3ebafbcb270edeec920bc5818ef93a5e07f4ecf609455310cbb797148
 url https://raw.githubusercontent.com/Duncancph/AXIOM-OS/updates/packages/gnome-mines.tar.gz
-installed-size 1770694
+installed-size 1776181
 root yes
 requires gtk3
 compression gzip
 run usr/games/gnome-mines
-signature 3045022009b948107567d552f07365ca0bff3f2dacfa04db1de708f0f8f700fb3b5b9809022100ef7a05c11d845de89f41a359c824112f4c7eb5b1455ce26cf358b408ac79ad34
+signature 30440220059b972669310911d3c9c11737390a9d5e021d5f51461fa7c9bb36a950330dfc022068e4a715fe2ae1aa64763ca6c4fb25eddb7ef89ac942d7049e7b7959ede1bf1a

@@ -1,0 +1,16 @@
+AXIOM package 1
+id galculator
+name Galculator
+version 2.1.4
+icon calc
+description A scientific calculator with algebraic and RPN modes.
+min-build 177
+size 297109
+sha256 7535918607001fe22e4705b60c70ea1c558c7b50b93c8793e407c7be77851f8a
+url https://raw.githubusercontent.com/Duncancph/AXIOM-OS/updates/packages/galculator.tar.gz
+installed-size 1271853
+root yes
+requires gtk3
+compression gzip
+run usr/bin/galculator
+signature 3045022100860febe55ee324f41f483e535401e5d9fea10034cfaeb5de1497f89a89661618022052f7485fe0a567fcbff28b7167ce41341ac5ec8fac3175c77ac374cfad91ce68

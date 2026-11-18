@@ -1,0 +1,16 @@
+AXIOM package 1
+id speedcrunch
+name SpeedCrunch
+version 0.12.0
+icon calc
+description A fast, keyboard-driven calculator with history and functions (Qt).
+min-build 184
+size 1469545
+sha256 6f4c4882929954d8f00d034bcf120111b549d05e9ef363454846737f098268c0
+url https://raw.githubusercontent.com/Duncancph/AXIOM-OS/updates/packages/speedcrunch.tar.gz
+installed-size 3855016
+root yes
+requires qt5
+compression gzip
+run usr/bin/speedcrunch
+signature 304402202ac009e902a6a51e9c37427c7b34b2b4271416cc1803ed365bc447f2d8635aa30220250b1febf1d89684a21855afe03630db6f1f5ce198cf6909609106e057f99636

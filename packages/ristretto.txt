@@ -1,0 +1,16 @@
+AXIOM package 1
+id ristretto
+name Ristretto
+version 0.13.1
+icon photo
+description A fast image viewer: JPEG, PNG, GIF, WebP and more.
+min-build 177
+size 976800
+sha256 7c4d358af42f14edaaf461bd994328c59ab7fa56de12935ebe46bfcc96c7d829
+url https://raw.githubusercontent.com/Duncancph/AXIOM-OS/updates/packages/ristretto.tar.gz
+installed-size 10435525
+root yes
+requires gtk3
+compression gzip
+run usr/bin/ristretto
+signature 304502207cde2ca5f66680b23f614af903f1ba6ac0face6719ea8c24beb522d8dbe4512c022100c1bb8fdab5724979acb460597e6b5957e1a8a39397c94a1d06227c307e9d03a2

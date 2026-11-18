@@ -1,0 +1,16 @@
+AXIOM package 1
+id featherpad
+name FeatherPad
+version 1.4.1
+icon note
+description A light text editor with tabs, syntax highlighting and search (Qt).
+min-build 184
+size 1897426
+sha256 a49d4da1157bc611099708d889baac7ca779279d8d8828312570f555cecd99f5
+url https://raw.githubusercontent.com/Duncancph/AXIOM-OS/updates/packages/featherpad.tar.gz
+installed-size 4757477
+root yes
+requires qt5
+compression gzip
+run usr/bin/featherpad
+signature 304502200693983e32318a0814735487deed7eb87c7c10ea38cf75fdf677e4f53f047c88022100fa1876b3d5e45a1cca76982972bf058665e5e003272f2dda6a1ce477188b2df3
