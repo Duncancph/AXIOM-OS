@@ -1,0 +1,14 @@
+AXIOM package 1
+id linux-base
+name Linux libraries
+version 2.43
+icon gear
+description The C library and the shared libraries Linux apps use (installed with them).
+min-build 195
+size 15643751
+sha256 412fe28b0a28036fa6a701064f726bc94278ce328e7b0e908a86057db0da7f58
+url https://raw.githubusercontent.com/Duncancph/AXIOM-OS/updates/packages/linux-base.tar.gz
+installed-size 36520856
+root yes
+compression gzip
+signature 3046022100ba9c3fb2020550190927e6a3c7dcbf63eba5bc58449e4e28c5a0eb49e79a22ed022100bc7460cbbe09dff413d59984fdb9ba45bfd112cb391cfce5f7f17501c8aa7a55

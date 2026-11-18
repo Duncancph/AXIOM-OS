@@ -1,16 +1,16 @@
 AXIOM package 1
 id thunar
 name Thunar
-version 4.18.8
+version 4.18.8-2
 icon folder
 description Xfce's file manager: browse, copy, move and rename files.
-min-build 177
-size 1451998
-sha256 25edb7e7c9604963bd97368868d26b680b3ab6100b291715a2a2fd1270a4407b
+min-build 195
+size 1357817
+sha256 94a209d3317393845a4a5580e696fba2e55207be7fe9cdb00eb89f3e9bf2cf91
 url https://raw.githubusercontent.com/Duncancph/AXIOM-OS/updates/packages/thunar.tar.gz
-installed-size 4246086
+installed-size 4038798
 root yes
 requires gtk3
 compression gzip
 run usr/bin/thunar
-signature 304402202311523e8d4d6c50825450857d77888eff7b6617237c4e0c93a41d9ba45389d002201a56eefb55accaa2f855b67e8b1e80a80d7b7e2d5a359c52053bfe586f9f6188
+signature 3046022100c1409ac04fb4ce61844ba94f7d011b52aed478a7f98bbca5b376652d612398b8022100879a851ba3a827cf7754f27197634d89fedb17c644fba25a5db29884784aa904

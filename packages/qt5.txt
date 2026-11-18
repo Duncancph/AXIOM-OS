@@ -1,16 +1,16 @@
 AXIOM package 1
 id qt5
 name Qt 5
-version 5.15.13
+version 5.15.13-2
 icon gear
 description Runs Qt 5 apps on AXIOM. Opens a gallery of Qt's widgets.
-min-build 184
-size 13028151
-sha256 972f1ba6029d1dfd8892065b5709e3609e7fd9c6dab673270183a09973f1888f
+min-build 195
+size 12419368
+sha256 f8c53bb9dd7e966559dd929a28905e106ab9a2fc1d9975b555d67680247bed49
 url https://raw.githubusercontent.com/Duncancph/AXIOM-OS/updates/packages/qt5.tar.gz
-installed-size 33268096
+installed-size 31774248
 root yes
 requires gtk3
 compression gzip
 run usr/bin/qt5-demo
-signature 3045022100d3b7ef4410ff1545f0f48accfada226055ce569b9c946a9d8dd5a6277066d6740220744cb10f91b2f3f4e91b57bf220f8b2a7a04ce9a3c772476074a23e04169d900
+signature 3045022100853dea6d4d8f30595f19eabc98cfe8ea3d3f6b12e0f75a7de93945f5caf5e23702202e19e4985d43f0e5d77afc4c2d09440e1c6b193277f82421e1179ae890beca42
