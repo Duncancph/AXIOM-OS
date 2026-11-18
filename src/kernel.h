@@ -205,6 +205,7 @@ void wifi_start(void);
 void wifi_info(void);
 void wifi_scan(void);
 void wifi_simulate(void);
+void wifi_dump(void);
 int64_t wifi_syscall(int op, uint64_t buf, int64_t n);
 void intelgfx_display(bool on);
 

@@ -56,6 +56,7 @@ static void cmd_help(void) {
         {"wifi", "Wi-Fi card information"},
         {"wifi start", "power up the Wi-Fi card and load its firmware (test)"},
         {"wifi scan", "list nearby Wi-Fi networks (test)"},
+        {"wifi dump", "save the Wi-Fi card's registers to Documents/wifi-regs.txt"},
         {"echo <text>", "print text"},
         {"clear", "clear the screen"},
         {"uptime", "time since boot"},
@@ -128,6 +129,7 @@ void shell_execute(char *line) {
         if (argc > 1 && !strcmp(argv[1], "start")) wifi_start();
         else if (argc > 1 && !strcmp(argv[1], "scan")) wifi_scan();
         else if (argc > 1 && !strcmp(argv[1], "simulate")) wifi_simulate();
+        else if (argc > 1 && !strcmp(argv[1], "dump")) wifi_dump();
         else wifi_info();
     }
     else if (!strcmp(c, "echo")) { for (int i = 1; i < argc; i++) kprintf("%s%s", argv[i], i + 1 < argc ? " " : ""); kprintf("\n"); }

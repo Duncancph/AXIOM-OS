@@ -536,6 +536,29 @@ static void scan_report(bool show) {
     vfs_write("/home/Documents/wifi-scan.txt", report, (uint64_t)rlen);
     if (show) kprintf("(Saved to Documents/wifi-scan.txt)\n");
 }
+/* 'wifi dump': the card's registers into Documents/wifi-regs.txt, laid out as Linux's rtlwifi debugfs prints them
+ * (mac_0..mac_17, bb_8..bb_1f: 16 bytes a line; rf_a: four RF registers a line), so the two can be compared on
+ * a computer where Linux's driver runs the same card */
+void wifi_dump(void) {
+    if (!started) wifi_start();
+    if (!mm) { kprintf("No Wi-Fi card to read.\n"); return; }
+    uint64_t cap = 64 * 1024; char *o = kmalloc(cap); if (!o) return;
+    uint64_t n = (uint64_t)ksnprintf(o, cap, "# AXIOM wifi dump: RTL8821AE registers (MAC/BB 0x0000-0x1FFF, RF path A 0x00-0xFF)\n# radio %s, firmware %s\n",
+                                     radio_ok ? "set up" : "not set up", fw_ok ? "running" : "not running");
+    for (int a = 0; a < 0x2000 && n < cap - 100; a += 16) {
+        n += (uint64_t)ksnprintf(o + n, cap - n, "\n%8.8x  ", a);
+        for (int i = 0; i < 4; i++) n += (uint64_t)ksnprintf(o + n, cap - n, "%8.8x    ", r32(a + 4 * i));
+    }
+    n += (uint64_t)ksnprintf(o + n, cap - n, "\n\n# rf_a");
+    for (int r = 0; r <= 0xFF && n < cap - 100; r += 4) {
+        n += (uint64_t)ksnprintf(o + n, cap - n, "\n%8.8x  ", r);
+        for (int i = 0; i < 4; i++) n += (uint64_t)ksnprintf(o + n, cap - n, "%8.8x    ", rf_read(r + i));
+    }
+    n += (uint64_t)ksnprintf(o + n, cap - n, "\n");
+    vfs_write("/home/Documents/wifi-regs.txt", o, n);
+    kfree(o);
+    kprintf("The Wi-Fi card's registers are saved to Documents/wifi-regs.txt (%lu bytes).\n", (unsigned long)n);
+}
 void wifi_simulate(void) {
     sim = !sim;
     kprintf(sim ? "Simulated Wi-Fi card on (for trying the Network app; it doesn't connect to anything). 'wifi simulate' again turns it off.\n"
