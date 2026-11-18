@@ -13,6 +13,7 @@ struct dmode { int w, h, hz; uint32_t clk; int hss, hse, ht, vss, vse, vt; bool 
 static struct dmode want_mode; static bool have_want;
 static bool native_on;
 static uint16_t gdev;
+static bool native_gave_up;                                 /* the last start with it didn't finish: turned off */
 bool intelgfx_native_active(void) { return native_on; }
 static char report[3000]; static int rlen;
 static char summary[160], monitor[160];
@@ -354,6 +355,7 @@ void intelgfx_maybe_switch(void) {
     if (!v || !strcmp(v, "off") || !*v) return;
     if (chk && !strcmp(chk, "1")) {
         add("switch: the last start with it didn't finish - turned off");
+        native_gave_up = true;
         settings_set("display.native", "off"); settings_set("display.native_check", "0");
         return;
     }
@@ -375,6 +377,8 @@ void intelgfx_native_answer(bool keep) {
     acpi_reboot();
 }
 void intelgfx_native_settled(void) {                       /* 20 s after a start with "on" */
+    if (native_gave_up) desktop_notify("Screen size", "AXIOM went back to the computer's own screen size because the last start with the "
+                                       "monitor's full size didn't finish. Turn it on again in Settings > Display.");
     const char *v = settings_get("display.native");
     if (native_on && v && !strcmp(v, "on")) settings_set("display.native_check", "0");
 }
