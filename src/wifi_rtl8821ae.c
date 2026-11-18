@@ -472,6 +472,7 @@ static void note_beacon(const uint8_t *f, int len, int dbm) {
 }
 static bool sim;                                  /* 'wifi simulate': a pretend card, for trying the Network app without one */
 static int scan_frames, scan_bad, scan_other;
+static int ch_frames[15], ch_beacons[15], ch_rf[15];        /* per channel: what was heard, and where the radio said it was */
 static void do_scan(void) {
     nfound = 0; scan_frames = scan_bad = scan_other = 0;
     if (sim) {
@@ -489,13 +490,14 @@ static void do_scan(void) {
     }
     for (int ch = 1; ch <= 13; ch++) {
         set_channel(ch);
+        ch_rf[ch] = (int)(rf_read(0x18) & 0xFF); ch_frames[ch] = ch_beacons[ch] = 0;
         uint64_t until = uptime_ms() + 220;
         while (uptime_ms() < until) {
             int len, dbm, rate; uint8_t *f;
             while ((f = rx_take(&len, &dbm, &rate))) {
-                scan_frames++;
+                scan_frames++; ch_frames[ch]++;
                 if (len < 0) { scan_bad++; continue; }
-                if (len >= 1 && (f[0] == 0x80 || f[0] == 0x50)) note_beacon(f, len, dbm); else scan_other++;
+                if (len >= 1 && (f[0] == 0x80 || f[0] == 0x50)) { ch_beacons[ch]++; note_beacon(f, len, dbm); } else scan_other++;
             }
             sleep_ms(2);
         }
@@ -503,12 +505,17 @@ static void do_scan(void) {
     for (int i = 0; i < nfound; i++) for (int j = i + 1; j < nfound; j++)       /* strongest first */
         if (found[j].dbm > found[i].dbm) { struct bss t = found[i]; found[i] = found[j]; found[j] = t; }
 }
+static void scan_report(bool show);
 static int sec_of(const struct bss *b) { return b->sae && b->rsn ? WSEC_WPA3 : b->rsn ? WSEC_WPA2 : b->wpa ? WSEC_WPA : b->privacy ? WSEC_WEP : WSEC_OPEN; }
 void wifi_scan(void) {
     if (!started && !sim) wifi_start();
     if (!radio_ok && !sim) { kprintf("The radio isn't ready (see 'wifi').\n"); return; }
     kprintf("Listening on channels 1-13 (about 3 seconds)...\n");
     do_scan();
+    scan_report(true);
+}
+/* what the last scan heard, into the report and Documents/wifi-scan.txt (and on the screen if asked) */
+static void scan_report(bool show) {
     static const char *secn[] = { "open", "WEP", "WPA", "WPA2", "WPA3" };
     char line[160];
     rlen = 0; report[0] = 0;
@@ -519,10 +526,15 @@ void wifi_scan(void) {
                   b->bssid[0], b->bssid[1], b->bssid[2], b->bssid[3], b->bssid[4], b->bssid[5]);
         add("%s", line);
     }
+    if (!sim) {                                              /* per channel: frames (beacons) heard, and the radio's own channel */
+        char l[200]; int o = 0;
+        for (int ch = 1; ch <= 13; ch++) o += ksnprintf(l + o, sizeof l - o, " %d:%d(%d)@%d", ch, ch_frames[ch], ch_beacons[ch], ch_rf[ch]);
+        add("per channel, frames(beacons)@radio's channel:%s", l);
+    }
     if (!scan_frames && !sim) add("Nothing at all was received: the radio isn't hearing yet. (RCR %08x, RX DMA %02x, CR %04x, RF 0x18 %05x)", r32(REG_RCR), r8(0x0286), r16(REG_CR), rf_read(0x18));
-    kprintf("%s", report);
+    if (show) kprintf("%s", report);
     vfs_write("/home/Documents/wifi-scan.txt", report, (uint64_t)rlen);
-    kprintf("(Saved to Documents/wifi-scan.txt)\n");
+    if (show) kprintf("(Saved to Documents/wifi-scan.txt)\n");
 }
 void wifi_simulate(void) {
     sim = !sim;
@@ -551,7 +563,7 @@ int64_t wifi_syscall(int op, uint64_t buf, int64_t n) {
         return 0;
     }
     if (op == WIFI_START) { if (sim) return 0; if (!dev) return -1; if (!started) wifi_start(); return radio_ok ? 0 : -1; }
-    if (op == WIFI_SCAN) { if (!sim && !radio_ok) return -1; do_scan(); return nfound; }
+    if (op == WIFI_SCAN) { if (!sim && !radio_ok) return -1; do_scan(); scan_report(false); return nfound; }
     if (op == WIFI_RESULTS) {
         struct wifi_net *o = (struct wifi_net *)buf; int k = 0;
         const char *saved = settings_get("wifi.ssid");
