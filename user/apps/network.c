@@ -224,9 +224,16 @@ static void draw_lock(struct canvas *c, int x, int y, uint32_t col) {           
     gfx_rrect_outline(c, x + 2, y, 8, 9, 3, col, 255);
     gfx_rrect(c, x, y + 5, 12, 9, 2, col, 255);
 }
-static void wifi_refresh(void) { sys_wifi(WIFI_STATUS, &ws, 0); }
-static void wifi_results(void) { long n = sys_wifi(WIFI_RESULTS, nets, 32); nnets = n > 0 ? (int)n : 0; scanned = true; }
 static void wmsg_set(uint32_t col, const char *t) { strncpy0(wmsg, t, sizeof wmsg); wmsg_col = col; }
+static int last_state = -1;
+static void wifi_refresh(void) {
+    sys_wifi(WIFI_STATUS, &ws, 0);
+    /* while joining, and when it ends, the card's own words show (authenticating..., connected, why not) */
+    if ((ws.state == WIFI_CONNECTING || ws.state == WIFI_CONNECTED || last_state == WIFI_CONNECTING) && ws.msg[0])
+        wmsg_set(ws.state == WIFI_CONNECTED ? UI_GREEN : ws.state == WIFI_CONNECTING ? HL_GOLD : UI_RED, ws.msg);
+    last_state = ws.state;
+}
+static void wifi_results(void) { long n = sys_wifi(WIFI_RESULTS, nets, 32); nnets = n > 0 ? (int)n : 0; scanned = true; }
 static int rows_vis(void) { return LIST_H / ROW_H; }
 
 static void wrap_text(struct canvas *c, int x, int y, int w, uint32_t col, const char *t) {   /* up to 3 lines */
@@ -351,7 +358,7 @@ static void wifi_scan_now(void) {
 }
 static void wifi_join(void) {
     struct wifi_net *n = &nets[join_i];
-    bool need_pw = n->sec == WSEC_WPA2 || n->sec == WSEC_WPA || n->sec == WSEC_WPA3;
+    bool need_pw = (n->sec == WSEC_WPA2 || n->sec == WSEC_WPA || n->sec == WSEC_WPA3) && !(n->saved && !ilen);
     if (n->sec == WSEC_WEP || (need_pw && ilen < 8)) return;
     struct wifi_join j; memset(&j, 0, sizeof j);
     strncpy0(j.ssid, n->ssid, sizeof j.ssid); memcpy(j.bssid, n->bssid, 6);
@@ -362,7 +369,7 @@ static void wifi_join(void) {
     long r = sys_wifi(WIFI_CONNECT, &j, 0);
     memset(&j, 0, sizeof j);
     wifi_refresh(); wifi_results();
-    wmsg_set(r < 0 ? UI_RED : r == 0 ? UI_GREEN : HL_GOLD, ws.msg[0] ? ws.msg : r < 0 ? "Couldn't connect." : "Connected.");
+    wmsg_set(r < 0 ? UI_RED : r == 0 ? UI_GREEN : HL_GOLD, ws.msg[0] ? ws.msg : r < 0 ? "Couldn't connect." : "Joining...");
 }
 static void wifi_click(int h) {
     if (h == 50) {
@@ -374,7 +381,9 @@ static void wifi_click(int h) {
     else if (h == 52) { sys_wifi(WIFI_FORGET, 0, 0); wifi_refresh(); wifi_results(); wmsg_set(UI_MUTED, "Forgotten."); }
     else if (h >= 100 && h < 100 + nnets) {
         if (!nets[h - 100].ssid[0]) { wmsg_set(UI_MUTED, "Hidden networks need their name typed in (coming later)."); return; }
-        join_i = h - 100; dialog = 2; memset(input, 0, sizeof input); ilen = 0; show_pw = false;
+        join_i = h - 100; memset(input, 0, sizeof input); ilen = 0; show_pw = false;
+        if (nets[join_i].saved) { wifi_join(); return; }                 /* saved: its key is kept, no password needed */
+        dialog = 2;
     } else if (h == 21) show_pw = !show_pw;
     else if (h == 10 && dialog == 2) wifi_join();
     else if (h == 11) { dialog = 0; memset(input, 0, sizeof input); ilen = 0; }

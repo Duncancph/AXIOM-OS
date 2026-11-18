@@ -13,6 +13,8 @@
 #include "kernel.h"
 #include "vfs.h"
 #include "wifi_rtl8821ae_tables.h"
+#include "net.h"
+#include "../common/wifi_sta.h"
 
 void wpa_pmk(const char *pass, const uint8_t *ssid, int ssid_len, uint8_t pmk[32]);   /* user/lib/crypto/wpa.c */
 
@@ -92,6 +94,55 @@ static bool rings_setup(void) {
     }
     return true;
 }
+/* ---- sending ----
+ * Two send rings (as Linux's rtl8821ae): management frames on the management queue at 1 Mb/s, data on the
+ * best-effort queue at 6 Mb/s, both at a fixed rate (no rate control yet). A descriptor is 64 bytes: the
+ * 40-byte TX descriptor, the buffer's address in dword 10 and the next descriptor's in dword 12. The card owns
+ * an entry while bit 31 of dword 0 is set; writing the queue's bit to PCIE_CTRL_REG (0x300) tells it to look. */
+#define NTXD 16
+#define TXBUF 2048
+enum { TQ_MGMT, TQ_DATA };
+struct txq { uint32_t *d; uint8_t *buf[NTXD]; int next; int reg, poll, qsel; };
+static struct txq txq[2] = { { 0, {0}, 0, 0x0318, 1 << 6, 0x12 }, { 0, {0}, 0, 0x0330, 1 << 1, 0x00 } };
+static int tx_full, tx_sent;
+static bool txq_setup(void) {
+    for (int q = 0; q < 2; q++) {
+        struct txq *t = &txq[q];
+        if (t->d) continue;
+        t->d = page_alloc(1); if (!t->d) return false;
+        uint8_t *bufs = page_alloc(NTXD * TXBUF / 4096); if (!bufs) return false;
+        for (int i = 0; i < NTXD; i++) {
+            t->buf[i] = bufs + i * TXBUF;
+            t->d[i * 16 + 12] = (uint32_t)(uintptr_t)(t->d + ((i + 1) % NTXD) * 16);   /* the next descriptor */
+        }
+    }
+    return true;
+}
+/* an 802.11 frame (no FCS: the card adds it) out on a queue; false if the ring is full or it's too long */
+static bool tx_frame(int q, const uint8_t *f, int len) {
+    struct txq *t = &txq[q];
+    if (!t->d || len < 24 || len > TXBUF) return false;
+    uint32_t *d = t->d + t->next * 16;
+    for (int w = 0; w < 50 && (d[0] & (1u << 31)); w++) udelay(100);   /* (the card still has it: wait up to 5 ms) */
+    if (d[0] & (1u << 31)) { tx_full++; return false; }
+    memcpy(t->buf[t->next], f, len);
+    uint32_t next = d[12];
+    for (int i = 0; i < 16; i++) d[i] = 0;
+    d[12] = next;
+    d[1] = (uint32_t)t->qsel << 8 | (q == TQ_MGMT ? 7u : 4u) << 16;   /* queue; rate set: management / G+B */
+    d[3] = 1u << 8 | 1u << 10;                                  /* use this rate, no fallback */
+    d[4] = (q == TQ_MGMT ? 0u : 4u) | 0x1Fu << 8 | 0xFu << 13;  /* 1 Mb/s (CCK) / 6 Mb/s (OFDM) */
+    d[7] = (uint32_t)len;
+    d[9] = (uint32_t)((f[22] | f[23] << 8) >> 4) << 12;          /* the frame's sequence number */
+    d[10] = (uint32_t)(uintptr_t)t->buf[t->next];
+    __asm__ volatile("" ::: "memory");
+    d[0] = (uint32_t)len | 40u << 16 | (f[4] & 1 ? 1u << 24 : 0) | 1u << 26 | 1u << 27 | 1u << 31;   /* size, offset 40, group, last, first, the card's */
+    __asm__ volatile("mfence" ::: "memory");
+    w16(0x0300, (uint16_t)t->poll);
+    t->next = (t->next + 1) % NTXD; tx_sent++;
+    return true;
+}
+
 /* the next received frame, or 0: *len, and the PHY status (signal) */
 static uint8_t *rx_take(int *len, int *dbm, int *rate) {
     struct rxdesc *d = &rxd[rx_next];
@@ -365,7 +416,9 @@ static bool init_mac(void) {
     w32(REG_RCR, RCR_VALUE);
     w16(0x06A4, 0xFFFF);                                     /* RXFLTMAP2: every data frame type */
     if (!rings_setup()) return false;
-    for (int q = 0; q < 8; q++) w32(0x0308 + q * 8, (uint32_t)(uintptr_t)txring);   /* the send queues: an empty ring each */
+    for (int q = 0; q < 7; q++) w32(0x0308 + q * 8, (uint32_t)(uintptr_t)txring);   /* the send queues (0x308-0x338): an empty ring each */
+    if (txq_setup()) { w32(txq[TQ_MGMT].reg, (uint32_t)(uintptr_t)txq[TQ_MGMT].d); w32(txq[TQ_DATA].reg, (uint32_t)(uintptr_t)txq[TQ_DATA].d); }
+    else add("send rings: out of memory");
     w32(0x0340, (uint32_t)(uintptr_t)rxd);                   /* RX_DESA */
     w8(0x0300 + 3, 0x77);                                    /* PCIE_CTRL_REG */
     w32(0x0304, 0);                                          /* INT_MIG */
@@ -565,8 +618,77 @@ void wifi_simulate(void) {
                 : "Simulated Wi-Fi card off.\n");
 }
 
-/* ---- for apps (SYS_WIFI) ---- */
+/* ---- joining a network (common/wifi_sta.c does the protocol) ----
+ * The card is told who it is (MACID, so it acknowledges frames to us), the access point (BSSID) and that it's a
+ * station on a network (MSR); then the station code's frames go out through tx_frame and what arrives goes to it.
+ * The connection is a network adapter: AXIOM's network stack polls it (net_thread) and runs DHCP on it as it
+ * does on a cable. */
+static struct wifi_sta sta;
+static struct netif wnif;
+static bool wnif_added, joining;
 static char join_msg[128];
+static uint64_t join_started;
+static int rx_frames_joined;
+static void sta_send(void *ctx, const uint8_t *f, int len) { (void)ctx; tx_frame((f[0] & 0x0C) == 0x08 ? TQ_DATA : TQ_MGMT, f, len); }
+static void sta_deliver(void *ctx, const uint8_t *eth, int len) { (void)ctx; net_rx(&wnif, eth, len); }
+static int wnif_send(struct netif *n, const void *frame, int len) { (void)n; return sta.state == WS_CONNECTED ? wsta_send_eth(&sta, frame, len) : -1; }
+static bool wnif_link(struct netif *n) { (void)n; return sta.state == WS_CONNECTED; }
+static void wnif_poll(struct netif *n) {
+    (void)n;
+    if (!joining) return;
+    int len, dbm, rate; uint8_t *f;
+    for (int k = 0; k < 32 && (f = rx_take(&len, &dbm, &rate)); k++)
+        if (len >= 24) { rx_frames_joined++; wsta_rx(&sta, f, len - 4, uptime_ms()); }   /* (minus the FCS) */
+    int was = sta.state;
+    wsta_tick(&sta, uptime_ms());
+    if (sta.state != was || (sta.state == WS_FAILED && joining)) {
+        static const char *names[] = { "idle", "authenticating", "associating", "checking the password", "connected", "failed" };
+        if (sta.state == WS_CONNECTED) ksnprintf(join_msg, sizeof join_msg, "Connected to \"%s\".", sta.ssid);
+        else if (sta.state == WS_FAILED) {
+            ksnprintf(join_msg, sizeof join_msg, "Couldn't join \"%s\": %s", sta.ssid, sta.why[0] ? sta.why : "no answer");
+            joining = false;
+        } else ksnprintf(join_msg, sizeof join_msg, "Joining \"%s\": %s...", sta.ssid, names[sta.state]);
+        LOG_INFO("wifi: %s (%d frames heard, %d sent, %d dropped)\n", join_msg, rx_frames_joined, tx_sent, tx_full);
+    }
+}
+static int hexval(char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; }
+/* join the access point found[i] (pmk: NULL for an open network) */
+static void wifi_join_bss(int i, const uint8_t *pmk) {
+    struct bss *b = &found[i];
+    if (joining) wsta_leave(&sta);
+    set_channel(b->ch);
+    for (int k = 0; k < 6; k++) { w8(0x0610 + k, mac[k]); w8(0x0618 + k, b->bssid[k]); }   /* MACID, BSSID */
+    w8(0x0102, (uint8_t)((r8(0x0102) & ~3) | 2));             /* MSR: a station on a network */
+    memset(&sta, 0, sizeof sta);
+    sta.send = sta_send; sta.deliver = sta_deliver;
+    uint8_t snonce[32]; random_bytes(snonce, 32);
+    rx_frames_joined = 0; tx_sent = tx_full = 0;
+    joining = true; join_started = uptime_ms();
+    wsta_join(&sta, mac, b->bssid, b->ssid, pmk, snonce, uptime_ms());
+    if (!wnif_added) {
+        strncpy0(wnif.adapter, "Realtek RTL8821AE (Wi-Fi)", sizeof wnif.adapter); strncpy0(wnif.driver, "rtl8821ae", sizeof wnif.driver);
+        memcpy(wnif.mac, mac, 6); wnif.send = wnif_send; wnif.poll = wnif_poll; wnif.link_up = wnif_link;
+        net_add_netif(&wnif); wnif_added = true;
+    }
+    ksnprintf(join_msg, sizeof join_msg, "Joining \"%s\" on channel %d...", b->ssid, b->ch);
+    LOG_INFO("wifi: %s\n", join_msg);
+}
+/* join the saved network if the last scan found it: -1 not found, 0 started */
+static int wifi_join_saved(void) {
+    const char *ssid = settings_get("wifi.ssid"), *hx = settings_get("wifi.pmk");
+    if (!ssid || !ssid[0] || !radio_ok) return -1;
+    int best = -1;
+    for (int i = 0; i < nfound; i++) if (!strcmp(found[i].ssid, ssid) && (best < 0 || found[i].dbm > found[best].dbm)) best = i;
+    if (best < 0) { ksnprintf(join_msg, sizeof join_msg, "\"%s\" wasn't heard in the last scan: scan again.", ssid); return -1; }
+    uint8_t pmk[32]; bool secure = hx && strlen(hx) == 64;
+    for (int k = 0; secure && k < 32; k++) { int h = hexval(hx[2 * k]), l = hexval(hx[2 * k + 1]); if (h < 0 || l < 0) secure = false; else pmk[k] = (uint8_t)(h << 4 | l); }
+    if (sec_of(&found[best]) != WSEC_OPEN && !secure) { strncpy0(join_msg, "This network needs its password: click it to type it.", sizeof join_msg); return -1; }
+    wifi_join_bss(best, secure ? pmk : 0);
+    memset(pmk, 0, 32);
+    return 0;
+}
+
+/* ---- for apps (SYS_WIFI) ---- */
 static void hex(const uint8_t *b, int n, char *out) { static const char h[] = "0123456789abcdef"; for (int i = 0; i < n; i++) { out[2 * i] = h[b[i] >> 4]; out[2 * i + 1] = h[b[i] & 15]; } out[2 * n] = 0; }
 int64_t wifi_syscall(int op, uint64_t buf, int64_t n) {
     if (op == WIFI_STATUS) {
@@ -577,7 +699,8 @@ int64_t wifi_syscall(int op, uint64_t buf, int64_t n) {
         if (!dev && !sim) { st->state = WIFI_NONE; return 0; }
         strncpy0(st->adapter, sim ? "Simulated Wi-Fi card" : "Realtek RTL8821AE", sizeof st->adapter);
         if (sim) { st->state = WIFI_READY; static const uint8_t m[6] = { 0x02, 0xAC, 0x51, 0x00, 0x00, 0x01 }; memcpy(st->mac, m, 6); }
-        else { memcpy(st->mac, mac, 6); st->state = !started ? WIFI_OFF : radio_ok ? WIFI_READY : WIFI_FAILED; }
+        else { memcpy(st->mac, mac, 6); st->state = !started ? WIFI_OFF : !radio_ok ? WIFI_FAILED : sta.state == WS_CONNECTED ? WIFI_CONNECTED : joining ? WIFI_CONNECTING : WIFI_READY; }
+        if (!sim && (joining || sta.state == WS_CONNECTED)) strncpy0(st->ssid, sta.ssid, sizeof st->ssid);
         if (st->state == WIFI_FAILED) {                          /* the last line of the report says why */
             int e = rlen - 1; while (e > 0 && report[e - 1] != '\n') e--;
             int s0 = e - 1; while (s0 > 0 && report[s0 - 1] != '\n') s0--;
@@ -586,7 +709,11 @@ int64_t wifi_syscall(int op, uint64_t buf, int64_t n) {
         return 0;
     }
     if (op == WIFI_START) { if (sim) return 0; if (!dev) return -1; if (!started) wifi_start(); return radio_ok ? 0 : -1; }
-    if (op == WIFI_SCAN) { if (!sim && !radio_ok) return -1; do_scan(); scan_report(false); return nfound; }
+    if (op == WIFI_SCAN) {
+        if (!sim && !radio_ok) return -1;
+        if (joining || sta.state == WS_CONNECTED) return nfound;     /* (connected: the radio stays on its channel) */
+        do_scan(); scan_report(false); return nfound;
+    }
     if (op == WIFI_RESULTS) {
         struct wifi_net *o = (struct wifi_net *)buf; int k = 0;
         const char *saved = settings_get("wifi.ssid");
@@ -604,14 +731,21 @@ int64_t wifi_syscall(int op, uint64_t buf, int64_t n) {
         int pl = (int)strlen(j.pass);
         if (!j.ssid[0]) return -1;
         if (pl && (pl < 8 || pl > 63)) { strncpy0(join_msg, "A Wi-Fi password is 8 to 63 characters.", sizeof join_msg); return -1; }
-        /* keep the key derived from the password (not the password itself) for when joining works */
-        char hx[65] = "";
-        if (pl) { uint8_t pmk[32]; wpa_pmk(j.pass, (const uint8_t *)j.ssid, (int)strlen(j.ssid), pmk); hex(pmk, 32, hx); memset(pmk, 0, 32); }
+        /* keep the key derived from the password (not the password itself); no password for the saved network:
+         * use its saved key */
+        if (pl || strcmp(j.ssid, settings_get("wifi.ssid"))) {
+            char hx[65] = "";
+            if (pl) { uint8_t pmk[32]; wpa_pmk(j.pass, (const uint8_t *)j.ssid, (int)strlen(j.ssid), pmk); hex(pmk, 32, hx); memset(pmk, 0, 32); }
+            settings_set("wifi.ssid", j.ssid); settings_set("wifi.pmk", hx);
+        }
         memset(j.pass, 0, sizeof j.pass);
-        settings_set("wifi.ssid", j.ssid); settings_set("wifi.pmk", hx);
-        ksnprintf(join_msg, sizeof join_msg, "Saved \"%s\". Joining isn't finished yet: the scan is being tested on the real card first.", j.ssid);
-        return 1;                                                /* saved, not connected */
+        if (sim) { ksnprintf(join_msg, sizeof join_msg, "Saved \"%s\" (the simulated card doesn't connect).", j.ssid); return 1; }
+        if (wifi_join_saved() < 0) return -1;
+        return 1;                                                /* joining (the status says how it goes) */
     }
-    if (op == WIFI_FORGET) { settings_set("wifi.ssid", ""); settings_set("wifi.pmk", ""); join_msg[0] = 0; return 0; }
+    if (op == WIFI_FORGET) {
+        if (joining || sta.state == WS_CONNECTED) { wsta_leave(&sta); joining = false; w8(0x0102, r8(0x0102) & ~3); }
+        settings_set("wifi.ssid", ""); settings_set("wifi.pmk", ""); join_msg[0] = 0; return 0;
+    }
     return -1;
 }
