@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 187
-notes The mouse wheel works with USB mice (lists scroll). Wi-Fi scans save a fuller report to Documents/wifi-scan.txt.
-file kernel b187/thane.elf.gz 19566880 ccbf6a3697c3d07ccb512adddd639978714dbff2a457fa224fd1794a99243c23
-file initrd b187/initrd.tar.gz 3604480 9757670601583e45b976449729a72ea50e3ddec411d2562e8f747f860abd00b5
-file bootx64 b187/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b187/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 304502203d02edcf586a48015da191523264baa707e4d87fa4b2549becc466e86ec8d7ae022100fe4fe24e1a31510749dacbbc756fde761f07b682129b927bb89208e1961b1fa8
+build 188
+notes AXIOM now says when it turns the monitor's full screen size off after a start that didn't finish (turn it on again in Settings > Display).
+file kernel b188/thane.elf.gz 19567072 4e6a95b5411a295d056ff722135df7c7e70be7b990aca7a43f2c7c60701a2ccf
+file initrd b188/initrd.tar.gz 3604480 41930da3af386cd1e33de52adf7e0199d615e1dc4827062c8cf26fdd39886099
+file bootx64 b188/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b188/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3046022100bfac22396279b823b716bbffe6e6f4578b708a83e894ffdf17ab0a8107c84a73022100a2293c7f37671cae6e352b35806200b5d364933d06bb31b36fb79411cb01b505
