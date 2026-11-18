@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 185
-notes Fixes Wi-Fi start-up stopping AXIOM (the radio's settings tables had lost registers). Qt apps now run (FeatherPad, SpeedCrunch and more in Settings > Apps), with six more GTK apps. New game: Merrow La
-file kernel b185/thane.elf.gz 19555104 6cc8c8fafc34724a500c6d7840c9a148ad4af1748271809518bd8e0e8aad53be
-file initrd b185/initrd.tar.gz 3594240 17c37fdfbd7b5124abc0d9a7249fd6d1579ee59dfe72898dd60b0b7f11ac1e92
-file bootx64 b185/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b185/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 30450221009f09876eaa0dd67f231e0c6fc9be4e0a8811ea6689ba3abd115fc85ef5d73518022056bc06c013e9d862bf183f92b9cddeea2f755d38bd820da7d778de1f4db9645d
+build 187
+notes The mouse wheel works with USB mice (lists scroll). Wi-Fi scans save a fuller report to Documents/wifi-scan.txt.
+file kernel b187/thane.elf.gz 19566880 ccbf6a3697c3d07ccb512adddd639978714dbff2a457fa224fd1794a99243c23
+file initrd b187/initrd.tar.gz 3604480 9757670601583e45b976449729a72ea50e3ddec411d2562e8f747f860abd00b5
+file bootx64 b187/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b187/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304502203d02edcf586a48015da191523264baa707e4d87fa4b2549becc466e86ec8d7ae022100fe4fe24e1a31510749dacbbc756fde761f07b682129b927bb89208e1961b1fa8
