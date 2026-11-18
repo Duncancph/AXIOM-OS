@@ -722,6 +722,10 @@ static void pkg_install(int i) {
     ksnprintf(ipath, sizeof ipath, "/apps/%s.info", q->id);
     fs_write(ipath, info, strlen(info));
     sys_call(SYS_APPS, 0, -2, 0, 0, 0);                      /* the kernel reads /apps again */
+    char dock[400]; sys_setting_get("dock.apps", dock, sizeof dock);   /* and it goes in the dock */
+    bool in = false; int il = strlen(q->id);
+    for (const char *s = dock; *s;) { const char *e = s; while (*e && *e != ',') e++; if (e - s == il && !strncmp(s, q->id, il)) in = true; s = *e ? e + 1 : e; }
+    if (!in && strlen(dock) + il + 2 < sizeof dock) { char nd[400]; ksnprintf(nd, sizeof nd, "%s%s%s", dock, dock[0] ? "," : "", q->id); set("dock.apps", nd); }
     strncpy0(q->have, q->version, sizeof q->have);
     pk_state = PK_DONE; pk_busy = -1;
     char m[160]; ksnprintf(m, sizeof m, "%s %s is installed (%ld files). Open it from the dock or the AXIOM menu.", q->name, q->version, files);

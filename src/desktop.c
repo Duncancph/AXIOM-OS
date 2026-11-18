@@ -92,6 +92,7 @@ static void dock_rebuild(void) {
     while (s && *s && ndock < HL_MAX_DOCK) {
         const char *e = s; while (*e && *e != ',') e++;
         int a = app_by_id(s, e - s);
+        if (a < 0 && ((e - s == 3 && !memcmp(s, "web", 3)) || (e - s == 3 && !memcmp(s, "arc", 3)))) a = app_by_id("vertex", 6);   /* (the old browser's place) */
         bool dup = false; for (int i = 0; i < ndock; i++) if (dock_app[i] == a) dup = true;
         if (a >= 0 && !dup) { dock_app[ndock] = a; dock_pinned[ndock++] = true; }
         s = *e ? e + 1 : e;
@@ -135,7 +136,7 @@ static int app_cat(int a) {
     return 0;
 }
 static int app_order(int a) {                      /* the order within a group */
-    static const char *ord[] = { "files", "web", "notes", "calendar", "music", "video", "viewer", "calc",
+    static const char *ord[] = { "files", "vertex", "notes", "calendar", "music", "video", "viewer", "calc",
                                  "settings", "terminal", "monitor", "network", "bluetooth", "about" };
     for (unsigned i = 0; i < sizeof ord / sizeof ord[0]; i++) if (!strcmp(apps_get(a)->id, ord[i])) return i;
     return 100 + a;

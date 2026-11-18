@@ -119,7 +119,7 @@ static bool ext_is(const char *path, const char *list) {
 
 const char *app_for_file(const char *path) {
     if (ext_is(path, "png jpg jpeg gif bmp")) return "viewer";
-    if (ext_is(path, "html htm xhtml")) return "web";
+    if (ext_is(path, "html htm xhtml")) return "vertex";
     if (ext_is(path, "mp3")) return "music";
     if (ext_is(path, "mp4") || ext_is(path, "m4v") || ext_is(path, "mov")) return "video";
     if (ext_is(path, "elf bin img iso zip gz tgz tar xz 7z rar exe dll so o a wav ogg flac mp4 mkv avi mov pdf doc docx xls xlsx ppt pptx")) return 0;
@@ -131,12 +131,13 @@ const char *open_file(const char *path) {
     if (!app) return "No app on AXIOM can open this kind of file yet.";
     struct dunc_app ap[24]; int n = sys_apps(ap, 24); bool have = false;
     for (int k = 0; k < n; k++) if (!strcmp(ap[k].id, app)) have = true;
+    if (!have && !strcmp(app, "vertex")) return "Web pages open in Vertex: install it in Settings > Apps.";
     if (!have) {                                         /* a clan package: install it */
         char cmd[48], out[256]; ksnprintf(cmd, sizeof cmd, "clan install %s", app);
         sys_kcmd(cmd, out, sizeof out);
     }
     char arg[300];
-    if (!strcmp(app, "web")) ksnprintf(arg, sizeof arg, "file://%s", path); else strncpy0(arg, path, sizeof arg);
+    if (!strcmp(app, "vertex")) ksnprintf(arg, sizeof arg, "file://%s", path); else strncpy0(arg, path, sizeof arg);
     if (sys_spawn_arg(app, arg) < 0) return "The app couldn't start.";
     return 0;
 }

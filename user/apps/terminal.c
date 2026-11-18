@@ -390,7 +390,8 @@ static void run(char *line) {
             return;
         }
         int pid = sys_spawn_arg(app, full);
-        if (pid < 0) { puts_c("No such app or file. Type 'apps' for the list.\n", C_RED); }
+        if (pid < 0 && (!strcmp(app, "vertex") || !strcmp(app, "web"))) puts_c("Vertex isn't installed: get it in Settings > Apps.\n", C_RED);
+        else if (pid < 0) { puts_c("No such app or file. Type 'apps' for the list.\n", C_RED); }
         else print("Started %s (pid %d)\n", app, pid);
     }
     else if (!strcmp(line, "pwd")) print("%s\n", cwd);

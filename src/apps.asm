@@ -17,13 +17,12 @@ app_images:
     APP sandbox, "Protection Test", 0
     APP settings, "Settings", 0
     APP viewer, "Viewer", 0
-    APP web, "Vertex", 0
     APP notes, "Notes", 0
     APP calendar, "Calendar", 0
     APP music, "Music", 0
     APP video, "Video", 0
     APP about, "About AXIOM", 0
-app_count: dd 15
+app_count: dd 14
 
 id_files: db "files", 0
 title_files: db "Files", 0
@@ -53,8 +52,6 @@ id_video: db "video", 0
 title_video: db "Video", 0
 id_viewer: db "viewer", 0
 title_viewer: db "Viewer", 0
-id_web: db "web", 0
-title_web: db "Vertex", 0
 
 align 16
 bin_files: incbin "build/user/files.elf"
@@ -98,6 +95,3 @@ bin_video_end:
 
 bin_viewer: incbin "build/user/viewer.elf"
 bin_viewer_end:
-align 16
-bin_web: incbin "build/user/web.elf"
-bin_web_end:
