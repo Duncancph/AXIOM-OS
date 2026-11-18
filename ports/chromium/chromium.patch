@@ -198,6 +198,63 @@ index 833293873f..79626f3bdf 100644
  #endif
  
    std::string brand_version =
+diff --git a/gpu/ipc/service/gpu_init.cc b/gpu/ipc/service/gpu_init.cc
+index 1c728a460b..117299c548 100644
+--- a/gpu/ipc/service/gpu_init.cc
++++ b/gpu/ipc/service/gpu_init.cc
+@@ -1159,8 +1159,12 @@ void GpuInitLegacy::InitializeInProcess(base::CommandLine* command_line,
+       /*init_bindings=*/true,
+       /*gpu_preference=*/gl::GpuPreference::kDefault);
+   if (!gl_display) {
+-    VLOG(1) << "gl::init::InitializeGLNoExtensionsOneOff failed";
+-    return;
++    // AXIOM: carry on with GL disabled, as --use-gl=disabled would, rather than
++    // leave it "none": the GPU thread shares this process, and the first
++    // context request would hit NOTREACHED in gl::init::CreateGLContext.
++    LOG(ERROR) << "gl::init::InitializeGLNoExtensionsOneOff failed; "
++                  "continuing with GL disabled";
++    gl::SetGLImplementation(gl::kGLImplementationDisabled);
+   }
+   bool gl_disabled = gl::GetGLImplementation() == gl::kGLImplementationDisabled;
+ 
+@@ -1192,6 +1196,7 @@ void GpuInitLegacy::InitializeInProcess(base::CommandLine* command_line,
+       if (!gl_display) {
+         VLOG(1) << "gl::init::InitializeGLNoExtensionsOneOff failed "
+                 << "with SwiftShader";
++        gl::SetGLImplementation(gl::kGLImplementationDisabled);  // AXIOM
+         return;
+       }
+     }
+@@ -1240,6 +1245,7 @@ void GpuInitLegacy::InitializeInProcess(base::CommandLine* command_line,
+       if (!gl_display) {
+         VLOG(1) << "gl::init::InitializeGLNoExtensionsOneOff failed "
+                 << "with SwiftShader";
++        gl::SetGLImplementation(gl::kGLImplementationDisabled);  // AXIOM
+         return;
+       }
+     }
+diff --git a/gpu/ipc/service/gpu_init_2.cc b/gpu/ipc/service/gpu_init_2.cc
+index d03146cd17..476b08b476 100644
+--- a/gpu/ipc/service/gpu_init_2.cc
++++ b/gpu/ipc/service/gpu_init_2.cc
+@@ -636,10 +636,17 @@ void GpuInit2::InitializeInProcess(base::CommandLine* command_line,
+ #if BUILDFLAG(IS_WIN)
+   MaybeFallbackToWarpEarly(state);
+ #endif  // BUILDFLAG(IS_WIN)
++  // AXIOM: if GL can't start, leave it disabled (as --use-gl=disabled would)
++  // rather than "none": this thread shares the browser process, and the first
++  // context request would hit NOTREACHED in gl::init::CreateGLContext.
+   if (!InitializeGLBindingsAndDisplay(state)) {
++    LOG(ERROR) << "GL initialization failed; continuing with GL disabled";
++    gl::SetGLImplementation(gl::kGLImplementationDisabled);
+     return;
+   }
+   if (!FinalizeFeaturesWithContextInfo(state)) {
++    LOG(ERROR) << "GL initialization failed; continuing with GL disabled";
++    gl::SetGLImplementation(gl::kGLImplementationDisabled);
+     return;
+   }
+   // Failures are only logged in-process, so this always succeeds.
 diff --git a/ui/linux/display_server_utils.cc b/ui/linux/display_server_utils.cc
 index 378f335212..09a52e1954 100644
 --- a/ui/linux/display_server_utils.cc

@@ -8,6 +8,8 @@ AXIOM windows, under its own name and logo.
 
 - `ui/ozone/platform/axiom/`: an Ozone platform, `ozone_platform=axiom`. Each Chromium window is an AXIOM
   window opened through `/dev/axiom/window` (`axiom_window_abi.h` is a copy of `common/axiom_window.h`).
+  - No GL: Vertex ships no EGL, GLES or SwiftShader libraries, so the surface factory offers no GL
+    implementations and no `GLOzone` (headless's, which it extends, would try ANGLE) and Skia draws in software.
   - Software frames: Skia draws into its own surface; each frame's damaged rows are copied into the
     window's mmap'd pixels, then `AXWIN_FLUSH`. The browser owns the windows and reads their events; the
     compositor, which may run in a separate GPU process, draws them. So the browser sends each window's
@@ -38,7 +40,10 @@ AXIOM windows, under its own name and logo.
   picks the `axiom` platform (`ui/linux/display_server_utils.cc`), skips Crashpad, whose handler needs
   `fork()` (`chrome/app/chrome_main_delegate.cc`), lets Vertex be the only instance without the Unix-socket
   and symlink lock (`chrome/browser/process_singleton_posix.cc`), and doesn't show the "unsupported flag" bar
-  for `--no-sandbox` and `--single-process` (`chrome/browser/ui/startup/bad_flags_prompt.cc`).
+  for `--no-sandbox` and `--single-process` (`chrome/browser/ui/startup/bad_flags_prompt.cc`). When GL can't
+  start in the browser process (`--single-process`, `--in-process-gpu`), the GPU code carries on with GL
+  disabled instead of "none", which stopped Vertex at its first context request (`gpu/ipc/service/gpu_init.cc`,
+  and `gpu_init_2.cc`, used when a downloaded field trial turns on `GpuInitOptimization`).
 - `rebrand.py`: renames Chromium to Vertex in the product strings (`chromium_strings.grd` and its parts,
   `components_chromium_strings.grd`) and keeps all 81 translations: they're keyed by a fingerprint of the
   English text, so grit works out each message's id before and after and the translations move with them.

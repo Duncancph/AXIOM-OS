@@ -6,6 +6,7 @@
 #define UI_OZONE_PLATFORM_AXIOM_AXIOM_SURFACE_FACTORY_H_
 
 #include <memory>
+#include <vector>
 
 #include "ui/ozone/platform/headless/headless_surface_factory.h"
 
@@ -21,6 +22,11 @@ class AxiomSurfaceFactory : public HeadlessSurfaceFactory {
   ~AxiomSurfaceFactory() override;
 
   // SurfaceFactoryOzone:
+  // AXIOM has no GL (Vertex ships no EGL, GLES or SwiftShader libraries): no
+  // implementations and no GLOzone, so the GPU code never tries ANGLE, which
+  // headless's factory would, and draws with software instead.
+  std::vector<gl::GLImplementationParts> GetAllowedGLImplementations() override;
+  GLOzone* GetGLOzone(const gl::GLImplementationParts& implementation) override;
   std::unique_ptr<SurfaceOzoneCanvas> CreateCanvasForWidget(
       gfx::AcceleratedWidget widget) override;
 };

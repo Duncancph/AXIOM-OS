@@ -152,6 +152,16 @@ AxiomSurfaceFactory::AxiomSurfaceFactory()
 
 AxiomSurfaceFactory::~AxiomSurfaceFactory() = default;
 
+std::vector<gl::GLImplementationParts>
+AxiomSurfaceFactory::GetAllowedGLImplementations() {
+  return {};
+}
+
+GLOzone* AxiomSurfaceFactory::GetGLOzone(
+    const gl::GLImplementationParts& implementation) {
+  return nullptr;
+}
+
 std::unique_ptr<SurfaceOzoneCanvas> AxiomSurfaceFactory::CreateCanvasForWidget(
     gfx::AcceleratedWidget widget) {
   return std::make_unique<AxiomCanvas>(widget);
