@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 174
-notes Programs and libraries that several apps use are now loaded into memory once and shared, so running more Linux apps (and Vertex's tabs) takes much less memory.
-file kernel b174/thane.elf.gz 19532984 8417fe4da4338300b07ffd608639b394b9fc8859ff68d3f6c769caf0073f9b63
-file initrd b174/initrd.tar.gz 2385920 994b6f3c7f0dbf068cabe67baab79c964316ee5cd318ece9591d6e2355a7fc84
-file bootx64 b174/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b174/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3046022100c7c86ac2a9360896d604b1e1c548759fa17048d4d058f3afcdb945575caed2eb0221008a880f08835821312ff2905273f168331e7f85d3971b778cdc59fec6b03858b9
+build 175
+notes Linux apps can hand a window to another process to draw, so Vertex's GPU process draws its own windows (needed for Vertex 1.1 running as separate processes).
+file kernel b175/thane.elf.gz 19534872 161d656380d4d73d0e2a7701369cb1bf875a351b0c81adc6886478d3f148480b
+file initrd b175/initrd.tar.gz 2385920 fb0ca2d86833f9d90b7cdc8fc3c18ae55b565623f4d7e8c7626a9b06fb42f999
+file bootx64 b175/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b175/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3046022100fc89a04c1351c9df36e8791f4d53f5c271e67a6a2c5714ef6c435144f1b9c0e1022100e069500b6e5f9d8d0633545eb05b544fdb46e195a57dfddeef56f3669e69775c
