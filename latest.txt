@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 189
-notes One browser: Vertex (Chromium, from Settings > Apps). The old built-in browser is gone, and the dock's browser icon now opens Vertex. Installed apps go in the dock.
-file kernel b189/thane.elf.gz 12366448 0f8df6cdc686751120cff59962bc1d4260d536904e700893f04af64e1cb7e920
-file initrd b189/initrd.tar.gz 3604480 07de3bb420cdf51a781a619531ef485776d5c08265befcdcd3047a5753b0a48a
-file bootx64 b189/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b189/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 30450220023292c493ab1c973ef0f9d8bfb10a3bfb334067bbf90e11719937f7c5cb8ec0022100ce0a2f9c19233f6cdce67f6a99dbde88f74d29e61d65aed8330c0da5a130269d
+build 190
+notes Settings > Apps scrolls with the arrow keys, Page Up/Down, and a scroll bar you can drag or click. One browser: Vertex (Chromium).
+file kernel b190/thane.elf.gz 12370544 493fc2f1481f50fbd75b0fb32169881d338d867dbba1539114c48f036764148a
+file initrd b190/initrd.tar.gz 3604480 07de3bb420cdf51a781a619531ef485776d5c08265befcdcd3047a5753b0a48a
+file bootx64 b190/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b190/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304402203b19ef922f614549a16ca565f255fecc991ee47b5f16cdb931bf43554d535d42022032756847162bc54f0034e88f464110293a20e10f252e644ed3dcfd9e8eeb814c
