@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 175
-notes Linux apps can hand a window to another process to draw, so Vertex's GPU process draws its own windows (needed for Vertex 1.1 running as separate processes).
-file kernel b175/thane.elf.gz 19534872 161d656380d4d73d0e2a7701369cb1bf875a351b0c81adc6886478d3f148480b
-file initrd b175/initrd.tar.gz 2385920 fb0ca2d86833f9d90b7cdc8fc3c18ae55b565623f4d7e8c7626a9b06fb42f999
-file bootx64 b175/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b175/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3046022100fc89a04c1351c9df36e8791f4d53f5c271e67a6a2c5714ef6c435144f1b9c0e1022100e069500b6e5f9d8d0633545eb05b544fdb46e195a57dfddeef56f3669e69775c
+build 177
+notes Linux apps now notice when files change (inotify), so file lists and open documents in GTK apps and Vertex update by themselves.
+file kernel b177/thane.elf.gz 19553664 3710f995e30945016024ffaf9fa7626d0a0be3afd8e2b42a923fcbc68e99c677
+file initrd b177/initrd.tar.gz 2396160 64e18f5ae7c7f6745ba2b1285c4b99651ff15bdf14568a28bf420728b5516b1d
+file bootx64 b177/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b177/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304502202bfd6f577e79d154c95c20893e6ec93374caf14fd5cb556e72aca2f7a6ab982a022100b55845c52e93503298209e46144e69a549d07f0bf52a94406ac0a2f504c35e49
