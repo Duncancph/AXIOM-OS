@@ -28,12 +28,21 @@ static void add(const char *f, ...) {
     int n = ksnprintf(report + rlen, sizeof report - rlen, "%s\n", line);
     if (n > 0 && rlen + n < (int)sizeof report) rlen += n;
 }
-static uint8_t r8(int o) { return mm[o]; }
-static uint16_t r16(int o) { return *(volatile uint16_t *)(mm + o); }
-static uint32_t r32(int o) { return *(volatile uint32_t *)(mm + o); }
-static void w8(int o, uint8_t v) { mm[o] = v; }
-static void w16(int o, uint16_t v) { *(volatile uint16_t *)(mm + o) = v; }
-static void w32(int o, uint32_t v) { *(volatile uint32_t *)(mm + o) = v; }
+/* the card's registers: a 16 KiB window. An offset outside it (a bad table entry) is skipped and reported, not
+ * written somewhere else in memory */
+#define MM_SIZE 0x4000
+static int bad_reg;
+static bool reg_ok(int o, int n) {
+    if (o >= 0 && o + n <= MM_SIZE) return true;
+    if (bad_reg++ < 5) add("skipped a register outside the card's window: %x", (unsigned)o);
+    return false;
+}
+static uint8_t r8(int o) { return reg_ok(o, 1) ? mm[o] : 0xFF; }
+static uint16_t r16(int o) { return reg_ok(o, 2) ? *(volatile uint16_t *)(mm + o) : 0xFFFF; }
+static uint32_t r32(int o) { return reg_ok(o, 4) ? *(volatile uint32_t *)(mm + o) : 0xFFFFFFFF; }
+static void w8(int o, uint8_t v) { if (reg_ok(o, 1)) mm[o] = v; }
+static void w16(int o, uint16_t v) { if (reg_ok(o, 2)) *(volatile uint16_t *)(mm + o) = v; }
+static void w32(int o, uint32_t v) { if (reg_ok(o, 4)) *(volatile uint32_t *)(mm + o) = v; }
 
 /* registers */
 #define REG_SYS_FUNC_EN 0x0002
@@ -388,7 +397,7 @@ void wifi_start(void) {
     rlen = 0; report[0] = 0;
     uint64_t sz, base = pci_bar(dev, 2, &sz);
     if (!base) { add("no memory window (BAR2)"); kprintf("%s", report); return; }
-    mm = map_mmio(base, 0x4000);
+    mm = map_mmio(base, MM_SIZE);
     uint16_t cmd = pci_read16(dev->bus, dev->dev, dev->fn, 4);
     pci_write16(dev->bus, dev->dev, dev->fn, 4, (cmd | 0x6) & ~0x400);
     uint32_t cfg = r32(REG_SYS_CFG);
