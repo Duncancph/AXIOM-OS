@@ -5,7 +5,7 @@
 bool ps2_present, mouse_present;
 static int q[256]; static uint8_t qh, qt;
 static struct { int16_t dx, dy; uint8_t b; int8_t w; } mq[64]; static uint8_t mh, mt;
-static uint8_t mpkt[4]; static int midx;
+static uint8_t mpkt[4]; static int midx, mpkt_len = 3;   /* 4: an IntelliMouse (its wheel in byte 3) */
 
 void input_push(int c) { if ((uint8_t)(qh + 1) != qt) { q[qh++] = c; } }
 
@@ -53,19 +53,29 @@ void ps2_init(void) {
         ps2_wait_write(); outb(0x64, 0x60);
         ps2_wait_write(); outb(0x60, (uint8_t)cfg);
     }
-    if (mouse_cmd(0xF6) && mouse_cmd(0xF4)) mouse_present = true;
+    if (mouse_cmd(0xF6)) {
+        /* the IntelliMouse sequence: sample rates 200, 100, 80; a mouse with a wheel then gives ID 3 (or 4) and sends
+         * its wheel in a fourth byte. (A USB mouse the firmware presents as PS/2 does this too.) */
+        if (mouse_cmd(0xF3) && mouse_cmd(200) && mouse_cmd(0xF3) && mouse_cmd(100) && mouse_cmd(0xF3) && mouse_cmd(80) && mouse_cmd(0xF2)) {
+            int id = ps2_read_timeout();
+            if (id == 3 || id == 4) mpkt_len = 4;
+        }
+        mouse_cmd(0xF3); mouse_cmd(100);                    /* (back to the usual 100 reports a second) */
+        if (mouse_cmd(0xF4)) { mouse_present = true; LOG_INFO("PS/2 mouse: %s\n", mpkt_len == 4 ? "with a wheel" : "no wheel"); }
+    }
     for (int i = 0; i < 64 && (inb(0x64) & 1); i++) (void)inb(0x60);
 }
 
 static void ps2_mouse_byte(uint8_t b) {
     if (midx == 0 && !(b & 0x08)) return;       /* resync: bit 3 is always set in byte 0 */
     mpkt[midx++] = b;
-    if (midx < 3) return;
+    if (midx < mpkt_len) return;
     midx = 0;
     if (mpkt[0] & 0xC0) return;                 /* overflow */
     int dx = mpkt[1] - ((mpkt[0] << 4) & 0x100);
     int dy = mpkt[2] - ((mpkt[0] << 3) & 0x100);
-    mouse_push(dx, -dy, mpkt[0] & 7, 0);
+    int w = mpkt_len == 4 ? (int8_t)(mpkt[3] << 4) >> 4 : 0;   /* (4 bits, signed: ID 4 uses the rest for buttons 4-5) */
+    mouse_push(dx, -dy, mpkt[0] & 7, w);        /* (positive: down, as AXIOM's wheel) */
 }
 
 void ps2_poll(void) {
