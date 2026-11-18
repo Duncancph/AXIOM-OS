@@ -1974,7 +1974,10 @@ static uint64_t lx_execve(struct frame *f, const char *upath, uint64_t uargv, ui
         lx->fmaps = 0; lx->nfmaps = lx->capfmaps = 0;          /* (the new program's: kept apart until it's loaded) */
         m->fill = lx_fill; m->fill_ctx = lx;
         uint64_t entry, phdr, ibase; int phnum; char why[200];
-        if (!lx_load(m, lx, path, &start, &entry, &phdr, &phnum, &ibase, why, sizeof why)) r = E(ENOEXEC_);
+        if (!lx_load(m, lx, path, &start, &entry, &phdr, &phnum, &ibase, why, sizeof why)) {
+            r = E(ENOEXEC_);
+            static int said; if (said++ < 20) kprintf("[linux] %s: exec %s: %s\n", t->name, path, why);
+        }
         else if (!(sp = lx_stack(m, path, argc, argv, (const char **)envv, entry, phdr, phnum, ibase))) r = E(E2BIG_);
         if (r) { kfree(lx->fmaps); lx->fmaps = ofm; lx->nfmaps = onf; lx->capfmaps = ocap; }
     }
@@ -3436,6 +3439,24 @@ static uint64_t linux_syscall_(struct frame *f) {
             return r == -DERR_AGAIN ? E(EAGAIN_) : r == -DERR_TIMEDOUT ? E(ETIMEDOUT_) : r == -DERR_FAULT ? E(EFAULT_) : 0;
         }
         if (op == 1 || op == 10) return futex_wake(t->mm, a, (int)c);   /* WAKE, WAKE_BITSET */
+        if (op == 5) {                                         /* WAKE_OP (Qt's semaphores, glibc's older condition variables) */
+            uint64_t a2 = e; uint32_t v3 = (uint32_t)f->r9;
+            if (!uok(a, 4, false) || !uok(a2, 4, true) || (a & 3) || (a2 & 3)) return E(EFAULT_);
+            int sop = (int)(v3 >> 28) & 7, cmp = (int)(v3 >> 24) & 15;
+            int32_t oparg = (int32_t)(v3 << 8) >> 20, cmparg = (int32_t)(v3 << 20) >> 20;   /* (12-bit, signed) */
+            if (v3 >> 31) oparg = oparg >= 0 && oparg < 32 ? (int32_t)(1u << oparg) : 0;    /* FUTEX_OP_OPARG_SHIFT */
+            if (sop > 4 || cmp > 5) return E(ENOSYS_);
+            uint32_t *w = (uint32_t *)a2, old = __atomic_load_n(w, __ATOMIC_SEQ_CST), nv;
+            do {                                               /* *uaddr2 = old OP oparg, atomically (other cores run user code) */
+                nv = sop == 0 ? (uint32_t)oparg : sop == 1 ? old + (uint32_t)oparg : sop == 2 ? old | (uint32_t)oparg :
+                     sop == 3 ? old & ~(uint32_t)oparg : old ^ (uint32_t)oparg;
+            } while (!__atomic_compare_exchange_n(w, &old, nv, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST));
+            long k = futex_wake(t->mm, a, (int)c);
+            int32_t o = (int32_t)old;
+            bool hit = cmp == 0 ? o == cmparg : cmp == 1 ? o != cmparg : cmp == 2 ? o < cmparg : cmp == 3 ? o <= cmparg : cmp == 4 ? o > cmparg : o >= cmparg;
+            if (hit) k += futex_wake(t->mm, a2, (int)(uint32_t)d);   /* (val2 is in the timeout argument) */
+            return (uint64_t)k;
+        }
         if (op == 4 || op == 3) {                              /* CMP_REQUEUE / REQUEUE: wake them all (correct, if slower) */
             long k = futex_wake(t->mm, a, 1 << 30); return k;
         }
