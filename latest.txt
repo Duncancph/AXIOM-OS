@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 177
-notes Linux apps now notice when files change (inotify), so file lists and open documents in GTK apps and Vertex update by themselves.
-file kernel b177/thane.elf.gz 19553664 3710f995e30945016024ffaf9fa7626d0a0be3afd8e2b42a923fcbc68e99c677
-file initrd b177/initrd.tar.gz 2396160 64e18f5ae7c7f6745ba2b1285c4b99651ff15bdf14568a28bf420728b5516b1d
-file bootx64 b177/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b177/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 304502202bfd6f577e79d154c95c20893e6ec93374caf14fd5cb556e72aca2f7a6ab982a022100b55845c52e93503298209e46144e69a549d07f0bf52a94406ac0a2f504c35e49
+build 185
+notes Fixes Wi-Fi start-up stopping AXIOM (the radio's settings tables had lost registers). Qt apps now run (FeatherPad, SpeedCrunch and more in Settings > Apps), with six more GTK apps. New game: Merrow La
+file kernel b185/thane.elf.gz 19555104 6cc8c8fafc34724a500c6d7840c9a148ad4af1748271809518bd8e0e8aad53be
+file initrd b185/initrd.tar.gz 3594240 17c37fdfbd7b5124abc0d9a7249fd6d1579ee59dfe72898dd60b0b7f11ac1e92
+file bootx64 b185/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b185/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 30450221009f09876eaa0dd67f231e0c6fc9be4e0a8811ea6689ba3abd115fc85ef5d73518022056bc06c013e9d862bf183f92b9cddeea2f755d38bd820da7d778de1f4db9645d
