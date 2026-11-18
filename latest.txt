@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 190
-notes Settings > Apps scrolls with the arrow keys, Page Up/Down, and a scroll bar you can drag or click. One browser: Vertex (Chromium).
-file kernel b190/thane.elf.gz 12370544 493fc2f1481f50fbd75b0fb32169881d338d867dbba1539114c48f036764148a
-file initrd b190/initrd.tar.gz 3604480 07de3bb420cdf51a781a619531ef485776d5c08265befcdcd3047a5753b0a48a
-file bootx64 b190/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b190/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 304402203b19ef922f614549a16ca565f255fecc991ee47b5f16cdb931bf43554d535d42022032756847162bc54f0034e88f464110293a20e10f252e644ed3dcfd9e8eeb814c
+build 191
+notes Wi-Fi testing: 'wifi dump' in CMD saves the card's settings for comparison.
+file kernel b191/thane.elf.gz 12372760 63fec1ba21c493dd936e99ebdff26b036d2f4b56e50572901b8ac44277843b7b
+file initrd b191/initrd.tar.gz 3604480 6d4744b0706c0a9313f667f3de32aa3587467737294338aae53822b44652f32d
+file bootx64 b191/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b191/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022100cfda324c221b86801edca8e41abbef97039768302e557b809351fb5e9cea60da02206d44c8b581520560186d1a9a093d6c9e50d0716a4b2841ff595b7e0f030d2ec3
