@@ -24,7 +24,7 @@ if "archive" in kv:
         for chunk in iter(lambda: f.read(1 << 20), b""): h.update(chunk); n += len(chunk)
     kv["size"], kv["sha256"] = str(n), h.hexdigest()
     with tarfile.open(kv["archive"]) as t: kv.setdefault("installed-size", str(sum(m.size for m in t.getmembers() if m.isfile())))
-for need in ("id", "name", "version", "url", "run", "size", "sha256"):
+for need in ("id", "name", "version", "url", "size", "sha256"):   # (no run: a library package, e.g. linux-base)
     if need not in kv: sys.exit("missing " + need)
 lines = ["AXIOM package 1"] + ["%s %s" % (k, kv[k]) for k in ("id", "name", "version", "icon", "description", "min-build", "size", "sha256", "url", "installed-size", "root", "requires", "compression", "run") if k in kv]
 body = ("\n".join(lines) + "\n").encode()

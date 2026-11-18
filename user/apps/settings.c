@@ -519,7 +519,7 @@ static void look_for_packages(void) {
             field_of(m.p, m.n, "root", t, sizeof t); q->root = !strcmp(t, "yes");
             field_of(m.p, m.n, "requires", q->req, sizeof q->req);       /* another package to install first */
             field_of(m.p, m.n, "compression", t, sizeof t); q->gz = !strcmp(t, "gzip");
-            bool ok = q->id[0] && q->url[0] && q->run[0] && strlen(q->sha) == 64 && q->size > 0;
+            bool ok = q->id[0] && q->url[0] && strlen(q->sha) == 64 && q->size > 0;   /* (no run: a library package) */
             for (char *c = q->id; *c; c++) if (!((*c >= 'a' && *c <= 'z') || (*c >= '0' && *c <= '9') || *c == '-')) ok = false;   /* (it becomes a folder name) */
             if (ok) { installed_version(q->id, q->have, sizeof q->have); npkg++; }
         } else if (r >= 0 && status == 200) pk_say(UI_RED, "A package description wasn't signed with the AXIOM key: it was skipped.");
@@ -718,14 +718,15 @@ static void pkg_install(int i) {
     fs_delete(tmp);
     /* the app's line in /apps: it runs as a Linux program from its folder */
     char info[512], ipath[64];
-    ksnprintf(info, sizeof info, "%s|%s|%s|%s|%s|linux:%s/%s\n", q->id, q->name, q->version, q->icon[0] ? q->icon : "gear", q->desc, dir, q->run);
+    if (q->run[0]) ksnprintf(info, sizeof info, "%s|%s|%s|%s|%s|linux:%s/%s\n", q->id, q->name, q->version, q->icon[0] ? q->icon : "gear", q->desc, dir, q->run);
+    else ksnprintf(info, sizeof info, "%s|%s|%s|%s|%s|lib\n", q->id, q->name, q->version, q->icon[0] ? q->icon : "gear", q->desc);   /* (libraries: not an app to open) */
     ksnprintf(ipath, sizeof ipath, "/apps/%s.info", q->id);
     fs_write(ipath, info, strlen(info));
     sys_call(SYS_APPS, 0, -2, 0, 0, 0);                      /* the kernel reads /apps again */
-    char dock[400]; sys_setting_get("dock.apps", dock, sizeof dock);   /* and it goes in the dock */
+    char dock[400]; sys_setting_get("dock.apps", dock, sizeof dock);   /* and it goes in the dock (an app) */
     bool in = false; int il = strlen(q->id);
     for (const char *s = dock; *s;) { const char *e = s; while (*e && *e != ',') e++; if (e - s == il && !strncmp(s, q->id, il)) in = true; s = *e ? e + 1 : e; }
-    if (!in && strlen(dock) + il + 2 < sizeof dock) { char nd[400]; ksnprintf(nd, sizeof nd, "%s%s%s", dock, dock[0] ? "," : "", q->id); set("dock.apps", nd); }
+    if (q->run[0] && !in && strlen(dock) + il + 2 < sizeof dock) { char nd[400]; ksnprintf(nd, sizeof nd, "%s%s%s", dock, dock[0] ? "," : "", q->id); set("dock.apps", nd); }
     strncpy0(q->have, q->version, sizeof q->have);
     pk_state = PK_DONE; pk_busy = -1;
     char m[160]; ksnprintf(m, sizeof m, "%s %s is installed (%ld files). Open it from the dock or the AXIOM menu.", q->name, q->version, files);

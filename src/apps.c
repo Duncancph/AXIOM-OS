@@ -48,6 +48,7 @@ void apps_refresh(void) {
         char *f[6];
         int nf = split(line, f, 6);
         if (nf < 4) continue;
+        if (nf >= 6 && !strcmp(f[5], "lib")) continue;            /* a library package (linux-base): installed, not an app */
         struct app_entry *a = &apps[napps++];
         memset(a, 0, sizeof *a);
         strncpy0(a->id, f[0], sizeof a->id); strncpy0(a->name, f[1], sizeof a->name);

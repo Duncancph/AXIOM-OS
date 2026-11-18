@@ -2,6 +2,8 @@
 """Builds AXIOM packages for GTK 3 apps from the libraries and data of this (Ubuntu 24.04, x86-64) machine.
 Both unpack into AXIOM's Linux folder (root=yes): lib/..., usr/share/..., as on Linux.
 
+  linux-base  glibc and the other shared libraries Vertex brings, from its archive (VERTEX_TAR=vertex-*.tar.gz):
+            the one copy of each that every package uses (gtk3 requires it)
   gtk3      the shared runtime: GTK 3 and its libraries, gdk-pixbuf loaders, fonts (DejaVu), fontconfig, XKB
             keyboard data, the MIME database (gdk-pixbuf needs it to tell PNG from JPEG), GSettings schemas,
             the Adwaita icons, the
@@ -62,18 +64,36 @@ def tar(stage, name):
     size = sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(stage) for f in fs)
     print("%s: %.1f MB archive, %.1f MB installed" % (path, os.path.getsize(path) / 1e6, size / 1e6))
 
+# linux-base: the C library (glibc) and the other shared libraries Vertex (Chromium) brings, taken from Vertex's own
+# archive (VERTEX_TAR), so every package uses the same, newest copies. glibc runs programs built for older ones, so
+# the GTK and Qt apps (built here, on Ubuntu 24.04) use these; packages that brought their own older copies wrote
+# them over Vertex's, and Vertex then didn't start ("GLIBC_2.43 not found").
+def linux_base():
+    tarpath = os.environ.get("VERTEX_TAR")
+    if not tarpath: sys.exit("set VERTEX_TAR to Vertex's archive (vertex-<version>.tar.gz): linux-base is made from its libraries")
+    stage = os.path.join(OUT, "linux-base"); shutil.rmtree(stage, ignore_errors=True)
+    names = set()
+    with tarfile.open(tarpath) as t:
+        for m in t:
+            top = m.name.split("/")[0]
+            if not m.isfile() or top not in ("lib", "lib64", "usr") or ".so" not in os.path.basename(m.name): continue
+            if top == "usr" and not m.name.startswith("usr/lib/"): continue
+            m.name = os.path.normpath(m.name); t.extract(m, stage, filter="data")
+            names.add(os.path.basename(m.name))
+    tar(stage, "linux-base")
+    return names
+
 # libraries most apps need, kept in gtk3 so each app doesn't bring its own copy (ICU alone is 36 MB); librsvg also
 # lets GTK draw the SVG icons itself
 SHARED = ["libxml2.so.2", "libicuuc.so.74", "libicui18n.so.74", "libicudata.so.74", "librsvg-2.so.2",
           "libstdc++.so.6", "libgcc_s.so.1", "libxslt.so.1", "libunistring.so.5"]
 
-def gtk3():
+def gtk3(skip=frozenset()):
     stage = os.path.join(OUT, "gtk3"); shutil.rmtree(stage, ignore_errors=True)
     apps = ["/usr/bin/gtk3-demo", "/usr/bin/gtk3-widget-factory"]
     loaders = [os.path.join("/" + PIXBUF, "loaders", f) for f in sorted(os.listdir("/" + PIXBUF + "/loaders"))]
     for a in apps: put(stage, a, a[1:])
-    libs(stage, apps + loaders + [os.path.realpath("/lib/x86_64-linux-gnu/" + l) for l in SHARED])
-    put(stage, "/lib64/ld-linux-x86-64.so.2", "lib64/ld-linux-x86-64.so.2")
+    libs(stage, apps + loaders + [os.path.realpath("/lib/x86_64-linux-gnu/" + l) for l in SHARED], exclude=skip)   # (linux-base has the rest)
     for l in loaders: put(stage, l, os.path.join(PIXBUF, "loaders", os.path.basename(l)))
     put(stage, "/" + PIXBUF + "/loaders.cache", PIXBUF + "/loaders.cache")
     put(stage, "/usr/lib/x86_64-linux-gnu/gconv", "usr/lib/x86_64-linux-gnu/gconv")      # iconv's character sets (AbiWord
@@ -176,6 +196,7 @@ def app(name, base):
     tar(stage, name)
 
 os.makedirs(OUT, exist_ok=True)
-base = gtk3()
+lbase = linux_base()
+base = gtk3(lbase) | lbase
 qtbase = base | qt5(base)
 for name in (sys.argv[2:] or APPS): app(name, qtbase if APPS[name].get("qt") else base)
