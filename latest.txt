@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 195
-notes Vertex works again alongside the GTK and Qt apps: they now share one set of Linux libraries. Update GTK 3 in Settings > Apps to get it.
-file kernel b195/thane.elf.gz 12390864 46fed09b5a1fe5c4d6c8799b079af7e28e06dbbada02e2b35c2addb28b681705
-file initrd b195/initrd.tar.gz 3604480 141c1ee69b1080f9e407afeb91ff5cd2797463ed072843d97863e44b344fa4b3
-file bootx64 b195/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b195/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3044022075036bec19491da3c95528b3329a7a8c112f7b9998d16c94964561cdb0454e1802201f450e5fa906636e8d52b634be00fc4826fe72916332a29908e9d3c63d8b3ee3
+build 196
+notes Wi-Fi scans again after the first; 'mouse' in CMD shows how your mouse is read.
+file kernel b196/thane.elf.gz 12394480 e539f0cca974b64622824d7103774972920dba5c5825cd5f173b1cf466c66947
+file initrd b196/initrd.tar.gz 3604480 dab49bf3e6db1cece9dd61accaca31bf4b0c8afe30b190106eb75f47a15ded6a
+file bootx64 b196/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b196/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 30450221009536f4726883ea09f308aa203dbcc79e876bb92bb55eaee4ac557109fb93b630022037f13bb40283dd5eb04a3dca8159752194acfcd4a71160de2e554eeb06c717d1
