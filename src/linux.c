@@ -1409,12 +1409,17 @@ static uint64_t axwin_ioctl(struct lxproc *lx, struct lfd *fd, uint64_t req, uin
         *(struct axwin_rect *)arg = (struct axwin_rect){ px, py, w, h };
         return 0;
     }
-    case AXWIN_RESIZE: {
+    case AXWIN_RESIZE: case AXWIN_RESIZE_TO: {
         if (!x->id) return E(ENOENT_);
         if (!x->resizable) return E(EINVAL_);
-        if (x->pix->refs > 1) return E(EBUSY_);                 /* still mapped: munmap first (its pages are about to go) */
-        int nw, nh;
-        if (!wm_resize(x->owner, x->id, &nw, &nh)) return E(ENOMEM_);
+        int nw, nh, tw = 0, th = 0;
+        if (req == AXWIN_RESIZE_TO) {
+            if (!uok(arg, sizeof(struct axwin_rect), false)) return E(EFAULT_);
+            tw = ((struct axwin_rect *)arg)->w; th = ((struct axwin_rect *)arg)->h;
+            if (tw <= 0 || th <= 0) return E(EINVAL_);
+        }
+        if (x->pix->refs > 1) return E(EBUSY_);                 /* still mapped (by any process sharing it): munmap first (its pages are about to go) */
+        if (!(req == AXWIN_RESIZE_TO ? wm_resize_to(x->owner, x->id, tw, th, &nw, &nh) : wm_resize(x->owner, x->id, &nw, &nh))) return E(ENOMEM_);
         struct shm *np = axwin_pixels(x->owner, x->id);
         if (!np) return E(ENOMEM_);
         kfree(x->pix->pg); kfree(x->pix);                        /* (the old pages were the window's; wm_resize freed them) */

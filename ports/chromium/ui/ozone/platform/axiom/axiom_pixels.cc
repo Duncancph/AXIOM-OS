@@ -4,14 +4,23 @@
 
 #include "ui/ozone/platform/axiom/axiom_pixels.h"
 
-#include <sys/ioctl.h>
+#include <fcntl.h>
 
-#include "base/compiler_specific.h"
 #include "base/no_destructor.h"
-#include "third_party/skia/include/core/SkPixmap.h"
-#include "ui/ozone/platform/axiom/axiom_window_abi.h"
+#include "base/posix/eintr_wrapper.h"
+#include "mojo/public/cpp/bindings/receiver_set.h"
 
 namespace ui {
+
+namespace {
+
+mojo::ReceiverSet<ozone::mojom::AxiomWindowPixels>& Receivers() {
+  static base::NoDestructor<mojo::ReceiverSet<ozone::mojom::AxiomWindowPixels>>
+      receivers;
+  return *receivers;
+}
+
+}  // namespace
 
 // static
 AxiomPixels& AxiomPixels::Get() {
@@ -19,65 +28,43 @@ AxiomPixels& AxiomPixels::Get() {
   return *pixels;
 }
 
-void AxiomPixels::Set(gfx::AcceleratedWidget widget, int fd,
-                      base::span<uint8_t> pixels, int width, int height,
-                      int stride) {
-  base::AutoLock hold(lock_);
-  Entry* free_entry = nullptr;
-  for (Entry& e : entries_) {
-    if (e.widget == widget) {
-      free_entry = &e;
-      break;
-    }
-    if (!free_entry && e.widget == gfx::kNullAcceleratedWidget) {
-      free_entry = &e;
-    }
-  }
-  CHECK(free_entry);
-  *free_entry = {widget, fd, pixels, width, height, stride};
+AxiomPixels::AxiomPixels() = default;
+AxiomPixels::~AxiomPixels() = default;
+
+void AxiomPixels::Bind(
+    mojo::PendingReceiver<ozone::mojom::AxiomWindowPixels> receiver) {
+  Receivers().Add(this, std::move(receiver));
 }
 
-void AxiomPixels::Remove(gfx::AcceleratedWidget widget) {
+base::ScopedFD AxiomPixels::Dup(gfx::AcceleratedWidget widget,
+                                uint64_t* generation) {
   base::AutoLock hold(lock_);
-  for (Entry& e : entries_) {
-    if (e.widget == widget) {
-      e = Entry();
-    }
+  auto it = windows_.find(widget);
+  if (it == windows_.end()) {
+    *generation = 0;
+    return base::ScopedFD();
   }
+  *generation = it->second.generation;
+  return base::ScopedFD(
+      HANDLE_EINTR(fcntl(it->second.fd.get(), F_DUPFD_CLOEXEC, 0)));
 }
 
-bool AxiomPixels::Present(gfx::AcceleratedWidget widget, const SkPixmap& frame,
-                          const gfx::Rect& damage) {
+uint64_t AxiomPixels::Generation(gfx::AcceleratedWidget widget) {
   base::AutoLock hold(lock_);
-  for (Entry& e : entries_) {
-    if (e.widget != widget || e.pixels.empty()) {
-      continue;
-    }
-    gfx::Rect r = damage;
-    r.Intersect(gfx::Rect(0, 0, std::min(e.width, frame.width()),
-                          std::min(e.height, frame.height())));
-    if (r.IsEmpty()) {
-      return true;
-    }
-    // Skia's N32 on little-endian Linux is BGRA in memory: the same bytes as
-    // AXIOM's XRGB8888 (the alpha byte is ignored there).
-    const size_t row_bytes = static_cast<size_t>(r.width()) * 4;
-    for (int y = r.y(); y < r.bottom(); y++) {
-      // SAFETY: (r.x(), y) and r.width() pixels after it are inside `frame`
-      // (r was clipped to its size above).
-      auto src = UNSAFE_BUFFERS(base::span(
-          static_cast<const uint8_t*>(frame.addr(r.x(), y)), row_bytes));
-      e.pixels
-          .subspan(static_cast<size_t>(y) * e.stride +
-                       static_cast<size_t>(r.x()) * 4,
-                   row_bytes)
-          .copy_from(src);
-    }
-    axwin_rect flush = {r.x(), r.y(), r.width(), r.height()};
-    ioctl(e.fd, AXWIN_FLUSH, &flush);
-    return true;
-  }
-  return false;
+  auto it = windows_.find(widget);
+  return it == windows_.end() ? 0 : it->second.generation;
+}
+
+void AxiomPixels::SetWindow(uint64_t widget, mojo::PlatformHandle window) {
+  base::AutoLock hold(lock_);
+  Entry& e = windows_[static_cast<gfx::AcceleratedWidget>(widget)];
+  e.fd = window.TakeFD();
+  e.generation = next_generation_++;
+}
+
+void AxiomPixels::RemoveWindow(uint64_t widget) {
+  base::AutoLock hold(lock_);
+  windows_.erase(static_cast<gfx::AcceleratedWidget>(widget));
 }
 
 }  // namespace ui

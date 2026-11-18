@@ -455,6 +455,7 @@ bool wm_show(struct task *t, int id, bool show);
 bool wm_set_app(struct task *t, int id, const char *app_id, const char *name);   /* shown for another program */
 bool wm_set_cursor(struct task *t, int id, int shape);    /* the pointer's shape over it: AXWIN_CURSOR_* (axiom_window.h) */
 bool wm_resize(struct task *t, int id, int *nw, int *nh);
+bool wm_resize_to(struct task *t, int id, int cw, int ch, int *nw, int *nh);
 int wm_id(struct window *w);
 bool wm_flush(struct task *t, int id, int x, int y, int w, int h);
 bool wm_set_title(struct task *t, int id, const char *title);

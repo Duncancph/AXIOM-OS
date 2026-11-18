@@ -18,7 +18,12 @@
 #include "ui/gfx/switches.h"
 #include "ui/ozone/common/bitmap_cursor_factory.h"
 #include "ui/ozone/common/stub_overlay_manager.h"
+#include "base/functional/bind.h"
+#include "base/task/single_thread_task_runner.h"
+#include "mojo/public/cpp/bindings/binder_map.h"
 #include "ui/ozone/platform/axiom/axiom_clipboard.h"
+#include "ui/ozone/platform/axiom/axiom_gpu_host.h"
+#include "ui/ozone/platform/axiom/axiom_pixels.h"
 #include "ui/ozone/platform/axiom/axiom_surface_factory.h"
 #include "ui/ozone/platform/axiom/axiom_window.h"
 #include "ui/ozone/platform/headless/headless_screen.h"
@@ -67,7 +72,7 @@ class OzonePlatformAxiom : public OzonePlatformHeadless {
     return input_controller_.get();
   }
   GpuPlatformSupportHost* GetGpuPlatformSupportHost() override {
-    return gpu_platform_support_host_.get();
+    return gpu_host_.get();
   }
   std::unique_ptr<SystemInputInjector> CreateSystemInputInjector() override {
     return nullptr;
@@ -76,7 +81,7 @@ class OzonePlatformAxiom : public OzonePlatformHeadless {
       PlatformWindowDelegate* delegate,
       PlatformWindowInitProperties properties) override {
     return std::make_unique<AxiomWindow>(delegate, window_manager_.get(),
-                                         properties);
+                                         gpu_host_.get(), properties);
   }
   // AXIOM shows windows' pixels as they are (no alpha): menus and bubbles are
   // drawn opaque and square, without shadows.
@@ -125,7 +130,7 @@ class OzonePlatformAxiom : public OzonePlatformHeadless {
     overlay_manager_ = std::make_unique<StubOverlayManager>();
     input_controller_ = std::make_unique<StubInputController>();
     cursor_factory_ = std::make_unique<BitmapCursorFactory>();
-    gpu_platform_support_host_.reset(CreateStubGpuPlatformSupportHost());
+    gpu_host_ = std::make_unique<AxiomGpuHost>();
     return true;
   }
 
@@ -135,6 +140,17 @@ class OzonePlatformAxiom : public OzonePlatformHeadless {
     }
   }
 
+  // The GPU service's end of AxiomGpuHost: the windows' files (on the GPU
+  // service's main thread; the canvases read them under a lock).
+  void AddInterfaces(mojo::BinderMap* binders) override {
+    binders->Add<ozone::mojom::AxiomWindowPixels>(
+        base::BindRepeating(
+            [](mojo::PendingReceiver<ozone::mojom::AxiomWindowPixels> r) {
+              AxiomPixels::Get().Bind(std::move(r));
+            }),
+        base::SingleThreadTaskRunner::GetCurrentDefault());
+  }
+
  private:
   std::unique_ptr<KeyboardLayoutEngine> keyboard_layout_engine_;
   std::unique_ptr<HeadlessWindowManager> window_manager_;
@@ -142,7 +158,7 @@ class OzonePlatformAxiom : public OzonePlatformHeadless {
   std::unique_ptr<PlatformEventSource> platform_event_source_;
   std::unique_ptr<CursorFactory> cursor_factory_;
   std::unique_ptr<InputController> input_controller_;
-  std::unique_ptr<GpuPlatformSupportHost> gpu_platform_support_host_;
+  std::unique_ptr<AxiomGpuHost> gpu_host_;
   std::unique_ptr<OverlayManagerOzone> overlay_manager_;
   std::unique_ptr<AxiomClipboard> clipboard_;
 };

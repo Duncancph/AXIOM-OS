@@ -7,45 +7,51 @@
 
 #include <stdint.h>
 
-#include "base/containers/span.h"
-#include "base/memory/raw_span.h"
+#include "base/containers/flat_map.h"
+#include "base/files/scoped_file.h"
 #include "base/synchronization/lock.h"
-#include "ui/gfx/geometry/rect.h"
+#include "base/thread_annotations.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "ui/gfx/native_ui_types.h"
-
-class SkPixmap;
+#include "ui/ozone/platform/axiom/mojom/axiom_window_pixels.mojom.h"
 
 namespace ui {
 
-// The AXIOM windows' mapped pixels, by widget. The window (UI thread) maps,
-// remaps on resize and unmaps them, taking them out of here first; the canvas
-// (the compositor's thread) copies finished frames into them under the same
-// lock, so a frame never lands in unmapped pixels. (Single-process: one
-// address space.)
-class AxiomPixels {
+// The GPU service's side: the AXIOM windows' files, by widget, as the browser
+// sent them (AxiomGpuHost). The canvas drawing a widget (on the compositor's
+// thread) takes its own duplicate, maps the window's pixels and notices by
+// the generation when the window is replaced or gone. In single-process and
+// --in-process-gpu Vertex the same mojo messages arrive in the same process.
+class AxiomPixels : public ozone::mojom::AxiomWindowPixels {
  public:
   static AxiomPixels& Get();
 
-  void Set(gfx::AcceleratedWidget widget, int fd, base::span<uint8_t> pixels,
-           int width, int height, int stride);
-  void Remove(gfx::AcceleratedWidget widget);
+  AxiomPixels();
+  AxiomPixels(const AxiomPixels&) = delete;
+  AxiomPixels& operator=(const AxiomPixels&) = delete;
+  ~AxiomPixels() override;
 
-  // Copies `damage` of `frame` (clipped to both sizes) into the window and
-  // shows it. False if the widget has no window (yet).
-  bool Present(gfx::AcceleratedWidget widget, const SkPixmap& frame,
-               const gfx::Rect& damage);
+  void Bind(mojo::PendingReceiver<ozone::mojom::AxiomWindowPixels> receiver);
+
+  // A duplicate of the widget's window file (invalid if there's none) and its
+  // generation (0 if none).
+  base::ScopedFD Dup(gfx::AcceleratedWidget widget, uint64_t* generation);
+  // Changes whenever the widget's window is set or removed; 0: there's none.
+  uint64_t Generation(gfx::AcceleratedWidget widget);
+
+  // ozone::mojom::AxiomWindowPixels:
+  void SetWindow(uint64_t widget, mojo::PlatformHandle window) override;
+  void RemoveWindow(uint64_t widget) override;
 
  private:
   struct Entry {
-    gfx::AcceleratedWidget widget = gfx::kNullAcceleratedWidget;
-    int fd = -1;
-    base::raw_span<uint8_t> pixels;
-    int width = 0, height = 0, stride = 0;
+    base::ScopedFD fd;
+    uint64_t generation = 0;
   };
-  static constexpr int kMaxWindows = 16;
 
   base::Lock lock_;
-  Entry entries_[kMaxWindows] GUARDED_BY(lock_);
+  base::flat_map<gfx::AcceleratedWidget, Entry> windows_ GUARDED_BY(lock_);
+  uint64_t next_generation_ GUARDED_BY(lock_) = 1;
 };
 
 }  // namespace ui

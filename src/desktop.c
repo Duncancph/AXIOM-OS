@@ -872,13 +872,10 @@ static void request_size(struct window *w, int cw, int ch) {
     w->resize_sent = true;
 }
 
-/* Called by the app: swap in a buffer of the size we asked for. */
-bool wm_resize(struct task *t, int id, int *nw, int *nh) {
-    struct window *w = find(t, id);
-    if (!w || !w->resizable) return false;
-    int cw = w->want_w, ch = w->want_h;
-    w->resize_sent = false;
-    if (cw == w->w && ch == w->h) { *nw = cw; *nh = ch; return true; }
+/* Swap in a buffer of cw x ch, keeping what fits of the old one. */
+static bool resize_buf(struct task *t, struct window *w, int cw, int ch) {
+    w->resize_sent = false;                      /* (still not the size wanted: the main loop asks again) */
+    if (cw == w->w && ch == w->h) return true;
     int np = (cw * ch * 4 + 4095) / 4096;
     uint32_t *nb = page_alloc(np);
     if (!nb) return false;
@@ -891,7 +888,28 @@ bool wm_resize(struct task *t, int id, int *nw, int *nh) {
     if (w->uva) for (int i = 0; i < np; i++) vm_map(t->pml4, w->uva + i * 4096ULL, (uint64_t)nb + i * 4096ULL, true, false);
     w->buf = nb; w->pages = np; w->w = cw; w->h = ch;
     damage_frame(w);
-    *nw = cw; *nh = ch;
+    return true;
+}
+
+/* Called by the app: swap in a buffer of the size we asked for. */
+bool wm_resize(struct task *t, int id, int *nw, int *nh) {
+    struct window *w = find(t, id);
+    if (!w || !w->resizable || !resize_buf(t, w, w->want_w, w->want_h)) return false;
+    *nw = w->w; *nh = w->h;
+    return true;
+}
+
+/* Called by the app: a buffer of the size it draws at (made to fit the screen, as asked sizes are). If that
+ * isn't the size we want, the main loop sends EV_RESIZE again. */
+bool wm_resize_to(struct task *t, int id, int cw, int ch, int *nw, int *nh) {
+    struct window *w = find(t, id);
+    if (!w || !w->resizable) return false;
+    if (cw < MIN_W) cw = MIN_W;
+    if (ch < MIN_H) ch = MIN_H;
+    if (cw > max_content_w()) cw = max_content_w();
+    if (ch > H - HL_BAR_H - TITLE - 1) ch = H - HL_BAR_H - TITLE - 1;
+    if (!resize_buf(t, w, cw, ch)) return false;
+    *nw = w->w; *nh = w->h;
     return true;
 }
 

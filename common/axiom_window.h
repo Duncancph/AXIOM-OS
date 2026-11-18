@@ -14,6 +14,7 @@
  * Resizing (only with AXWIN_RESIZABLE): an AXWIN_EV_RESIZE event asks for a new size; the program
  * munmaps its pixels, calls AXWIN_RESIZE (fails with EBUSY while they're still mapped), then
  * AXWIN_INFO and mmap again. The window goes away when the fd and every mapping of it are gone.
+ * The fd can be passed to another process (SCM_RIGHTS): the window, its pixels and its events are shared.
  *
  * This header is plain C with no AXIOM dependencies: copy it into ported programs as it is. */
 #ifndef AXIOM_WINDOW_H
@@ -41,6 +42,10 @@ struct axwin_rect { int32_t x, y, w, h; };
 #define AXWIN_SHOW   0x41580007u   /* int *: 1 show, 0 hide */
 #define AXWIN_CURSOR 0x41580008u   /* int *: the pointer's shape over the window (AXWIN_CURSOR_*) */
 #define AXWIN_POS    0x41580009u   /* struct axwin_rect * (out): where the content is on the screen, and its size */
+#define AXWIN_RESIZE_TO 0x4158000Du /* struct axwin_rect * (w, h): like AXWIN_RESIZE, but to this size (made to fit the
+                                      screen); if AXIOM still wants another, an AXWIN_EV_RESIZE says so again. Lets
+                                      the process that maps and draws the pixels (another than the one reading the
+                                      events: a file passed to it) resize them to the size it draws at */
 
 enum { AXWIN_CURSOR_ARROW, AXWIN_CURSOR_TEXT, AXWIN_CURSOR_HAND, AXWIN_CURSOR_WAIT, AXWIN_CURSOR_CROSSHAIR,
        AXWIN_CURSOR_MOVE, AXWIN_CURSOR_RESIZE_EW, AXWIN_CURSOR_RESIZE_NS, AXWIN_CURSOR_RESIZE_NWSE,

@@ -14,6 +14,7 @@
  * Resizing (only with AXWIN_RESIZABLE): an AXWIN_EV_RESIZE event asks for a new size; the program
  * munmaps its pixels, calls AXWIN_RESIZE (fails with EBUSY while they're still mapped), then
  * AXWIN_INFO and mmap again. The window goes away when the fd and every mapping of it are gone.
+ * The fd can be passed to another process (SCM_RIGHTS): the window, its pixels and its events are shared.
  *
  * This header is plain C with no AXIOM dependencies: copy it into ported programs as it is. */
 #ifndef AXIOM_WINDOW_H
@@ -41,6 +42,10 @@ struct axwin_rect { int32_t x, y, w, h; };
 #define AXWIN_SHOW   0x41580007u   /* int *: 1 show, 0 hide */
 #define AXWIN_CURSOR 0x41580008u   /* int *: the pointer's shape over the window (AXWIN_CURSOR_*) */
 #define AXWIN_POS    0x41580009u   /* struct axwin_rect * (out): where the content is on the screen, and its size */
+#define AXWIN_RESIZE_TO 0x4158000Du /* struct axwin_rect * (w, h): like AXWIN_RESIZE, but to this size (made to fit the
+                                      screen); if AXIOM still wants another, an AXWIN_EV_RESIZE says so again. Lets
+                                      the process that maps and draws the pixels (another than the one reading the
+                                      events: a file passed to it) resize them to the size it draws at */
 
 enum { AXWIN_CURSOR_ARROW, AXWIN_CURSOR_TEXT, AXWIN_CURSOR_HAND, AXWIN_CURSOR_WAIT, AXWIN_CURSOR_CROSSHAIR,
        AXWIN_CURSOR_MOVE, AXWIN_CURSOR_RESIZE_EW, AXWIN_CURSOR_RESIZE_NS, AXWIN_CURSOR_RESIZE_NWSE,
@@ -52,6 +57,8 @@ struct axwin_clip { uint64_t data; uint64_t len; uint64_t seq; };   /* data: a p
 #define AXWIN_CLIP_SET 0x4158000Au /* struct axwin_clip *: copy len bytes from data (at most 1 MiB); seq comes back */
 #define AXWIN_CLIP_GET 0x4158000Bu /* struct axwin_clip *: data, len = room there; comes back with len = the whole
                                       text's length (copied: as much as fits) and seq. data 0: just len and seq */
+#define AXWIN_APP    0x4158000Cu   /* int *: the process this window is really for (a compositor showing an app's
+                                      window): the top bar and the dock show it as that app */
 
 /* events: the same layout as AXIOM's own (struct dunc_event) */
 struct axwin_event { int32_t type, win, x, y, key, button; };

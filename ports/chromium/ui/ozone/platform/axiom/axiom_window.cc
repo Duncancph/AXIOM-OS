@@ -28,7 +28,7 @@
 #include "ui/events/keycodes/keyboard_code_conversion.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/ozone/common/bitmap_cursor.h"
-#include "ui/ozone/platform/axiom/axiom_pixels.h"
+#include "ui/ozone/platform/axiom/axiom_gpu_host.h"
 #include "ui/ozone/platform/axiom/axiom_window_abi.h"
 #include "ui/platform_window/platform_window_delegate.h"
 
@@ -172,8 +172,10 @@ bool IsPopup(PlatformWindowType type) {
 
 AxiomWindow::AxiomWindow(PlatformWindowDelegate* delegate,
                          HeadlessWindowManager* manager,
+                         AxiomGpuHost* gpu_host,
                          const PlatformWindowInitProperties& properties)
     : HeadlessWindow(delegate, manager, properties.bounds),
+      gpu_host_(gpu_host),
       popup_(IsPopup(properties.type)) {}
 
 AxiomWindow::~AxiomWindow() {
@@ -226,9 +228,13 @@ bool AxiomWindow::Open() {
     fd_ = -1;
     return false;
   }
-  if (!MapPixels()) {
-    return false;
+  // The window's size is AXIOM's to decide: tell Chromium what it is.
+  axwin_info info = {};
+  if (ioctl(fd_, AXWIN_INFO, &info) == 0 &&
+      (bounds.width() != info.w || bounds.height() != info.h)) {
+    UpdateBounds(gfx::Rect(bounds.origin(), gfx::Size(info.w, info.h)));
   }
+  gpu_host_->AddWindow(widget(), fd_);
   if (!popup_) {
     axwin_rect pos = {};
     if (ioctl(fd_, AXWIN_POS, &pos) == 0) {
@@ -246,42 +252,17 @@ bool AxiomWindow::Open() {
 
 void AxiomWindow::CloseWindow() {
   watcher_.StopWatchingFileDescriptor();
-  AxiomPixels::Get().Remove(widget());
-  UnmapPixels();
   if (fd_ >= 0) {
+    // The GPU service lets go of it shortly; until then it's hidden.
+    if (shown_) {
+      int show = 0;
+      ioctl(fd_, AXWIN_SHOW, &show);
+    }
+    gpu_host_->RemoveWindow(widget());
     close(fd_);
     fd_ = -1;
   }
   shown_ = false;
-}
-
-bool AxiomWindow::MapPixels() {
-  axwin_info info = {};
-  if (ioctl(fd_, AXWIN_INFO, &info) < 0) {
-    return false;
-  }
-  const size_t size = static_cast<size_t>(info.stride) * info.h;
-  void* p = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0);
-  if (p == MAP_FAILED) {
-    PLOG(ERROR) << "AXIOM window: can't map its pixels";
-    return false;
-  }
-  // SAFETY: mmap mapped `size` bytes at p.
-  pixels_ = UNSAFE_BUFFERS(base::span(static_cast<uint8_t*>(p), size));
-  AxiomPixels::Get().Set(widget(), fd_, pixels_, info.w, info.h, info.stride);
-  // The window's size is AXIOM's to decide: tell Chromium what it is.
-  gfx::Rect bounds = GetBoundsInPixels();
-  if (bounds.width() != info.w || bounds.height() != info.h) {
-    UpdateBounds(gfx::Rect(bounds.origin(), gfx::Size(info.w, info.h)));
-  }
-  return true;
-}
-
-void AxiomWindow::UnmapPixels() {
-  if (!pixels_.empty()) {
-    munmap(pixels_.data(), pixels_.size());
-    pixels_ = {};
-  }
 }
 
 void AxiomWindow::Show(bool inactive) {
@@ -352,9 +333,10 @@ void AxiomWindow::SetBoundsInPixels(const gfx::Rect& bounds) {
     axwin_rect at = {bounds.x(), bounds.y(), 0, 0};
     ioctl(fd_, AXWIN_MOVE, &at);
   }
+  // (The size stays the one drawn at: the canvas resizes the pixels to it.)
   axwin_rect pos = {};
   if (ioctl(fd_, AXWIN_POS, &pos) == 0) {
-    UpdateBounds(gfx::Rect(pos.x, pos.y, pos.w, pos.h));
+    UpdateBounds(gfx::Rect(gfx::Point(pos.x, pos.y), old.size()));
   }
 }
 
@@ -441,14 +423,9 @@ void AxiomWindow::HandleEvent(const axwin_event& e) {
       DispatchKey(e.key, e.button);
       break;
     case AXWIN_EV_RESIZE:
-      // Out of the registry first (frames are skipped until it's back), then
-      // munmap (AXIOM refuses to resize while mapped), resize, map again.
-      AxiomPixels::Get().Remove(widget());
-      UnmapPixels();
-      if (ioctl(fd_, AXWIN_RESIZE) < 0) {
-        PLOG(ERROR) << "AXIOM window: resize";
-      }
-      MapPixels();
+      // AXIOM asks for this size: draw at it. The canvas, which maps the
+      // pixels, resizes them to the size it draws at (AXWIN_RESIZE_TO).
+      UpdateBounds(gfx::Rect(GetBoundsInPixels().origin(), gfx::Size(e.x, e.y)));
       break;
     case AXWIN_EV_MOVE:
       UpdateBounds(gfx::Rect(gfx::Point(e.x, e.y), GetBoundsInPixels().size()));

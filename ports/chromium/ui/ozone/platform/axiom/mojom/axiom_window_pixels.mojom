@@ -1,0 +1,17 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+module ui.ozone.mojom;
+
+// The browser (which owns the AXIOM windows and reads their events) gives the
+// GPU service (which draws them) each window's file, so it can map the
+// window's pixels, show what it drew (AXWIN_FLUSH) and resize them to the
+// size it draws at (AXWIN_RESIZE_TO). Works the same in-process.
+interface AxiomWindowPixels {
+  // `window` is a duplicate of the browser's /dev/axiom/window file for
+  // `widget`; it replaces any earlier one (a popup made again at a new size).
+  SetWindow(uint64 widget, handle<platform> window);
+  // The window is closing: let go of it (unmap, close).
+  RemoveWindow(uint64 widget);
+};

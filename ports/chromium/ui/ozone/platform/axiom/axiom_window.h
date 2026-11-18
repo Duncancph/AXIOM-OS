@@ -10,7 +10,7 @@
 #include <array>
 #include <string>
 
-#include "base/memory/raw_span.h"
+#include "base/memory/raw_ptr.h"
 #include "base/message_loop/message_pump_for_ui.h"
 #include "ui/ozone/platform/headless/headless_window.h"
 #include "ui/platform_window/platform_window_init_properties.h"
@@ -19,10 +19,12 @@ struct axwin_event;
 
 namespace ui {
 
+class AxiomGpuHost;
+
 // An AXIOM window (/dev/axiom/window). Headless's window keeps the bounds and
-// state; this adds the real window: it appears on Show(), its pixels are
-// mapped for AxiomPixels, and its events (read on the UI thread) become
-// Chromium events.
+// state; this adds the real window: it appears on Show(), its file goes to
+// the GPU service, which maps its pixels and draws them (AxiomPixels), and its
+// events (read on the UI thread) become Chromium events.
 //
 // Menus, dropdowns, the omnibox's suggestions, tooltips and bubbles are AXIOM
 // popups: no frame, placed in screen coordinates, never focused. AXIOM has no
@@ -35,6 +37,7 @@ class AxiomWindow : public HeadlessWindow,
  public:
   AxiomWindow(PlatformWindowDelegate* delegate,
               HeadlessWindowManager* manager,
+              AxiomGpuHost* gpu_host,
               const PlatformWindowInitProperties& properties);
   AxiomWindow(const AxiomWindow&) = delete;
   AxiomWindow& operator=(const AxiomWindow&) = delete;
@@ -67,18 +70,16 @@ class AxiomWindow : public HeadlessWindow,
  private:
   bool Open();
   void CloseWindow();
-  bool MapPixels();
-  void UnmapPixels();
   void HandleEvent(const axwin_event& e);
   void DispatchMouse(const axwin_event& e);
   void DispatchKey(int key, int usage);
   void LoseCapture();
 
+  const raw_ptr<AxiomGpuHost> gpu_host_;
   const bool popup_;
   int fd_ = -1;
   bool shown_ = false;
   int cursor_shape_ = 0;
-  base::raw_span<uint8_t> pixels_;  // mmap'd from the window
   int buttons_ = 0;  // EF_*_MOUSE_BUTTON held
   std::string title_ = "Vertex";
   base::MessagePumpForUI::FdWatchController watcher_{FROM_HERE};

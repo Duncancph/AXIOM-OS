@@ -9,7 +9,12 @@ AXIOM windows, under its own name and logo.
 - `ui/ozone/platform/axiom/`: an Ozone platform, `ozone_platform=axiom`. Each Chromium window is an AXIOM
   window opened through `/dev/axiom/window` (`axiom_window_abi.h` is a copy of `common/axiom_window.h`).
   - Software frames: Skia draws into its own surface; each frame's damaged rows are copied into the
-    window's mmap'd pixels, then `AXWIN_FLUSH`.
+    window's mmap'd pixels, then `AXWIN_FLUSH`. The browser owns the windows and reads their events; the
+    compositor, which may run in a separate GPU process, draws them. So the browser sends each window's
+    file to the GPU service (`AxiomGpuHost` → `mojom/axiom_window_pixels.mojom` → `AxiomPixels`), and the
+    canvas maps the pixels itself and resizes them to the size it draws at (`AXWIN_RESIZE_TO`: AXIOM won't
+    resize mapped pixels, and only the drawing side knows when they're free). The same path is used when
+    the GPU service runs in the browser (`--single-process`, `--in-process-gpu`).
   - Windows: AXIOM draws the frame (`ShouldUseNativeFrame()`), places them and sizes them (maximize, drag,
     snapping); `AXWIN_EV_MOVE` keeps Chromium told where they are.
   - Menus, dropdowns, the address bar's suggestions, tooltips and bubbles are AXIOM popups (`AXWIN_POPUP`):
@@ -113,10 +118,19 @@ loads itself), fonts in `/linux/usr/share/fonts`. Then, in the Terminal:
     run vx/chrome --no-sandbox --single-process --no-zygote --disable-gpu --no-first-run
         --user-data-dir=/home/vx/profile --disable-in-process-stack-traces https://www.google.com
 
-(Installed as a package, it's `opt/vertex/vertex --no-sandbox --single-process --no-zygote --disable-gpu`.)
+(Installed as a package, 1.0 runs `opt/vertex/vertex --no-sandbox --single-process --no-zygote --disable-gpu`.)
 
-- `--single-process`: AXIOM's Linux layer has threads but no `fork`/`exec` yet, so renderers can't be
-  separate processes. Vertex's threads still use all the cores AXIOM has turned on (Settings > About).
+Multi-process (each site's pages in their own renderer process, the GPU service in its own process), from
+Vertex 1.1 and a kernel with `/proc` folders and `AXWIN_RESIZE_TO`:
+
+    opt/vertex/vertex --no-sandbox --no-zygote --disable-gpu --no-default-browser-check
+
+- `--no-zygote`: renderers are started with `fork` + `exec` like the other child processes.
+- `--no-default-browser-check`: the check runs `xdg-settings`, which isn't there (the child exits with 127).
+- `--single-process` still works, and uses the least memory: with a test page, a downloaded file and
+  YouTube playing, 639 MiB in use on AXIOM build 174, against 972 MiB multi-process with
+  `--in-process-gpu` and 1048 MiB with the GPU process separate (programs' read-only pages are shared
+  between processes since build 174; before that, multi-process took 2279 MiB).
 - `--disable-in-process-stack-traces`: AXIOM delivers no signals, so a failed CHECK ends the program at
   once; the kernel then logs the return addresses on its stack (file + offset, for `llvm-symbolizer`).
 - Debugging a hang: Ctrl+\ (0x1C) on the serial line makes AXIOM list how busy each core has been and each

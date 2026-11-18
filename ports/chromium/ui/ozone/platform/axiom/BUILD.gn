@@ -4,7 +4,9 @@
 
 # Ozone platform for AXIOM (https://github.com/Duncancph/axiom-os): Chromium
 # runs there through AXIOM's Linux compatibility layer and draws into an AXIOM
-# window (/dev/axiom/window, see axiom_window_abi.h). Software rendering only.
+# window (/dev/axiom/window, see axiom_window_abi.h). Software rendering only:
+# the browser owns the windows and sends their files to the GPU service, which
+# maps their pixels and draws into them (mojom/axiom_window_pixels.mojom).
 
 visibility = [ "//ui/ozone/*" ]
 
@@ -12,6 +14,8 @@ source_set("axiom") {
   sources = [
     "axiom_clipboard.cc",
     "axiom_clipboard.h",
+    "axiom_gpu_host.cc",
+    "axiom_gpu_host.h",
     "axiom_pixels.cc",
     "axiom_pixels.h",
     "axiom_surface_factory.cc",
@@ -31,6 +35,8 @@ source_set("axiom") {
 
   deps = [
     "//base",
+    "//mojo/public/cpp/bindings",
+    "//mojo/public/cpp/platform",
     "//skia",
     "//ui/base",
     "//ui/base/clipboard:clipboard_types",
@@ -45,6 +51,7 @@ source_set("axiom") {
     "//ui/ozone:ozone_base",
     "//ui/ozone/common",
     "//ui/ozone/platform/headless",
+    "//ui/ozone/platform/axiom/mojom",
     "//ui/platform_window",
   ]
 }
