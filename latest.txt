@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 191
-notes Wi-Fi testing: 'wifi dump' in CMD saves the card's settings for comparison.
-file kernel b191/thane.elf.gz 12372760 63fec1ba21c493dd936e99ebdff26b036d2f4b56e50572901b8ac44277843b7b
-file initrd b191/initrd.tar.gz 3604480 6d4744b0706c0a9313f667f3de32aa3587467737294338aae53822b44652f32d
-file bootx64 b191/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b191/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022100cfda324c221b86801edca8e41abbef97039768302e557b809351fb5e9cea60da02206d44c8b581520560186d1a9a093d6c9e50d0716a4b2841ff595b7e0f030d2ec3
+build 192
+notes The mouse wheel works with mice the PC presents as PS/2.
+file kernel b192/thane.elf.gz 12374088 d717f151e546fd35eabda6d982c293437664a3f6366fd5ae9b78f65e73c2c25f
+file initrd b192/initrd.tar.gz 3604480 213c5434fab6fa293d20d4248abafa5e87025de09f5fcc6fc769e80555355810
+file bootx64 b192/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b192/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022017f2e84cdd35512ff2bfa181001732c2e1d963d00d904a8acc2335de4a099dc1022100fd6f2319e7bc81cd463a95ffc182c93065eeca0d966b73779142a34c82d0cc1f
