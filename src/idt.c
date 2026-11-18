@@ -37,6 +37,7 @@ static void user_fault(struct frame *f) {
             f->vec < 20 ? names[f->vec] : "exception", f->rip, cr2);
     if (current->lx) {                                     /* a Linux program: which library, and where the stack came from */
         linux_where("crashed in", f->rip);
+        kprintf("  rax=%lx rbx=%lx rcx=%lx rdx=%lx rsi=%lx rdi=%lx\n", f->rax, f->rbx, f->rcx, f->rdx, f->rsi, f->rdi);
         uint64_t *sp = (uint64_t *)f->rsp;
         for (int i = 0, shown = 0; i < 64 && shown < 8 && user_ok(current->pml4, sp + i, 8, false); i++)
             if (linux_where_quiet(sp[i])) { linux_where("  called from", sp[i]); shown++; }
