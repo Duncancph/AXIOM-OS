@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 188
-notes AXIOM now says when it turns the monitor's full screen size off after a start that didn't finish (turn it on again in Settings > Display).
-file kernel b188/thane.elf.gz 19567072 4e6a95b5411a295d056ff722135df7c7e70be7b990aca7a43f2c7c60701a2ccf
-file initrd b188/initrd.tar.gz 3604480 41930da3af386cd1e33de52adf7e0199d615e1dc4827062c8cf26fdd39886099
-file bootx64 b188/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b188/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3046022100bfac22396279b823b716bbffe6e6f4578b708a83e894ffdf17ab0a8107c84a73022100a2293c7f37671cae6e352b35806200b5d364933d06bb31b36fb79411cb01b505
+build 189
+notes One browser: Vertex (Chromium, from Settings > Apps). The old built-in browser is gone, and the dock's browser icon now opens Vertex. Installed apps go in the dock.
+file kernel b189/thane.elf.gz 12366448 0f8df6cdc686751120cff59962bc1d4260d536904e700893f04af64e1cb7e920
+file initrd b189/initrd.tar.gz 3604480 07de3bb420cdf51a781a619531ef485776d5c08265befcdcd3047a5753b0a48a
+file bootx64 b189/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b189/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 30450220023292c493ab1c973ef0f9d8bfb10a3bfb334067bbf90e11719937f7c5cb8ec0022100ce0a2f9c19233f6cdce67f6a99dbde88f74d29e61d65aed8330c0da5a130269d
