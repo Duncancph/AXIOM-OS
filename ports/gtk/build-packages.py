@@ -6,7 +6,10 @@ Both unpack into AXIOM's Linux folder (root=yes): lib/..., usr/share/..., as on 
             keyboard data, the MIME database (gdk-pixbuf needs it to tell PNG from JPEG), GSettings schemas,
             the Adwaita icons, the
             en_GB.UTF-8 locale, and GTK's demo apps (its dock entry)
-  and the apps in APPS below (each requires gtk3): Mousepad, AbiWord, Gnumeric, Aisleriot, Mines
+  and the apps in APPS below (each requires gtk3): Mousepad, AbiWord, Gnumeric, Aisleriot, Mines, Evince, Ristretto,
+  Galculator, Thunar, Geany, Iagno
+  qt5       Qt 5 for Qt apps (requires gtk3): its libraries and the Wayland, image and icon plugins
+  and the Qt apps in APPS (each requires qt5): FeatherPad, SpeedCrunch
 
   python3 ports/gtk/build-packages.py <out-dir> [app...]   -> <out-dir>/<name>.tar.gz and the staging folders
 Then sign each with tools/make-package.py (root=yes, requires=gtk3 for the apps) and publish. Build them all
@@ -87,6 +90,27 @@ def gtk3():
     tar(stage, "gtk3")
     return {os.path.basename(p) for p in os.listdir(os.path.join(stage, LIB))}
 
+# Qt 5 (requires gtk3, whose fonts, fontconfig, XKB data, ICU and libstdc++ it uses): Qt's libraries and the
+# plugins a Qt Widgets app needs on AXIOM: Wayland (wl_shm, xdg-shell, its own window decorations), image formats
+# and SVG icons. Qt finds them in its built-in plugin folder, which the Linux folder keeps as on Linux.
+QT_PLUGINS = "usr/lib/x86_64-linux-gnu/qt5/plugins"
+QT_PLUGIN_FILES = ["platforms/libqwayland-generic.so", "wayland-shell-integration/libxdg-shell.so",
+                   "wayland-shell-integration/libwl-shell.so", "wayland-decoration-client/libbradient.so",
+                   "iconengines/libqsvgicon.so"] + ["imageformats/" + f for f in
+                   sorted(os.listdir("/" + QT_PLUGINS + "/imageformats")) if f.endswith(".so")]
+QT_LIBS = ["libQt5Core.so.5", "libQt5Gui.so.5", "libQt5Widgets.so.5", "libQt5DBus.so.5", "libQt5Svg.so.5",
+           "libQt5Network.so.5", "libQt5PrintSupport.so.5", "libQt5WaylandClient.so.5"]
+
+def qt5(base):
+    stage = os.path.join(OUT, "qt5"); shutil.rmtree(stage, ignore_errors=True)
+    plugins = [os.path.join("/" + QT_PLUGINS, f) for f in QT_PLUGIN_FILES]
+    for pl in plugins: put(stage, pl, os.path.join(QT_PLUGINS, os.path.relpath(pl, "/" + QT_PLUGINS)))
+    qtlibs = [os.path.realpath("/lib/x86_64-linux-gnu/" + l) for l in QT_LIBS]
+    for l, real in zip(QT_LIBS, qtlibs): put(stage, real, os.path.join(LIB, l))     # (the libraries themselves, then
+    libs(stage, plugins + qtlibs, exclude=base)                                       # what they and the plugins need)
+    tar(stage, "qt5")
+    return {os.path.basename(p) for p in os.listdir(os.path.join(stage, LIB))}
+
 # The apps: the Debian packages whose files they bring (without docs, man pages, translations and help), the
 # programs (whose libraries come along, unless gtk3 has them), and what Settings shows.
 APPS = {
@@ -100,6 +124,19 @@ APPS = {
                       bins=["/usr/games/sol"]),
     "gnome-mines": dict(debs=["gnome-mines", "libgnome-games-support-1-3", "libgnome-games-support-common",
                               "libhandy-1-0"], bins=["/usr/games/gnome-mines"]),
+    "evince": dict(debs=["evince", "evince-common", "libevdocument3-4t64", "libevview3-3t64"], bins=["/usr/bin/evince"]),
+    "ristretto": dict(debs=["ristretto", "libxfce4ui-2-0", "libxfce4ui-common", "libxfce4util7", "libxfce4util-common",
+                            "libxfconf-0-3", "libmagic-mgc"], bins=["/usr/bin/ristretto"],
+                      skip=("/usr/lib/file/", "/usr/share/file/")),     # (libmagic reads /usr/share/misc/magic.mgc)
+    "galculator": dict(debs=["galculator"], bins=["/usr/bin/galculator"]),
+    "thunar": dict(debs=["thunar", "thunar-data", "libthunarx-3-0", "libexo-2-0", "libexo-common", "libxfce4ui-2-0",
+                         "libxfce4ui-common", "libxfce4util7", "libxfce4util-common", "libxfconf-0-3"],
+                   bins=["/usr/bin/thunar"]),
+    "geany": dict(debs=["geany", "geany-common"], bins=["/usr/bin/geany"]),
+    "iagno": dict(debs=["iagno", "libgsound0t64"], bins=["/usr/games/iagno"]),
+    # Qt 5 apps (require qt5)
+    "featherpad": dict(debs=["featherpad"], bins=["/usr/bin/featherpad"], qt=True),
+    "speedcrunch": dict(debs=["speedcrunch"], bins=["/usr/bin/speedcrunch"], qt=True),
 }
 SKIP = ("/usr/share/doc/", "/usr/share/man/", "/usr/share/locale/", "/usr/share/help/", "/usr/share/lintian/",
         "/usr/share/bug/", "/usr/share/metainfo/", "/usr/share/applications/", "/usr/share/info/",
@@ -119,7 +156,7 @@ def app(name, base):
         # FAT has no symlinks: a library comes as its link's name (libfoo.so.1), not also as the file it points to
         linked = {os.path.realpath(f) for f in files if f and os.path.islink(f) and not f.endswith(".so")}
         for f in files:
-            if not f or not os.path.isfile(f) or f.startswith(SKIP) or f.startswith("/etc/"): continue
+            if not f or not os.path.isfile(f) or f.startswith(SKIP + spec.get("skip", ())) or f.startswith("/etc/"): continue
             if os.path.islink(f) and f.endswith(".so"): continue                 # (for building against it)
             if not os.path.islink(f) and f in linked: continue
             put(stage, f, f[1:])
@@ -133,4 +170,5 @@ def app(name, base):
 
 os.makedirs(OUT, exist_ok=True)
 base = gtk3()
-for name in (sys.argv[2:] or APPS): app(name, base)
+qtbase = base | qt5(base)
+for name in (sys.argv[2:] or APPS): app(name, qtbase if APPS[name].get("qt") else base)
