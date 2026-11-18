@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 192
-notes The mouse wheel works with mice the PC presents as PS/2.
-file kernel b192/thane.elf.gz 12374088 d717f151e546fd35eabda6d982c293437664a3f6366fd5ae9b78f65e73c2c25f
-file initrd b192/initrd.tar.gz 3604480 213c5434fab6fa293d20d4248abafa5e87025de09f5fcc6fc769e80555355810
-file bootx64 b192/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b192/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022017f2e84cdd35512ff2bfa181001732c2e1d963d00d904a8acc2335de4a099dc1022100fd6f2319e7bc81cd463a95ffc182c93065eeca0d966b73779142a34c82d0cc1f
+build 193
+notes Wi-Fi joining, first version: click your saved network in Network > Wi-Fi to connect.
+file kernel b193/thane.elf.gz 12389696 cc51c0c3cdaab06ab16afd66bac1f51a6fc62d93cd233ea2c59e917e7707d5a9
+file initrd b193/initrd.tar.gz 3604480 cce9de5d1a311ab8d081a209e9f27cceed61d1b45fe39f76969877e991fdb99a
+file bootx64 b193/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b193/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022100a79928f9cbe2cf3d140c36ce377c25355798c380b7bf01b6a6fa99f070da4dd1022057dc7f08121284aebbf64e5e1b4e282bcd315546a1821c703b5562294c106959
