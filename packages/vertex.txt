@@ -1,15 +1,15 @@
 AXIOM package 1
 id vertex
 name Vertex
-version 1.0
+version 1.1
 icon arc
 description The full web browser (Chromium): tabs, bookmarks, downloads, video.
-min-build 169
-size 201217556
-sha256 8f9cb8f9498baac3839fdf7a5fc276d6cc4c23c1e50fb282c758c8c7cb3267b4
-url https://github.com/Duncancph/AXIOM-OS/releases/download/vertex-1.0/vertex-1.0.tar.gz
-installed-size 474332826
+min-build 175
+size 201228028
+sha256 f588759b557621bf252358d3ea85f499ad13d2b3f3595e53695be554eb0f4c71
+url https://github.com/Duncancph/AXIOM-OS/releases/download/vertex-1.1/vertex-1.1.tar.gz
+installed-size 474345114
 root yes
 compression gzip
-run opt/vertex/vertex --no-sandbox --single-process --no-zygote --disable-gpu
-signature 3045022100ec2436afbb4e7018210f618762318021d699a2157b9f78f896c2ecd64b49bf43022067973c3bb60fe3a2d431497c19f96cc43203bf91742bcb78942060afccfc6779
+run opt/vertex/vertex --no-sandbox --no-zygote --disable-gpu --no-default-browser-check
+signature 304502207de2748abefd8378729ac6f4417fd46b14c37b76fe8b54cdcd9b373ab1cb0eb40221009b11e402a72c626dda1b758b00fa68236ee3de25b9d250fc2062eda97f35084e
