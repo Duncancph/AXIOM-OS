@@ -19,7 +19,8 @@ void linux_cpu_init(void) {
 }
 
 /* ---------------- a Linux program's state ---------------- */
-enum { FD_NONE, FD_TTY_IN, FD_TTY_OUT, FD_FILE, FD_DIR, FD_CHAN, FD_EVENT, FD_EPOLL, FD_SHM, FD_DEV, FD_WIN, FD_SND, FD_TIMER, FD_INET };
+enum { FD_NONE, FD_TTY_IN, FD_TTY_OUT, FD_FILE, FD_DIR, FD_CHAN, FD_EVENT, FD_EPOLL, FD_SHM, FD_DEV, FD_WIN, FD_SND, FD_TIMER, FD_INET,
+       FD_INOTIFY };
 /* sound devices (linux_snd.c): /dev/snd/controlC0 and pcmC0D0p */
 void *snd_open(int kind); void snd_put(void *o); long snd_ioctl(void *o, uint32_t cmd, uint64_t arg, bool nonblock);
 long snd_write(void *o, uint64_t ubuf, uint64_t bytes, bool nonblock); int snd_ready(void *o, bool *waiting);
@@ -688,6 +689,110 @@ static void axwin_put(struct axwin *x);
 struct isock;
 static void isock_put(struct isock *s);
 static int isock_ready(struct isock *s);
+/* ---------------- inotify ----------------
+ * An inotify file is a list of watched paths and a queue of events, as Linux's struct inotify_event (16 bytes,
+ * then the name, padded with zeros to a multiple of 16). Events come from the file system as it changes
+ * (vfs_watch), whoever changed it: Linux programs or AXIOM's own apps. A watch is on a path, not an inode:
+ * a renamed watched file or folder keeps its watch under the new path, as on Linux. */
+#define IN_MODIFY_        0x2u
+#define IN_ATTRIB_        0x4u
+#define IN_CLOSE_WRITE_   0x8u
+#define IN_MOVED_FROM_    0x40u
+#define IN_MOVED_TO_      0x80u
+#define IN_CREATE_        0x100u
+#define IN_DELETE_        0x200u
+#define IN_DELETE_SELF_   0x400u
+#define IN_MOVE_SELF_     0x800u
+#define IN_Q_OVERFLOW_    0x4000u
+#define IN_IGNORED_       0x8000u
+#define IN_ALL_EVENTS_    0xfffu
+#define IN_ONLYDIR_       0x1000000u
+#define IN_MASK_CREATE_   0x10000000u
+#define IN_MASK_ADD_      0x20000000u
+#define IN_ISDIR_         0x40000000u
+#define IN_ONESHOT_       0x80000000u
+#define INOT_WATCHES 128
+#define INOT_QUEUE   65536
+struct iwatch { int wd; uint32_t mask; char path[200]; };
+struct inot { int refs; struct inot *next; int nw, next_wd; struct iwatch w[INOT_WATCHES];
+              uint32_t qlen, last; bool overflowed; uint8_t q[INOT_QUEUE]; };
+static struct inot *inots;
+static uint32_t inot_cookie;
+static void inot_push(struct inot *in, int wd, uint32_t mask, uint32_t cookie, const char *name) {
+    uint32_t nl = name && *name ? (uint32_t)strlen(name) + 1 : 0, len = (nl + 15) & ~15u, sz = 16 + len;
+    if (in->qlen) {                                    /* the same as the last unread event: once is enough (as Linux) */
+        uint8_t *l = in->q + in->last;
+        if (*(int32_t *)l == wd && *(uint32_t *)(l + 4) == mask && *(uint32_t *)(l + 8) == cookie && *(uint32_t *)(l + 12) == len &&
+            (!len || !strcmp((char *)l + 16, name))) return;
+    }
+    if (in->qlen + sz > INOT_QUEUE - 16) {             /* full: one overflow event, until it's read */
+        if (in->overflowed) return;
+        in->overflowed = true; wd = -1; mask = IN_Q_OVERFLOW_; cookie = 0; len = 0; nl = 0; sz = 16;
+    }
+    uint8_t *e = in->q + in->qlen;
+    *(int32_t *)e = wd; *(uint32_t *)(e + 4) = mask; *(uint32_t *)(e + 8) = cookie; *(uint32_t *)(e + 12) = len;
+    memset(e + 16, 0, len); if (nl) memcpy(e + 16, name, nl);
+    in->last = in->qlen; in->qlen += sz;
+    chan_wake();
+}
+static void inot_drop(struct inot *in, int i) {         /* a watch ends: IN_IGNORED */
+    inot_push(in, in->w[i].wd, IN_IGNORED_, 0, 0);
+    in->w[i] = in->w[--in->nw];
+}
+static bool path_in(const char *p, const char *dir) {    /* p is dir, or inside it */
+    uint64_t n = strlen(dir);
+    return !strncmp(p, dir, n) && (p[n] == 0 || p[n] == '/');
+}
+static const char *path_base(const char *p, uint64_t *dirlen) {   /* the name after the last '/'; dirlen: its folder's */
+    const char *b = p; for (const char *c = p; *c; c++) if (*c == '/') b = c + 1;
+    *dirlen = b > p + 1 ? (uint64_t)(b - p - 1) : 1; return b;
+}
+/* one change to path: child_ev to watches on its folder (with its name), self_ev to watches on it */
+static void inot_event(const char *path, uint32_t child_ev, uint32_t self_ev, uint32_t cookie, bool dir) {
+    uint64_t dl; const char *base = path_base(path, &dl);
+    for (struct inot *in = inots; in; in = in->next)
+        for (int i = 0; i < in->nw; i++) {
+            struct iwatch *w = &in->w[i]; uint32_t ev = 0; const char *name = 0;
+            if (child_ev && strlen(w->path) == dl && !strncmp(w->path, path, dl)) { ev = child_ev; name = base; }
+            else if (self_ev && !strcmp(w->path, path)) ev = self_ev;
+            if (!ev || !(ev & w->mask & IN_ALL_EVENTS_)) continue;
+            inot_push(in, w->wd, ev | (name && dir ? IN_ISDIR_ : 0), cookie, name);
+            if (w->mask & IN_ONESHOT_) { inot_drop(in, i); i--; }
+        }
+}
+static void linux_vfs_watch(int what, const char *path, const char *to, bool dir) {
+    char p[200], q[200];
+    path_join("/", path, p, sizeof p);
+    switch (what) {
+    case VW_CREATE: inot_event(p, IN_CREATE_, 0, 0, dir); break;
+    case VW_MODIFY: inot_event(p, IN_MODIFY_, IN_MODIFY_, 0, false); break;
+    case VW_ATTRIB: inot_event(p, IN_ATTRIB_, IN_ATTRIB_, 0, dir); break;
+    case VW_DELETE:
+        inot_event(p, IN_DELETE_, 0, 0, dir);
+        for (struct inot *in = inots; in; in = in->next)        /* watches on it (or inside it): gone */
+            for (int i = 0; i < in->nw; i++)
+                if (path_in(in->w[i].path, p)) { if (in->w[i].mask & IN_DELETE_SELF_) inot_push(in, in->w[i].wd, IN_DELETE_SELF_, 0, 0); inot_drop(in, i); i--; }
+        break;
+    case VW_RENAME: {
+        path_join("/", to, q, sizeof q);
+        uint32_t ck = ++inot_cookie;
+        inot_event(p, IN_MOVED_FROM_, IN_MOVE_SELF_, ck, dir);
+        inot_event(q, IN_MOVED_TO_, 0, ck, dir);
+        uint64_t pl = strlen(p);
+        for (struct inot *in = inots; in; in = in->next)        /* watches move with what they watch */
+            for (int i = 0; i < in->nw; i++)
+                if (path_in(in->w[i].path, p)) { char n[200]; ksnprintf(n, sizeof n, "%s%s", q, in->w[i].path + pl); strncpy0(in->w[i].path, n, sizeof in->w[i].path); }
+        break;
+    }
+    }
+}
+static void inot_put(struct inot *in) {
+    if (--in->refs > 0) return;
+    for (struct inot **pp = &inots; *pp; pp = &(*pp)->next) if (*pp == in) { *pp = in->next; break; }
+    if (!inots) vfs_watch = 0;                            /* (no one watching: the file system needn't say) */
+    kfree(in); chan_wake();
+}
+
 struct epitem { int fd; uint32_t events; uint64_t data; const void *id; bool off; };
 struct epoll { int refs, n, next; struct epitem it[NFD]; };
 static void ulisten_put(struct ulisten *l);
@@ -698,6 +803,8 @@ static void fd_close(struct lfd *f) {
     if (f->kind == FD_WIN) axwin_put(f->obj);
     if (f->kind == FD_SND) snd_put(f->obj);
     if (f->kind == FD_INET) isock_put(f->obj);
+    if (f->kind == FD_INOTIFY && f->obj) inot_put(f->obj);
+    if (f->kind == FD_FILE && (f->flags & 3) && inots) inot_event(f->path, IN_CLOSE_WRITE_, IN_CLOSE_WRITE_, 0, false);
     memset(f, 0, sizeof *f);
 }
 static void fd_copy(struct lfd *dst, const struct lfd *src) {      /* dup: one more reference to the same ends */
@@ -705,7 +812,7 @@ static void fd_copy(struct lfd *dst, const struct lfd *src) {      /* dup: one m
     fd_close(dst);
     *dst = *src;
     if (dst->kind == FD_CHAN) { if (dst->rx) dst->rx->readers++; if (dst->tx) dst->tx->writers++; if (dst->lis) (*(int *)dst->lis)++; }
-    if ((dst->kind == FD_EVENT || dst->kind == FD_EPOLL || dst->kind == FD_SHM || dst->kind == FD_WIN || dst->kind == FD_SND || dst->kind == FD_TIMER || dst->kind == FD_INET) && dst->obj) (*(int *)dst->obj)++;
+    if ((dst->kind == FD_EVENT || dst->kind == FD_EPOLL || dst->kind == FD_SHM || dst->kind == FD_WIN || dst->kind == FD_SND || dst->kind == FD_TIMER || dst->kind == FD_INET || dst->kind == FD_INOTIFY) && dst->obj) (*(int *)dst->obj)++;
 }
 /* move bytes in or out of the ring (to / from a kernel buffer) */
 static void ring_put(struct chan *c, const uint8_t *s, uint32_t n) {
@@ -834,6 +941,7 @@ static int fd_ready(struct lxproc *lx, int fd) {
     case FD_WIN: { struct axwin *x = f->obj; return (x->qh != x->qt ? POLLIN_ : 0) | POLLOUT_; }
     case FD_SND: return snd_ready(f->obj, &snd_waiting);
     case FD_INET: return isock_ready(f->obj);
+    case FD_INOTIFY: return ((struct inot *)f->obj)->qlen ? POLLIN_ : 0;
     default: return POLLIN_ | POLLOUT_;                          /* files are always ready */
     }
 }
@@ -873,7 +981,7 @@ static uint64_t do_poll(struct lxproc *lx, uint64_t ufds, uint64_t nfds, int64_t
 #define EPOLLET_      (1u << 31)
 static const void *fd_id(const struct lfd *f) {               /* which open file an fd number refers to */
     if (f->kind == FD_CHAN) return f->obj ? f->obj : f->rx ? (const void *)f->rx : (const void *)f->tx;   /* (obj: kept from before shutdown) */
-    if (f->kind == FD_EVENT || f->kind == FD_EPOLL || f->kind == FD_SHM || f->kind == FD_WIN || f->kind == FD_TIMER || f->kind == FD_INET) return f->obj;
+    if (f->kind == FD_EVENT || f->kind == FD_EPOLL || f->kind == FD_SHM || f->kind == FD_WIN || f->kind == FD_TIMER || f->kind == FD_INET || f->kind == FD_INOTIFY) return f->obj;
     return f;
 }
 /* ready entries into out (12-byte struct epoll_event, packed), up to max; out 0: just count (no one-shot change) */
@@ -2089,6 +2197,21 @@ static uint64_t linux_syscall_(struct frame *f) {
             *(uint64_t *)b = x->ticks; x->ticks = 0;
             return 8;
         }
+        if (fd->kind == FD_INOTIFY) {                          /* whole events, as many as fit */
+            struct inot *in = fd->obj;
+            if (n == 17) return E(ESPIPE_);
+            while (!in->qlen) { if (fd->flags & 04000) return E(EAGAIN_); chan_wait(-1); if (sig_now()) return E(EINTR_); if (lx->fd[a].kind != FD_INOTIFY) return E(EBADF_); }
+            uint32_t take = 0;
+            while (take < in->qlen) { uint32_t sz = 16 + *(uint32_t *)(in->q + take + 12); if (take + sz > c) break; take += sz; }
+            if (!take) return E(EINVAL_);                          /* (the buffer can't hold the next event) */
+            if (!uok(b, take, true)) return E(EFAULT_);
+            memcpy((void *)b, in->q, take);
+            memmove(in->q, in->q + take, in->qlen - take); in->qlen -= take;
+            in->last = 0;                                          /* (the last event: found again) */
+            for (uint32_t o = 0; o < in->qlen; o += 16 + *(uint32_t *)(in->q + o + 12)) in->last = o;
+            if (in->qlen < INOT_QUEUE / 2) in->overflowed = false;
+            return take;
+        }
         if (fd->kind == FD_EVENT) {
             struct evfd *ev = fd->obj;
             if (n == 17) return E(ESPIPE_);
@@ -2313,6 +2436,7 @@ static uint64_t linux_syscall_(struct frame *f) {
         if (a < NFD && (lx->fd[a].kind == FD_TTY_IN || lx->fd[a].kind == FD_TTY_OUT) && b == 0x5413 && uok(c, 8, true)) {   /* TIOCGWINSZ */
             uint16_t *w = (uint16_t *)c; w[0] = 40; w[1] = 100; w[2] = w[3] = 0; return 0;
         }
+        if (a < NFD && lx->fd[a].kind == FD_INOTIFY && b == 0x541B && uok(c, 4, true)) { *(int32_t *)c = (int32_t)((struct inot *)lx->fd[a].obj)->qlen; return 0; }   /* FIONREAD */
         if (a < NFD && lx->fd[a].kind == FD_WIN) return axwin_ioctl(lx, &lx->fd[a], (uint32_t)b, c);
         if (a < NFD && lx->fd[a].kind == FD_SND) { long r = snd_ioctl(lx->fd[a].obj, (uint32_t)b, c, lx->fd[a].flags & 04000); return r < 0 ? E(-r) : (uint64_t)r; }
         if (a < NFD && lx->fd[a].kind == FD_INET) {
@@ -2608,6 +2732,43 @@ static uint64_t linux_syscall_(struct frame *f) {
         } else x->next = uptime_ns() + val;
         chan_wake();                                            /* (pollers look again, for the new deadline) */
         return 0;
+    }
+    case 253: case 294: {                                      /* inotify_init, inotify_init1 */
+        if (n == 294 && (a & ~(uint64_t)(04000 | 02000000))) return E(EINVAL_);   /* IN_NONBLOCK, IN_CLOEXEC */
+        struct inot *in = kmalloc(sizeof *in); if (!in) return E(ENOMEM_);
+        int k = fd_new(lx, 0); if (k < 0) { kfree(in); return E(EMFILE_); }
+        memset(in, 0, sizeof *in - INOT_QUEUE); in->refs = 1; in->next_wd = 1;
+        in->next = inots; inots = in; vfs_watch = linux_vfs_watch;
+        struct lfd *fd = &lx->fd[k]; memset(fd, 0, sizeof *fd);
+        fd->kind = FD_INOTIFY; fd->obj = in; fd->flags = n == 294 ? (int)a & 04000 : 0;
+        if (n == 294 && (a & 02000000)) fd->cloexec = true;
+        return k;
+    }
+    case 254: {                                                /* inotify_add_watch(fd, path, mask) */
+        if (a >= NFD || lx->fd[a].kind != FD_INOTIFY) return a < NFD && lx->fd[a].kind ? E(EINVAL_) : E(EBADF_);
+        struct inot *in = lx->fd[a].obj; uint32_t mask = (uint32_t)c;
+        if (!(mask & IN_ALL_EVENTS_) || ((mask & IN_MASK_ADD_) && (mask & IN_MASK_CREATE_))) return E(EINVAL_);
+        char p[200], full[200]; struct dunc_stat st;
+        if (!ustr(p, b, sizeof p)) return E(EFAULT_);
+        path_join(lx->cwd, p, full, sizeof full);
+        if (vfs_stat(full, &st) != FS_OK) return E(ENOENT_);
+        if ((mask & IN_ONLYDIR_) && !st.is_dir) return E(ENOTDIR_);
+        for (int i = 0; i < in->nw; i++)
+            if (!strcmp(in->w[i].path, full)) {
+                if (mask & IN_MASK_CREATE_) return E(EEXIST_);
+                in->w[i].mask = (mask & IN_MASK_ADD_ ? in->w[i].mask : 0) | mask;
+                return (uint64_t)in->w[i].wd;
+            }
+        if (in->nw >= INOT_WATCHES) return E(ENOSPC_);
+        struct iwatch *w = &in->w[in->nw++];
+        w->wd = in->next_wd++; w->mask = mask; strncpy0(w->path, full, sizeof w->path);
+        return (uint64_t)w->wd;
+    }
+    case 255: {                                                /* inotify_rm_watch(fd, wd) */
+        if (a >= NFD || lx->fd[a].kind != FD_INOTIFY) return a < NFD && lx->fd[a].kind ? E(EINVAL_) : E(EBADF_);
+        struct inot *in = lx->fd[a].obj;
+        for (int i = 0; i < in->nw; i++) if (in->w[i].wd == (int)b) { inot_drop(in, i); return 0; }
+        return E(EINVAL_);
     }
     case 284: case 290: {                                      /* eventfd, eventfd2 */
         if (n == 290 && (b & ~(uint64_t)(1 | 04000 | 02000000))) return E(EINVAL_);   /* EFD_SEMAPHORE, NONBLOCK, CLOEXEC (Chromium checks) */

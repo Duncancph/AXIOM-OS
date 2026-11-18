@@ -21,6 +21,9 @@ static struct vnode *root;
 static struct mount mounts[NMOUNT];
 static volatile int lock_owner;
 static int lock_depth;
+void (*vfs_watch)(int what, const char *path, const char *to, bool dir);
+static int watch_quiet;                        /* (inside a rename across volumes: its copy and delete aren't reported) */
+#define WATCH(w, p, t, d) do { if (vfs_watch && !watch_quiet) vfs_watch(w, p, t, d); } while (0)
 
 /* A simple lock that yields to other tasks while waiting (file operations on USB drives sleep). */
 static void lock(void) {
@@ -223,6 +226,7 @@ int vfs_set_mtime(const char *path, int64_t when) {
     int r;
     if (m) r = m->ops->set_mtime ? m->ops->set_mtime(m->vol, rel, when) : FS_OK;   /* (no dates kept: nothing to do) */
     else r = walk(&p, p.n) ? FS_OK : FS_ENOENT;
+    if (r == FS_OK) WATCH(VW_ATTRIB, path, 0, false);
     unlock();
     return r;
 }
@@ -263,8 +267,9 @@ long vfs_read(const char *path, void *buf, uint64_t off, uint64_t len) {
 }
 
 long vfs_write(const char *path, const void *buf, uint64_t len) {
-    struct path p; char rel[PATH_MAX_];
+    struct path p; char rel[PATH_MAX_]; struct dunc_stat was;
     if (!parse(path, &p) || p.n == 0 || !valid_name(p.c[p.n - 1])) return FS_EINVAL;
+    bool existed = vfs_watch && !watch_quiet && vfs_stat(path, &was) == FS_OK;
     lock();
     long r;
     struct mount *m = route(&p, rel, sizeof rel);
@@ -276,7 +281,7 @@ long vfs_write(const char *path, const void *buf, uint64_t len) {
         else if (strlen(p.c[p.n - 1]) >= sizeof d->name) r = FS_EINVAL;          /* (names in memory: up to 63) */
         else r = ram_write(d, p.c[p.n - 1], buf, len);
     }
-    if (r >= 0) { r = (long)len; notify_changed(); }
+    if (r >= 0) { r = (long)len; notify_changed(); if (!existed) WATCH(VW_CREATE, path, 0, false); WATCH(VW_MODIFY, path, 0, false); }
     unlock();
     return r;
 }
@@ -287,6 +292,7 @@ long vfs_pwrite(const char *path, const void *buf, uint64_t off, uint64_t len) {
     lock();
     struct mount *m = route(&p, rel, sizeof rel);
     long r = m && m->ops->pwrite ? m->ops->pwrite(m->vol, rel, buf, off, len) : FS_EINVAL;
+    if (r >= 0) WATCH(VW_MODIFY, path, 0, false);
     unlock();
     return r;
 }
@@ -314,7 +320,7 @@ long vfs_append(const char *path, const void *buf, uint64_t len) {
             }
         }
     }
-    if (r >= 0) notify_changed();
+    if (r >= 0) { notify_changed(); WATCH(VW_MODIFY, path, 0, false); }
     unlock();
     return r;
 }
@@ -335,6 +341,7 @@ int vfs_mkdir(const char *path) {
         else if (!mknode(d, p.c[p.n - 1], true)) r = FS_ENOSPC;
     }
     if (r == FS_OK && root && root->child) notify_changed();
+    if (r == FS_OK) WATCH(VW_CREATE, path, 0, true);
     unlock();
     return r;
 }
@@ -343,13 +350,14 @@ int vfs_delete(const char *path) {
     struct path p; char rel[PATH_MAX_];
     if (!parse(path, &p) || p.n == 0) return FS_EINVAL;
     lock();
-    int r = FS_OK;
+    int r = FS_OK; bool was_dir = false;
     struct mount *m = route(&p, rel, sizeof rel);
     if (m) {
         if (is_mount_root(m, &p)) r = FS_EINVAL;
         else {
             struct dunc_stat st;
             r = m->ops->stat(m->vol, rel, &st);
+            was_dir = r == FS_OK && st.is_dir;
             if (r == FS_OK && st.is_dir) {          /* delete contents first */
                 struct vfs_dirent *ents = kmalloc(sizeof(struct vfs_dirent) * 128);   /* (full names: a long one cut short couldn't be deleted) */
                 if (!ents) r = FS_ENOSPC;
@@ -369,9 +377,9 @@ int vfs_delete(const char *path) {
         struct vnode *v = walk(&p, p.n);
         if (!v) r = FS_ENOENT;
         else if (p.n == 1 && (!strcmp(v->name, "home") || !strcmp(v->name, "apps") || !strcmp(v->name, "system"))) r = FS_EROFS;
-        else { unlink_node(v); free_tree(v); }
+        else { was_dir = v->dir; unlink_node(v); free_tree(v); }
     }
-    if (r == FS_OK) notify_changed();
+    if (r == FS_OK) { notify_changed(); WATCH(VW_DELETE, path, 0, was_dir); }
     unlock();
     return r;
 }
@@ -423,7 +431,8 @@ int vfs_rename(const char *from, const char *to) {
     lock();
     int r;
     struct mount *ma = route(&a, ra, sizeof ra), *mb = route(&b, rb, sizeof rb);
-    struct dunc_stat st;
+    struct dunc_stat st, sf;
+    bool from_dir = vfs_stat(from, &sf) == FS_OK && sf.is_dir;
     if (vfs_stat(to, &st) == FS_OK) r = FS_EEXIST;
     else if (is_mount_root(ma, &a) || is_mount_root(mb, &b)) r = FS_EROFS;
     else if (ma && ma == mb) r = ma->ops->rename(ma->vol, ra, rb);
@@ -443,10 +452,12 @@ int vfs_rename(const char *from, const char *to) {
             r = FS_OK;
         }
     } else {   /* across volumes: copy, then delete the original */
+        watch_quiet++;
         r = copy_tree(from, to);
         if (r == FS_OK) r = vfs_delete(from);
+        watch_quiet--;
     }
-    if (r == FS_OK) notify_changed();
+    if (r == FS_OK) { notify_changed(); WATCH(VW_RENAME, from, to, from_dir); }
     unlock();
     return r;
 }

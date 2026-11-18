@@ -21,6 +21,11 @@ struct fs_ops {
     long (*pwrite)(void *vol, const char *rel, const void *buf, uint64_t off, uint64_t len);   /* in place (may be 0) */
 };
 
+/* Changes to files, as they happen (Linux programs' inotify): when set, called after each change that worked,
+ * with the path as given (to: a rename's new path; dir: the path is a folder). A rename across volumes is one
+ * VW_RENAME, not the copy and delete it's made of. */
+enum { VW_CREATE = 1, VW_MODIFY, VW_DELETE, VW_RENAME, VW_ATTRIB };
+extern void (*vfs_watch)(int what, const char *path, const char *to, bool dir);
 int64_t vfs_mtime(const char *path);
 int  vfs_set_mtime(const char *path, int64_t when);   /* FS_OK, or FS_EROFS where dates aren't kept */                 /* when a file last changed (Unix seconds), <0 if not known */
 int  vfs_mount(const char *label, const char *kind, const struct fs_ops *ops, void *vol, char *path_out);
