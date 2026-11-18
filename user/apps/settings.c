@@ -739,6 +739,30 @@ static void pk_size(long b, char *o, int n) {             /* 1.2 MB / 840 KB */
     else ksnprintf(o, n, "%ld MB", (b + (1 << 19)) >> 20);
 }
 static int pk_rows(void) { return (WH - PK_TOP - 56) / PK_ROW; }
+/* the list's scroll bar: where its thumb is (for drawing, dragging and clicking above or below it) */
+#define PK_BAR_X (WW - 26)
+static void pk_thumb(int *ty, int *th) {
+    int rows = pk_rows(), track = rows * PK_ROW;
+    *th = npkg > rows ? track * rows / npkg : track; if (*th < 40) *th = 40;
+    *ty = PK_TOP + (npkg > rows ? (track - *th) * pk_scroll / (npkg - rows) : 0);
+}
+static void pk_clamp(void) { int m = npkg - pk_rows(); if (pk_scroll > m) pk_scroll = m; if (pk_scroll < 0) pk_scroll = 0; }
+static int pk_drag = -1;                                       /* dragging the thumb: where it was grabbed (y within it) */
+/* a press on the scroll bar: drag the thumb, or a page up or down. true if it was on the bar */
+static bool pk_bar_down(int x, int y) {
+    int rows = pk_rows();
+    if (npkg <= rows || x < PK_BAR_X - 10 || x > PK_BAR_X + 18 || y < PK_TOP || y > PK_TOP + rows * PK_ROW) return false;
+    int ty, th; pk_thumb(&ty, &th);
+    if (y >= ty && y < ty + th) pk_drag = y - ty;
+    else { pk_scroll += y < ty ? -rows : rows; pk_clamp(); }
+    return true;
+}
+static void pk_bar_move(int y) {
+    if (pk_drag < 0) return;
+    int rows = pk_rows(), ty, th; pk_thumb(&ty, &th);
+    int span = rows * PK_ROW - th; if (span < 1) span = 1;
+    pk_scroll = ((y - pk_drag - PK_TOP) * (npkg - rows) + span / 2) / span; pk_clamp();
+}
 static void pk_fit(const struct font *f, const char *s, int maxw, char *out, int n) {   /* cut with "..." to fit */
     strncpy0(out, s, n);
     if (gfx_text_width(f, out) <= maxw) return;
@@ -781,9 +805,10 @@ static void draw_apps(void) {
             else button(x + w - 132, cy + 15, 116, q->have[0] ? "Update" : "Install", BTN_PRIMARY, H_PKG + i, pk_busy >= 0);
         }
     }
-    if (npkg > rows) {                                         /* scroll bar */
-        int th = rows * PK_ROW * rows / npkg, ty = PK_TOP + (rows * PK_ROW - th) * pk_scroll / (npkg - rows);
-        gfx_rrect(&a.c, WW - 22, ty, 4, th, 2, 0x3A3A36, 255);
+    if (npkg > rows) {                                         /* scroll bar: drag it, or click above or below it */
+        int ty, th; pk_thumb(&ty, &th);
+        gfx_rrect(&a.c, PK_BAR_X, PK_TOP, 8, rows * PK_ROW - 8, 4, 0x1E1E1C, 255);
+        gfx_rrect(&a.c, PK_BAR_X, ty, 8, th - 8, 4, pk_drag >= 0 ? 0x6A6A64 : 0x4A4A46, 255);
     }
     if (pk_msg[0]) { pk_fit(&font_ui, pk_msg, w, t, sizeof t); label(x, PK_TOP + rows * PK_ROW + 18, pk_col, t); }
 }
@@ -1160,6 +1185,11 @@ static void click(int id, int mx) {
 
 static void key(int k) {
     if (confirm_disk >= 0) { if (k == 27) confirm_disk = -1; return; }
+    if (sect == S_APPS && (k == KEY_DOWN || k == KEY_UP || k == KEY_PGDN || k == KEY_PGUP || k == KEY_HOME || k == KEY_END)) {
+        int rows = pk_rows();
+        pk_scroll += k == KEY_DOWN ? 1 : k == KEY_UP ? -1 : k == KEY_PGDN ? rows : k == KEY_PGUP ? -rows : k == KEY_HOME ? -1000 : 1000;
+        pk_clamp(); return;
+    }
     if (sect == S_TIME && (k == KEY_DOWN || k == KEY_UP || k == KEY_PGDN || k == KEY_PGUP)) {
         list_scroll += k == KEY_DOWN ? 1 : k == KEY_UP ? -1 : k == KEY_PGDN ? 9 : -9;
         if (list_scroll > nlist - 9) list_scroll = nlist - 9;
@@ -1209,6 +1239,9 @@ int main(void) {
             continue;
         }
         if (e.type == EV_CLOSE) break;
+        if (sect == S_APPS && pk_drag >= 0 && e.type == EV_MOUSE_MOVE) { pk_bar_move(e.y); draw(); continue; }
+        if (e.type == EV_MOUSE_UP && pk_drag >= 0) { pk_drag = -1; draw(); continue; }
+        if (sect == S_APPS && e.type == EV_MOUSE_DOWN && e.button == 1 && pk_bar_down(e.x, e.y)) { draw(); continue; }
         if (e.type == EV_MOUSE_MOVE || e.type == EV_MOUSE_LEAVE) {
             int h = e.type == EV_MOUSE_MOVE ? hit_at(e.x, e.y) : -1;
             if (h != hover) { hover = h; draw(); }
