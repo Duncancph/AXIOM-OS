@@ -111,6 +111,7 @@ with true multitasking and memory protection between apps.
 |---|---|
 | editor 0.4 | Text editor: line numbers, selection (Shift+arrows, mouse), copy/cut/paste, select all, save / save as, UTF-8 files, unsaved-changes prompt (`edit <file>` in CMD, or double-click a file in Files) |
 | clock 1.0 | Analog and digital clock |
+| merrow 1.0 | **Merrow Lake Drainage**, a 3D game (a native remake of Duncan Interactive's Unity game, drawn by its own software 3D renderer: z-buffer, Gouraud shading, fog). Drain a five-million-gallon mountain lake by bucket, tank and pumps; sell the water, buy upgrades, shut the three creeks, cap the springs that burst open on the lakebed, find sixteen things the water hid, explore six buildings and five shore secrets; day and night, weather, ducks and fish; pull the plug, find the Merrow Gate in the cave below, and cross into the Drowned Merrow and the Other Merrow for the journal pages, the Still Room and its two endings. Saves to `/home/.merrow`. Keys: W walks/stops, A/D turn, E uses, L logbook, M map, Esc menu; or hold the mouse button to walk and steer |
 
 ## Updates over the internet
 
@@ -256,7 +257,7 @@ user/lib         libdunc: app runtime (system calls, windows, UI widgets, HTTP/H
   crypto/          SHA-2, HMAC/HKDF, AES-GCM, ChaCha20-Poly1305, X25519, big numbers, RSA, ECDSA/ECDH,
                    X.509 certificates, TLS 1.3 client
 tests/           host-side tests (make test); tests/tls has the TLS test matrix
-user/apps        the apps (editor.c, clock.c and web.c are clan packages, listed in repo/index.txt);
+user/apps        the apps (editor.c, clock.c, web.c and merrow/ are clan packages, listed in repo/index.txt);
                  web/ holds the browser's HTML parser, CSS engine and layout (tests/test_web.c, tests/web/)
 rootfs/          files copied onto the system disk at start-up
 ```
