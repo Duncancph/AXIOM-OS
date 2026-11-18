@@ -365,8 +365,8 @@ static void run(char *line) {
         for (int i = 0; i < n; i++) { print("  %-10s ", ap[i].id); puts_c(ap[i].name, C_DIM); if (ap[i].installed) puts_c("  (clan)", C_GOLD); putch('\n'); }
     }
     else if (!strcmp(line, "open") || !strcmp(line, "run") || !strcmp(line, "start")) {
-        char app[32], rest[200] = "", full[256] = "";
-        int k = 0; while (arg[k] && arg[k] != ' ' && k < 31) { app[k] = arg[k]; k++; } app[k] = 0;
+        char app[256], rest[200] = "", full[256] = "";   /* (app: an app's id or a program's path, which can be long) */
+        int k = 0; while (arg[k] && arg[k] != ' ' && k < (int)sizeof app - 1) { app[k] = arg[k]; k++; } app[k] = 0;
         if (arg[k] == ' ') {
             strncpy0(rest, arg + k + 1, sizeof rest);
             bool is_url = false; for (const char *s = rest; *s; s++) if (s[0] == ':' && s[1] == '/' && s[2] == '/') is_url = true;
