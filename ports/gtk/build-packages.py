@@ -8,13 +8,15 @@ Both unpack into AXIOM's Linux folder (root=yes): lib/..., usr/share/..., as on 
             en_GB.UTF-8 locale, and GTK's demo apps (its dock entry)
   and the apps in APPS below (each requires gtk3): Mousepad, AbiWord, Gnumeric, Aisleriot, Mines, Evince, Ristretto,
   Galculator, Thunar, Geany, Iagno
-  qt5       Qt 5 for Qt apps (requires gtk3): its libraries and the Wayland, image and icon plugins
+  qt5       Qt 5 for Qt apps (requires gtk3): its libraries, the Wayland, image and icon plugins, and qt5-demo
+            (qt5-demo.cpp: a gallery of Qt's widgets, its dock entry)
   and the Qt apps in APPS (each requires qt5): FeatherPad, SpeedCrunch
 
   python3 ports/gtk/build-packages.py <out-dir> [app...]   -> <out-dir>/<name>.tar.gz and the staging folders
 Then sign each with tools/make-package.py (root=yes, requires=gtk3 for the apps) and publish. Build them all
 together: each carries the machine's compiled GSettings schemas, which must include every app's.
-Needs: libgtk-3-bin, librsvg2-common (the SVG loader), locales, and the apps installed."""
+Needs: libgtk-3-bin, librsvg2-common (the SVG loader), locales, the apps installed, and for qt5: qtwayland5,
+qt5-image-formats-plugins, libqt5svg5, qtbase5-dev and g++."""
 import gzip, os, re, shutil, subprocess, sys, tarfile
 
 OUT = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "/tmp/axiom-gtk")
@@ -105,6 +107,11 @@ def qt5(base):
     stage = os.path.join(OUT, "qt5"); shutil.rmtree(stage, ignore_errors=True)
     plugins = [os.path.join("/" + QT_PLUGINS, f) for f in QT_PLUGIN_FILES]
     for pl in plugins: put(stage, pl, os.path.join(QT_PLUGINS, os.path.relpath(pl, "/" + QT_PLUGINS)))
+    demo = os.path.join(stage, "usr/bin/qt5-demo")                    # its own program: a gallery of Qt's widgets
+    os.makedirs(os.path.dirname(demo), exist_ok=True)
+    flags = subprocess.run(["pkg-config", "--cflags", "--libs", "Qt5Widgets"], capture_output=True, text=True, check=True).stdout.split()
+    subprocess.run(["g++", "-O2", "-fPIC", "-s", os.path.join(os.path.dirname(os.path.abspath(__file__)), "qt5-demo.cpp"),
+                    "-o", demo] + flags, check=True)
     qtlibs = [os.path.realpath("/lib/x86_64-linux-gnu/" + l) for l in QT_LIBS]
     for l, real in zip(QT_LIBS, qtlibs): put(stage, real, os.path.join(LIB, l))     # (the libraries themselves, then
     libs(stage, plugins + qtlibs, exclude=base)                                       # what they and the plugins need)
