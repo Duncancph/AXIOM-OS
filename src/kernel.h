@@ -319,6 +319,7 @@ struct task {
     char *capture; size_t cap_len, cap_max;
     char arg[256];             /* start-up argument (e.g. a file to open) */
     char appid[24];
+    uint64_t launched_ms;      /* an installed (Linux) app started from its app entry: when (to say if it ends at once) */
     bool idle;                 /* a core's idle task */
     uint32_t alarm_ticks;      /* SYS_ALARM: timer ticks of the app's own running time left, 0 = none */
     uint64_t alarm_fn;

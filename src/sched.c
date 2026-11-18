@@ -75,9 +75,15 @@ int task_spawn_arg(const char *app, const char *arg) {
         if (!argc) return -1;
         argv[argc] = 0;
         int pid = linux_spawn(argv[0], argc, argv, 0);
-        if (pid < 0) return -1;
+        if (pid < 0) {                                          /* say why, rather than nothing happening */
+            struct dunc_stat st; char m[200];
+            if (vfs_stat(argv[0], &st) != FS_OK) ksnprintf(m, sizeof m, "It couldn't start: its program (%s) is missing. Install it again from Settings > Apps.", argv[0]);
+            else ksnprintf(m, sizeof m, "It couldn't start (details: 'log' in CMD). Installing it again from Settings > Apps may help.");
+            desktop_notify(ae->name, m);
+            return -1;
+        }
         for (int i = 0; i < MAX_TASKS; i++)                     /* the dock shows it as this app */
-            if (tasks[i].state && tasks[i].pid == pid) { strncpy0(tasks[i].appid, ae->id, sizeof tasks[i].appid); tasks[i].app = tasks[i].appid; strncpy0(tasks[i].name, ae->name, sizeof tasks[i].name); }
+            if (tasks[i].state && tasks[i].pid == pid) { strncpy0(tasks[i].appid, ae->id, sizeof tasks[i].appid); tasks[i].app = tasks[i].appid; strncpy0(tasks[i].name, ae->name, sizeof tasks[i].name); tasks[i].launched_ms = uptime_ms(); }
         return pid;
     }
     const uint8_t *img = 0; uint64_t img_len = 0; void *loaded = 0;
@@ -490,6 +496,11 @@ void task_exit(int code) {
     struct task *t = current;
     if (t->user && t->proc && !t->proc->exit_set) { t->proc->exit_code = code; t->proc->exit_set = true; }   /* (what wait4 reports) */
     if (t->user) kprintf("[sched] '%s' (pid %d) exited with code %d\n", t->name, t->pid, code);
+    if (t->user && t->proc == t && t->launched_ms && code != -1 && uptime_ms() - t->launched_ms < 20000) {   /* (-1: it crashed, which says so) */   /* an app that ended by itself at once */
+        char m[200]; ksnprintf(m, sizeof m, "It closed by itself %lu seconds after starting (exit code %d). Details: 'log' in CMD.",
+                               (unsigned long)((uptime_ms() - t->launched_ms) / 1000), code);
+        desktop_notify(t->name, m);
+    }
     if (t->user) kill_threads(t);                         /* a program ends with all its threads */
     wm_task_exit(t);
     net_task_exit(t);
