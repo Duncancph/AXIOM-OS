@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 194
-notes Installed apps (like Vertex) now say why when they don't open.
-file kernel b194/thane.elf.gz 12390816 31010021ca3caec0dbb7cdd3d335a3e93d1299ff4d3c01b3950a773ee0634c4e
-file initrd b194/initrd.tar.gz 3604480 629ecf31255b050c988df5d5e3fb73cdd8de3615637090a9fa8f9cf4e379a705
-file bootx64 b194/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b194/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3046022100e51e3652060a66018f4ccf9ee839f65586d6aea4bf79b0b6bb31c11d6d30dead022100e773a784d66c999464b6bd175a3d4f4980cd55a1c6d257b1e92a638474d84728
+build 195
+notes Vertex works again alongside the GTK and Qt apps: they now share one set of Linux libraries. Update GTK 3 in Settings > Apps to get it.
+file kernel b195/thane.elf.gz 12390864 46fed09b5a1fe5c4d6c8799b079af7e28e06dbbada02e2b35c2addb28b681705
+file initrd b195/initrd.tar.gz 3604480 141c1ee69b1080f9e407afeb91ff5cd2797463ed072843d97863e44b344fa4b3
+file bootx64 b195/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b195/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3044022075036bec19491da3c95528b3329a7a8c112f7b9998d16c94964561cdb0454e1802201f450e5fa906636e8d52b634be00fc4826fe72916332a29908e9d3c63d8b3ee3
