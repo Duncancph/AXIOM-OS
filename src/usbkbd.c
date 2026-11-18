@@ -45,6 +45,31 @@ void usbkbd_attach(struct usb_dev *d, int iface) {
  * byte 0 buttons, 1 dx, 2 dy, [3 wheel]. */
 struct hidmouse { bool ok; int id, bo, bn, xo, xs, yo, ys, wo, ws; };
 static struct hidmouse hm[8];                                   /* by the device's slot */
+/* for the 'mouse' command: each mouse's report descriptor, and the last reports with what was read from them */
+static struct { int slot, rlen; uint8_t rd[256]; } mdesc[4]; static int nmdesc;
+static struct { int slot, len, dx, dy, bt, w; uint8_t r[16]; } mlast[8]; static int mlast_n;
+static void mouse_note(int slot, const uint8_t *r, int len, int dx, int dy, int bt, int w) {
+    int i = mlast_n++ % 8; mlast[i].slot = slot; mlast[i].len = len; mlast[i].dx = dx; mlast[i].dy = dy; mlast[i].bt = bt; mlast[i].w = w;
+    memcpy(mlast[i].r, r, len < 16 ? len : 16);
+}
+void usbmouse_info(void) {
+    for (int k = 0; k < nmdesc; k++) {
+        struct hidmouse *m = &hm[mdesc[k].slot & 7];
+        kprintf("USB mouse (slot %d): %s; report %d, buttons %d@%d, X %d@%d, Y %d@%d, wheel %d@%d (bits@offset)\n  descriptor (%d bytes):",
+                mdesc[k].slot, m->ok ? "report protocol" : "boot protocol", m->id, m->bn, m->bo, m->xs, m->xo, m->ys, m->yo, m->ws, m->wo, mdesc[k].rlen);
+        for (int i = 0; i < mdesc[k].rlen && i < 256; i++) kprintf("%s%02x", i % 32 ? " " : "\n  ", mdesc[k].rd[i]);
+        kprintf("\n");
+    }
+    if (!nmdesc) kprintf("No USB mouse.\n");
+    int n = mlast_n < 8 ? mlast_n : 8;
+    kprintf("The last %d reports (newest last):\n", n);
+    for (int j = 0; j < n; j++) {
+        int i = (mlast_n - n + j) % 8;
+        kprintf("  slot %d, %2d bytes:", mlast[i].slot, mlast[i].len);
+        for (int b = 0; b < mlast[i].len && b < 16; b++) kprintf(" %02x", mlast[i].r[b]);
+        kprintf("   -> move %d,%d buttons %d wheel %d\n", mlast[i].dx, mlast[i].dy, mlast[i].bt, mlast[i].w);
+    }
+}
 
 /* the input fields of a report descriptor: the first report with relative X and Y, and its buttons and wheel */
 static bool hid_parse_mouse(const uint8_t *d, int n, struct hidmouse *m) {
@@ -102,9 +127,12 @@ static void on_mouse(struct usb_dev *d, int dci, int cc, uint32_t len) {
         int n = (int)len;
         if (m->id > 0) { if (n < 1 || r[0] != m->id) { usb_queue_in(d, dci, on_mouse); return; } r++; n--; }   /* (another report) */
         int bt = hid_field(r, n, m->bo, m->bn, false);
-        mouse_push(hid_field(r, n, m->xo, m->xs, true), hid_field(r, n, m->yo, m->ys, true), bt & 7, -hid_field(r, n, m->wo, m->ws, true));
+        int dx = hid_field(r, n, m->xo, m->xs, true), dy = hid_field(r, n, m->yo, m->ys, true), w = -hid_field(r, n, m->wo, m->ws, true);
+        mouse_note(d->slot, d->ep_buf[dci], (int)len, dx, dy, bt, w);
+        mouse_push(dx, dy, bt & 7, w);
     } else if (len >= 3) {
         const int8_t *b = (const int8_t *)r;
+        mouse_note(d->slot, r, (int)len, b[1], b[2], b[0] & 7, len >= 4 ? -b[3] : 0);
         mouse_push(b[1], b[2], b[0] & 7, len >= 4 ? -b[3] : 0);
     }
     usb_queue_in(d, dci, on_mouse);
@@ -122,7 +150,9 @@ void usbmouse_attach(struct usb_dev *d, int iface) {
         if (p[1] == 0x21 && cur == iface && p[0] >= 9 && p[6] == 0x22) { rlen = p[7] | p[8] << 8; break; }
     }
     static uint8_t rd[1024];
-    if (rlen > 0 && rlen <= (int)sizeof rd && usb_control(d, 0x81, 6, 0x2200, iface, (uint16_t)rlen, rd) >= 0 && hid_parse_mouse(rd, rlen, m))
+    bool got = rlen > 0 && rlen <= (int)sizeof rd && usb_control(d, 0x81, 6, 0x2200, iface, (uint16_t)rlen, rd) >= 0;
+    if (nmdesc < 4) { mdesc[nmdesc].slot = d->slot; mdesc[nmdesc].rlen = got ? rlen : 0; if (got) memcpy(mdesc[nmdesc].rd, rd, rlen < 256 ? rlen : 256); nmdesc++; }
+    if (got && hid_parse_mouse(rd, rlen, m))
         usb_control(d, 0x21, 0x0B, 1, iface, 0, 0);             /* SET_PROTOCOL(report) */
     else usb_control(d, 0x21, 0x0B, 0, iface, 0, 0);            /* SET_PROTOCOL(boot) */
     LOG_INFO("USB mouse: %s\n", m->ok ? (m->ws ? "report protocol, with a wheel" : "report protocol, no wheel") : "boot protocol");

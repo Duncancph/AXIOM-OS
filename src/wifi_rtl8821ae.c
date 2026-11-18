@@ -144,9 +144,15 @@ static bool tx_frame(int q, const uint8_t *f, int len) {
 }
 
 /* the next received frame, or 0: *len, and the PHY status (signal) */
+static int rx_resyncs;
 static uint8_t *rx_take(int *len, int *dbm, int *rate) {
     struct rxdesc *d = &rxd[rx_next];
-    if (d->d[0] & (1u << 31)) return 0;
+    if (d->d[0] & (1u << 31)) {                              /* nothing here: if the card filled another slot, we and it
+                                                                are out of step (it then waits on that one): go there */
+        int k = 1; while (k < NRXD && (rxd[(rx_next + k) % NRXD].d[0] & (1u << 31))) k++;
+        if (k == NRXD) return 0;
+        rx_next = (rx_next + k) % NRXD; rx_resyncs++; d = &rxd[rx_next];
+    }
     uint32_t w0 = d->d[0];
     int plen = w0 & 0x3FFF, drv = ((w0 >> 16) & 0xF) * 8, shift = (w0 >> 24) & 3;
     bool crc_bad = w0 & (1u << 14), physt = w0 & (1u << 26);
@@ -583,6 +589,7 @@ static void scan_report(bool show) {
         char l[200]; int o = 0;
         for (int ch = 1; ch <= 13; ch++) o += ksnprintf(l + o, sizeof l - o, " %d:%d(%d)@%d", ch, ch_frames[ch], ch_beacons[ch], ch_rf[ch]);
         add("per channel, frames(beacons)@radio's channel:%s", l);
+        add("receive ring: next slot %d, re-synchronised %d times so far", rx_next, rx_resyncs);
     }
     if (!scan_frames && !sim) add("Nothing at all was received: the radio isn't hearing yet. (RCR %08x, RX DMA %02x, CR %04x, RF 0x18 %05x)", r32(REG_RCR), r8(0x0286), r16(REG_CR), rf_read(0x18));
     if (show) kprintf("%s", report);
