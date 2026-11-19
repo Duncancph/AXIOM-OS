@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 212
-notes Wi-Fi: the 'wifi' command shows the last attempt to join; 'log wifi' shows only the Wi-Fi lines.
-file kernel b212/thane.elf.gz 12500192 9317254b1c6926b1dd844c43a7e966dda403df785a836e0424155590cc43e9b9
-file initrd b212/initrd.tar.gz 3624960 f5664984b721b29b7d487bf104e187f447010942e37e71f717bf1d7ab5e575bf
-file bootx64 b212/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b212/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3046022100c4c3bbd2920be43745ff2316bf0d4c11af3d21b9d3c6a5af6141e54c757ba577022100a6cdd167525d8cf49ca2b29d48102c42a1780994481cb566d6c95fe56c356642
+build 213
+notes Fixes the machine check crashes: the graphics chip's own memory, which this PC's firmware lists as normal memory, is no longer used. New memmap command.
+file kernel b213/thane.elf.gz 12509112 20175f4a9e580f1ae989dd39cc37ffc9540e9106cab80fe70a793435b4e4b5c2
+file initrd b213/initrd.tar.gz 3635200 c9cb9192e809975d50d09d173a6dcfe6a43ecab2397025c113c8abc14b552c04
+file bootx64 b213/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b213/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304402202e1e0f7d1e1722169be39946c723b52650dd4274eaa0e3116a0e5840e5f0675d022056e3067eebd662f0866d3b25e25d6c8b7a5d307a0ac884cdc366b01138ed4e4f
