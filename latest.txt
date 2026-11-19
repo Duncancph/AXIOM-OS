@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 207
-notes Vertex no longer waits for the disk: files are written in the background (within a second) instead of on every write.
-file kernel b207/thane.elf.gz 12461104 6e1e8280b07c3ff8390ce8215abf0e1b270780c7c387cc4a8c8965f793ad09a9
-file initrd b207/initrd.tar.gz 3614720 21b32ea6b620f8917420cc36edfd8f93bbf578e7f62fba93b6c39860c3aa6b37
-file bootx64 b207/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b207/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022100e5b6285d57d85f88c6903df54cbef0e2c9669a718ad98b00310573718ab831cf02204640044c4d7292f4065553d4735e7b08442a2786fdede0d523665f0fb8d58511
+build 209
+notes Fixes the machine check crash in the desktop (and the restarts): copying no longer uses the instruction it happened in. A crash screen now shows the processor's error record.
+file kernel b209/thane.elf.gz 12494456 30b24fa78ec6e4d1916a80b5ead9f9ce74697da35a36f76aaf0774dde0ab89fc
+file initrd b209/initrd.tar.gz 3624960 97b87a3fff71862f616970365d6b5b378a32166bc1cbb2b768cba2d58a6d908b
+file bootx64 b209/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b209/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3046022100979ddd098e3ff27c1a397e87fe8e14dca591c209e3468e0800a244fd235246f3022100dbdf905a259c19c46d47a6990f50acea5d535a052fa54c532c7f50c893124aa2
