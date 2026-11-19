@@ -1,4 +1,5 @@
 #include "gfx.h"
+#include "str.h"
 typedef int bool;
 #include "../src/font8x16.h"
 #include "uifont_data.h"
@@ -118,7 +119,7 @@ void gfx_blit(struct canvas *c, int x, int y, const uint32_t *src, int w, int h,
     for (int j = y0; j < y1; j++) {
         const uint32_t *s = src + (j - y) * ss + (x0 - x);
         uint32_t *p = c->px + j * c->stride + x0;
-        for (int i = x0; i < x1; i++) *p++ = *s++;
+        if (x1 > x0) memcpy(p, s, (size_t)(x1 - x0) * 4);
     }
 }
 
@@ -181,6 +182,7 @@ void gfx_blit_rr(struct canvas *c, int x, int y, const uint32_t *src, int w, int
         const uint32_t *s = src + (j - y) * ss;
         uint32_t *p = c->px + j * c->stride;
         bool corner_row = j < ry + r || j >= ry + rh - r;
+        if (!corner_row) { memcpy(p + x0, s + (x0 - x), (size_t)(x1 - x0) * 4); continue; }   /* (most rows: one copy) */
         for (int i = x0; i < x1; i++) {
             if (corner_row && (i < rx + r || i >= rx + rw - r)) {
                 int cov = gfx_rr_cov(i, j, rx, ry, rw, rh, r);

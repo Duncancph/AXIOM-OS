@@ -35,7 +35,7 @@ static void unlock(void) { if (--lock_depth == 0) lock_owner = 0; }
 
 static void notify_changed(void) {
     struct dunc_event e = { EV_FILES_CHANGED, 0, 0, 0, 0, 0 };
-    for (int i = 0; i < MAX_TASKS; i++)
+    for (int i = 0; i < task_hi; i++)
         if (tasks[i].state && tasks[i].state != PS_ZOMBIE && tasks[i].user) event_push(&tasks[i], &e);
 }
 

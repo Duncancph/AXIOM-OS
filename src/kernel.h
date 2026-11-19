@@ -305,14 +305,16 @@ long elf_load(uint64_t *pml4, const uint8_t *img, uint64_t size, uint64_t *entry
 #define EVQ_SIZE 64
 struct task {
     int pid, state;            /* state: 0 = free slot, else PS_* */
-    bool user, killed, waiting_event;
+    bool user, idle;           /* (what schedule() reads of every task is kept together here: one cache line) */
+    uint64_t wake_at, rq;      /* wake_at: when a sleep ends; rq: when it last became ready (the oldest runs first) */
+    bool killed, waiting_event;
     int busy;                  /* inside a long kernel operation: defer kills */
     char name[32];
     const char *app;
     uint64_t rsp, kstack_top;
     uint8_t *kstack;
     uint64_t *pml4;
-    uint64_t wake_at, ticks, pages;
+    uint64_t ticks, pages;
     uint64_t heap_top;         /* end of the app's heap (starts at USER_HEAP) */
     struct dunc_event evq[EVQ_SIZE]; int evh, evt;
     int nwin;
@@ -321,11 +323,9 @@ struct task {
     char arg[256];             /* start-up argument (e.g. a file to open) */
     char appid[24];
     uint64_t launched_ms;      /* an installed (Linux) app started from its app entry: when (to say if it ends at once) */
-    bool idle;                 /* a core's idle task */
     uint32_t alarm_ticks;      /* SYS_ALARM: timer ticks of the app's own running time left, 0 = none */
     uint64_t alarm_fn;
     int cpu;                   /* the core it last ran on */
-    uint64_t rq;               /* when it last became ready (schedule runs the oldest first) */
     /* threads (SYS_THREAD): every thread of a program shares its memory (mm); proc is the program's first thread */
     struct mm *mm;
     struct task *proc;
@@ -347,6 +347,7 @@ struct frame {
     uint64_t vec, err, rip, cs, rflags, rsp, ss;
 };
 extern struct task tasks[MAX_TASKS];
+extern int task_hi;                     /* slots at and above this have never been used: loops over tasks stop there */
 void fpu_cpu_init(void);                        /* each core: let apps use SSE and AVX (sched.c) */
 void fpu_save(uint8_t *area);
 void fpu_restore(const uint8_t *area);
@@ -366,6 +367,7 @@ struct cpu {
     struct task *idle;
     int id; uint32_t apic_id;
     volatile bool bkl_held, started;
+    int prof_tag;                      /* what the next kernel lock taken on this core is for (prof) */
     uint64_t last_switch_tsc;
     uint64_t busy_us;                  /* time spent running tasks other than its idle one (Ctrl+\ dump) */
     uint64_t gdt[7] __attribute__((aligned(16)));
@@ -383,6 +385,15 @@ extern struct task *current;
 #else
 #define current (cpu_self()->cur)
 #endif
+#define PROF_LX 256                     /* prof tags: 0-255 interrupt vectors, then Linux system calls, then the rest */
+#define PROF_OTHER (PROF_LX + 512)
+#define PROF_TAGS (PROF_OTHER + 1)
+struct prof { volatile int on; uint64_t wait[MAX_CPUS], held[MAX_CPUS], idle[MAX_CPUS], locks[MAX_CPUS];
+              uint64_t tag_cyc[PROF_TAGS], tag_cnt[PROF_TAGS];
+              char kt_name[8][24]; uint64_t kt_cyc[8], kt_cnt[8]; };
+extern struct prof prof;
+void prof_run(int secs);
+void prof_kthread(struct task *t);
 void bkl_lock(void);
 void bkl_unlock(void);
 struct blockdev;

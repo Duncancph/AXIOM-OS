@@ -3,6 +3,7 @@
  * wallpaper, top bar, window frames and dock are drawn by that code. This file handles
  * window stacking, input, damage tracking and composition. */
 #include "kernel.h"
+uint64_t dprof[8];                                   /* (prof) the desktop loop's parts: input, housekeeping, reap, compose, unlocked copies */
 #include "../common/gfx.h"
 #include "../common/theme_highland.h"
 #include "font8x16.h"
@@ -194,15 +195,28 @@ static struct rect expand(struct rect r) {
     return r;
 }
 
+/* the top bar and the dock are redrawn whole, so damage touching them grows to cover them - unless it lies inside
+ * the content of the window on top there, which hides the dock: then only those pixels need redrawing (a browser
+ * window reaching down over the dock otherwise made every frame a full redraw of wallpaper, dock and frame) */
+static struct rect content_rect(struct window *w);
+static bool in_top_content(struct rect r) {
+    for (int z = nz - 1; z >= 0; z--) {
+        struct window *w = &wins[zorder[z]];
+        if (w->minimized || !overlap(frame_area(w), r)) continue;
+        return !w->popup && contains(content_rect(w), r);    /* (the first window over it decides) */
+    }
+    return false;
+}
+static struct rect expand_vis(struct rect r) { return in_top_content(r) && !overlap(r, bar_rect()) ? r : expand(r); }
 static void damage(int x, int y, int w, int h) {
     if (x < 0) { w += x; x = 0; }
     if (y < 0) { h += y; y = 0; }
     if (x + w > W) w = W - x;
     if (y + h > H) h = H - y;
     if (w <= 0 || h <= 0) return;
-    struct rect r = expand((struct rect){ x, y, w, h });
+    struct rect r = expand_vis((struct rect){ x, y, w, h });
     for (int i = 0; i < ndmg; i++)
-        if (overlap(dmg[i], r)) { r = expand(runion(r, dmg[i])); dmg[i] = dmg[--ndmg]; i = -1; }
+        if (overlap(dmg[i], r)) { r = expand_vis(runion(r, dmg[i])); dmg[i] = dmg[--ndmg]; i = -1; }
     if (ndmg == 32) { for (int i = 1; i < ndmg; i++) dmg[0] = runion(dmg[0], dmg[i]); ndmg = 1; dmg[0] = runion(dmg[0], r); return; }
     dmg[ndmg++] = r;
 }
@@ -219,7 +233,7 @@ static int app_index(const char *id) {
     return -1;
 }
 static bool app_running(int a) {
-    for (int i = 0; i < MAX_TASKS; i++)
+    for (int i = 0; i < task_hi; i++)
         if (tasks[i].state && tasks[i].state != PS_ZOMBIE && tasks[i].app && !strcmp(tasks[i].app, apps_get(a)->id)) return true;
     return false;
 }
@@ -325,7 +339,17 @@ static void cursor_paint(int cx, int cy, bool show) {
     }
 }
 
+/* Copying the finished frame to the screen needs nothing but the desktop's own back buffer and the screen, so it is
+ * done without the kernel lock: the other cores' programs carry on meanwhile (it was most of the time the lock was
+ * held while a browser scrolled). Taken back with interrupts off: an interrupt here would take a second ticket. */
+static bool flush_unlock(void) {
+    if (!sched_running || !cpu_self()->bkl_held) return false;
+    bkl_unlock(); return true;
+}
+static void flush_relock(bool did) { if (!did) return; __asm__ volatile("cli"); bkl_lock(); __asm__ volatile("sti"); }
 static void flush_rect(struct rect r) {
+    uint64_t ft0 = rdtsc();
+    bool unl = flush_unlock();
     if (scaled) {
         int x0 = r.x * dw / W - 1, x1 = ((r.x + r.w) * dw + W - 1) / W + 1, y0 = r.y * dh / H - 1, y1 = ((r.y + r.h) * dh + H - 1) / H + 1;
         if (x0 < 0) x0 = 0;
@@ -336,6 +360,7 @@ static void flush_rect(struct rect r) {
             volatile uint32_t *d = fb32 + (size_t)(oy + py) * fb_stride + ox;
             for (int px = x0; px < x1; px++) d[px] = fbcol(scaled_px(px, py));
         }
+        flush_relock(unl);
         int cx = mx * dw / W - cur_hx - 2, cy = my * dh / H - cur_hy - 2;
         if (cx < x1 && cx + cur_w + 4 > x0 && cy < y1 && cy + cur_rows + 4 > y0) cursor_paint(mx, my, true);
         return;
@@ -343,9 +368,12 @@ static void flush_rect(struct rect r) {
     for (int j = r.y; j < r.y + r.h; j++) {
         uint32_t *s = bb + j * W + r.x;
         volatile uint32_t *d = fb32 + (size_t)j * fb_stride + r.x;
-        if (fb_xrgb) for (int i = 0; i < r.w; i++) d[i] = s[i];
+        if (fb_xrgb) { void *dd = (void *)d, *ss = s; size_t n = (size_t)r.w;   /* (whole lines at once: write-combined) */
+                       __asm__ volatile("rep movsl" : "+D"(dd), "+S"(ss), "+c"(n) :: "memory"); }
         else for (int i = 0; i < r.w; i++) d[i] = fbcol(s[i]);
     }
+    flush_relock(unl);
+    if (prof.on) dprof[5] += rdtsc() - ft0;
     if (overlap(r, (struct rect){ mx - cur_hx, my - cur_hy, cur_w, cur_rows })) cursor_paint(mx, my, true);
 }
 
@@ -705,6 +733,24 @@ static void draw_keep(void) {
     }
 }
 
+/* A big window's pixels go into the back buffer without the kernel lock too: the buffer is pinned (remove_window and
+ * resizing wait until it isn't before freeing it), and interrupts stay off meanwhile (an interrupt here would wait for
+ * the lock, perhaps held by a core that waits for the pin). */
+static volatile const uint32_t *pinned;
+static uint64_t dp_t;
+static inline void dp(int k) { if (prof.on) { uint64_t t = rdtsc(); if (dp_t) dprof[k] += t - dp_t; dp_t = t; } else dp_t = 0; }
+static void unpin_wait(const uint32_t *b) { while (pinned == b && b) cpu_relax(); }
+static void blit_window_unlocked(struct canvas *c, int x, int y, const uint32_t *buf, int w, int h, int rx, int ry, int rw, int rh, int rad) {
+    bool can = sched_running && cpu_self()->bkl_held && (int64_t)(c->cx1 - c->cx0) * (c->cy1 - c->cy0) >= 65536;
+    if (!can) { gfx_blit_rr(c, x, y, buf, w, h, w, rx, ry, rw, rh, rad); return; }
+    __asm__ volatile("cli");
+    uint64_t t0 = rdtsc();
+    pinned = buf; bkl_unlock();
+    gfx_blit_rr(c, x, y, buf, w, h, w, rx, ry, rw, rh, rad);
+    pinned = 0; bkl_lock();
+    if (prof.on) dprof[4] += rdtsc() - t0;
+    __asm__ volatile("sti");
+}
 static void compose(struct rect r) {
     gfx_clip(&cv, r.x, r.y, r.w, r.h);
     if (screen_off) { gfx_fill(&cv, r.x, r.y, r.w, r.h, 0x000000); flush_rect(r); return; }
@@ -729,7 +775,7 @@ static void compose(struct rect r) {
         struct window *w = &wins[zorder[z]];
         if (w->minimized || !overlap(frame_area(w), r)) continue;
         if (!w->popup && contains(content_rect(w), intersect(r, frame_area(w))))
-            gfx_blit_rr(&cv, w->x + 1, w->y + TITLE, w->buf, w->w, w->h, w->w, w->x + 1, w->y + 1, fw(w) - 2, fh(w) - 2, HL_WIN_RADIUS - 1);
+            blit_window_unlocked(&cv, w->x + 1, w->y + TITLE, w->buf, w->w, w->h, w->x + 1, w->y + 1, fw(w) - 2, fh(w) - 2, HL_WIN_RADIUS - 1);
         else draw_window(zorder[z], r);
     }
     if (overlap(r, bar_rect())) {
@@ -797,6 +843,7 @@ static void remove_window(int idx) {
     int old = top_window();
     struct window *w = &wins[idx];
     damage_frame(w);
+    unpin_wait(w->buf);
     for (int i = 0; i < w->pages; i++) page_free((uint8_t *)w->buf + i * 4096);
     w->used = false;
     int k = 0;
@@ -885,6 +932,7 @@ static bool resize_buf(struct task *t, struct window *w, int cw, int ch) {
             nb[y * cw + x] = (x < w->w && y < w->h) ? w->buf[y * w->w + x] : HL_WIN_BG;
     damage_frame(w);
     if (w->uva) vm_unmap(t->pml4, w->uva, w->pages);           /* (uva 0: a Linux program's window, mapped by linux.c) */
+    unpin_wait(w->buf);
     for (int i = 0; i < w->pages; i++) page_free((uint8_t *)w->buf + i * 4096);
     if (w->uva) for (int i = 0; i < np; i++) vm_map(t->pml4, w->uva + i * 4096ULL, (uint64_t)nb + i * 4096ULL, true, false);
     w->buf = nb; w->pages = np; w->w = cw; w->h = ch;
@@ -1470,6 +1518,7 @@ void desktop_thread(void *arg) {
             if (now >= keep_until) { keep_until = 0; intelgfx_native_answer(false); }
             else if (now / 1000 != last_s) { last_s = now / 1000; damage_r(keep_rect()); }
         }
+        dp(7);
         ps2_poll();
         xhci_poll();
         int s;
@@ -1478,6 +1527,7 @@ void desktop_thread(void *arg) {
         while ((k = input_pop()) >= 0) handle_key(k);
         int dx, dy, b, wh;
         while (mouse_pop(&dx, &dy, &b, &wh)) handle_mouse(dx, dy, b, wh);
+        dp(0);
         for (int i = 0; i < MAX_WIN; i++) {                /* windows that asked to hear where they've moved to */
             struct window *w = &wins[i];
             if (!w->used || !w->move_events || (cx0(w) == w->sent_x && cy0(w) == w->sent_y)) continue;
@@ -1522,8 +1572,10 @@ void desktop_thread(void *arg) {
         for (int i = 0; i < MAX_WIN; i++)
             if (wins[i].used && wins[i].resizable && !wins[i].resize_sent && (wins[i].want_w != wins[i].w || wins[i].want_h != wins[i].h))
                 request_size(&wins[i], wins[i].want_w, wins[i].want_h);
+        dp(1);
         task_reap();
         hda_tick();
+        dp(2);
 
         int n = ndmg; struct rect todo[32];
         memcpy(todo, dmg, sizeof(struct rect) * n); ndmg = 0;
@@ -1532,6 +1584,7 @@ void desktop_thread(void *arg) {
             /* between pieces of redrawing (a playing video makes a lot of it), keep the mouse pointer moving */
             if (i + 1 < n) { ps2_poll(); xhci_poll(); int ddx, ddy, bb2, wh2; while (mouse_pop(&ddx, &ddy, &bb2, &wh2)) handle_mouse(ddx, ddy, bb2, wh2); }
         }
+        dp(3);
         task_sleep(screen_off ? 30 : n ? 4 : 8);             /* asleep: look at the keyboard and mouse less often */                           /* while the screen is changing, look at the mouse more often */
     }
 }

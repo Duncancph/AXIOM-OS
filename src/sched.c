@@ -6,6 +6,7 @@
 void kfree(void *p);
 
 struct task tasks[MAX_TASKS];
+int task_hi;
 volatile uint64_t sched_ticks;
 bool sched_running;
 static struct task *idle_task;
@@ -29,6 +30,7 @@ static struct task *alloc_task(const char *name) {
     for (int i = 0; i < MAX_TASKS; i++)
         if (!tasks[i].state) {
             struct task *t = &tasks[i];
+            if (i + 1 > task_hi) task_hi = i + 1;
             memset(t, 0, sizeof *t);
             t->pid = next_pid++;
             strncpy0(t->name, name, sizeof t->name);
@@ -86,7 +88,7 @@ int task_spawn_arg(const char *app, const char *arg) {
             desktop_notify(ae->name, m);
             return -1;
         }
-        for (int i = 0; i < MAX_TASKS; i++)                     /* the dock shows it as this app */
+        for (int i = 0; i < task_hi; i++)                     /* the dock shows it as this app */
             if (tasks[i].state && tasks[i].pid == pid) { strncpy0(tasks[i].appid, ae->id, sizeof tasks[i].appid); tasks[i].app = tasks[i].appid; strncpy0(tasks[i].name, ae->name, sizeof tasks[i].name); tasks[i].launched_ms = uptime_ms(); }
         return pid;
     }
@@ -224,7 +226,7 @@ struct task *task_fork(const struct frame *f, struct mm *m, uint64_t rsp) {
 }
 void task_start(struct task *t) { t->state = PS_READY; t->rq = ++rq_seq; }
 bool task_alive(int pid) {
-    for (int i = 0; i < MAX_TASKS; i++) if (tasks[i].state && tasks[i].state != PS_ZOMBIE && tasks[i].pid == pid) return true;
+    for (int i = 0; i < task_hi; i++) if (tasks[i].state && tasks[i].state != PS_ZOMBIE && tasks[i].pid == pid) return true;
     return false;
 }
 
@@ -245,7 +247,7 @@ long futex_wait(uint64_t addr, uint32_t val, int64_t timeout_ms) {
 }
 long futex_wake(struct mm *m, uint64_t addr, int n) {
     int k = 0;
-    for (int i = 0; i < MAX_TASKS && k < n; i++) {
+    for (int i = 0; i < task_hi && k < n; i++) {
         struct task *t = &tasks[i];
         if (t->state != PS_BLOCKED || t->futex_mm != m || t->futex_addr != addr || !m) continue;
         t->futex_woken = true; t->futex_mm = 0;
@@ -260,8 +262,12 @@ static void idle(void *arg) {
     for (;;) {
         __asm__ volatile("cli");
         bkl_unlock();
+        uint64_t t0 = prof.on ? rdtsc() : 0;
         __asm__ volatile("sti; hlt; cli");
-        bkl_lock();
+        if (t0) { cpu_self()->prof_tag = PROF_OTHER; bkl_lock(); int id = cpu_self()->id; extern uint64_t prof_last_wait[];
+                  prof.idle[id] += rdtsc() - t0; prof.wait[id] -= prof_last_wait[id] < prof.wait[id] ? prof_last_wait[id] : prof.wait[id]; }   /* (the wait
+                                                    for the lock after waking counts as idle: the core had nothing to do) */
+        else bkl_lock();
         schedule();
     }
 }
@@ -399,28 +405,28 @@ void schedule(void) {
     struct cpu *me = cpu_self();
     uint64_t now = uptime_ms();
     if (me->id == 0) { last_sched_ms = now; stall_reported = false; }
-    for (int i = 0; i < MAX_TASKS; i++) {
-        struct task *t = &tasks[i];
-        if ((t->state == PS_SLEEPING || t->state == PS_BLOCKED) && t->wake_at && now >= t->wake_at) {
-            t->state = PS_READY; t->wake_at = 0; t->rq = ++rq_seq;
-        }
-    }
-    int cur = current - tasks;
     /* first in, first out: the ready task that was woken (or stopped) longest ago, so threads run in the order
      * they were woken, as Linux programs expect (a thread woken by a message runs before one woken after it:
-     * Chromium's shutdown relies on that); the one running now goes after every ready one */
+     * Chromium's shutdown relies on that); the one running now goes after every ready one. One pass, which
+     * also wakes the sleepers whose time has come (this runs on every tick of every core: keep it short) */
     struct task *next = 0;
     uint64_t best = ~0ULL;
-    for (int i = 1; i <= MAX_TASKS; i++) {
-        struct task *t = &tasks[(cur + i) % MAX_TASKS];
-        if (t->idle || (me->id && !t->user)) continue;      /* kernel threads stay on core 0 */
-        if (t->state == PS_READY && t->rq < best) { best = t->rq; next = t; }
+    for (int i = 0, n = task_hi; i < n; i++) {
+        struct task *t = &tasks[i];
+        int st = t->state;
+        if (!st) continue;
+        if ((st == PS_SLEEPING || st == PS_BLOCKED) && t->wake_at && now >= t->wake_at) {
+            t->state = st = PS_READY; t->wake_at = 0; t->rq = ++rq_seq;
+        }
+        if (st != PS_READY || t->idle || (me->id && !t->user)) continue;   /* kernel threads stay on core 0 */
+        if (t->rq < best) { best = t->rq; next = t; }
     }
     if (!next && current->state == PS_RUNNING && !current->idle && !(me->id && !current->user)) next = current;
     if (!next) next = me->idle;
     account();
     if (next == current) { current->state = PS_RUNNING; if (!current->user) __asm__ volatile("sti"); return; }
     struct task *prev = current;
+    if (prof.on) prof_kthread(prev);
     if (prev->user && prev->state != PS_ZOMBIE) fpu_save(prev->fx);
     if (next->user) {
         fpu_restore(next->fx);
@@ -475,7 +481,7 @@ static void kill_one(struct task *t) {                    /* (not current) */
 static void kill_threads(struct task *except) {           /* the other threads of except's program */
     struct task *p = except->proc;
     if (!p) return;
-    for (int i = 0; i < MAX_TASKS; i++) {
+    for (int i = 0; i < task_hi; i++) {
         struct task *t = &tasks[i];
         if (t == except || !t->state || t->state == PS_ZOMBIE || t->proc != p) continue;
         kill_one(t);
@@ -515,7 +521,7 @@ void task_exit(int code) {
 
 void task_kill_others(struct task *except) { kill_threads(except); }
 bool task_kill(int pid) {
-    for (int i = 0; i < MAX_TASKS; i++) {
+    for (int i = 0; i < task_hi; i++) {
         struct task *t = &tasks[i];
         if (!t->state || t->state == PS_ZOMBIE || t->pid != pid) continue;
         if (!t->user) return false;            /* kernel threads can't be killed */
@@ -530,11 +536,11 @@ bool task_kill(int pid) {
 }
 
 void task_reap(void) {
-    for (int i = 0; i < MAX_TASKS; i++) {
+    for (int i = 0; i < task_hi; i++) {
         struct task *t = &tasks[i];
         if (t->state != PS_ZOMBIE || t == current) continue;
         bool threads_left = false;                        /* a program's first thread goes last (the others point to it) */
-        for (int j = 0; j < MAX_TASKS && t->user && t->proc == t; j++) if (&tasks[j] != t && tasks[j].state && tasks[j].proc == t) threads_left = true;
+        for (int j = 0; j < task_hi && t->user && t->proc == t; j++) if (&tasks[j] != t && tasks[j].state && tasks[j].proc == t) threads_left = true;
         if (threads_left) continue;
         if (t->user && t->proc == t && t->lx) linux_task_exit(t);
         if (t->user && t->mm) mm_put(t->mm);             /* the memory goes with its last thread */
@@ -589,11 +595,11 @@ void sched_tick(struct frame *f) {
 void lx_ps(void) {
     kprintf("Linux programs: threads, address space reserved (of %lu GB), areas, biggest gap left\n", (USER_MMAP_END - USER_MMAP) >> 30);
     int all = 0;
-    for (int i = 0; i < MAX_TASKS; i++) if (tasks[i].state) all++;
-    for (int i = 0; i < MAX_TASKS; i++) {
+    for (int i = 0; i < task_hi; i++) if (tasks[i].state) all++;
+    for (int i = 0; i < task_hi; i++) {
         struct task *t = &tasks[i];
         if (!t->state || t->state == PS_ZOMBIE || !t->user || !t->lx || t->proc != t || !t->mm) continue;
-        int th = 0; for (int j = 0; j < MAX_TASKS; j++) if (tasks[j].state && tasks[j].state != PS_ZOMBIE && tasks[j].proc == t) th++;
+        int th = 0; for (int j = 0; j < task_hi; j++) if (tasks[j].state && tasks[j].state != PS_ZOMBIE && tasks[j].proc == t) th++;
         uint64_t r, g; int a; mm_usage(t->mm, &r, &a, &g);
         kprintf("  pid %-5d %-16s %4d threads  %6lu MB reserved  %6d areas  gap %lu MB\n", t->pid, t->name, th, r >> 20, a, g >> 20);
     }

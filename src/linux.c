@@ -447,7 +447,7 @@ void linux_task_exit(struct task *t) {
     shm_forget_all(lx);
     if (t->mm && t->mm->fill_ctx == lx) { t->mm->fill = 0; t->mm->fill_ctx = 0; }
     kfree(lx->fmaps);
-    for (int i = 0; i < MAX_TASKS; i++) if (tasks[i].lx == lx) tasks[i].lx = 0;
+    for (int i = 0; i < task_hi; i++) if (tasks[i].lx == lx) tasks[i].lx = 0;
     kfree(lx);
 }
 
@@ -487,7 +487,7 @@ static void sig_frame_fail(struct frame *f, int n) {
 /* the terminal's "threads": what each Linux program's threads are doing (for finding where one is stuck) */
 void linux_threads(void) {
     static const char *st[] = { "-", "ready", "running", "sleeping", "waiting", "ended" };
-    for (int i = 0; i < MAX_TASKS; i++) {
+    for (int i = 0; i < task_hi; i++) {
         struct task *t = &tasks[i];
         if (!t->state || !t->lx) continue;
         kprintf("%5d %-16s %-8s syscall %-4lu cpu %lu ms  signals pending %lx blocked %lx%s\n", t->pid, t->name, st[t->state < 6 ? t->state : 0],
@@ -1497,7 +1497,7 @@ static uint64_t axwin_ioctl(struct lxproc *lx, struct lfd *fd, uint64_t req, uin
         if (!x->id) return E(ENOENT_);
         if (!uok(arg, 4, false)) return E(EFAULT_);
         int pid = *(int32_t *)arg;
-        for (int i = 0; i < MAX_TASKS; i++)
+        for (int i = 0; i < task_hi; i++)
             if (tasks[i].state && tasks[i].state != PS_ZOMBIE && tasks[i].pid == pid)
                 return wm_set_app(x->owner, x->id, tasks[i].app ? tasks[i].app : "", tasks[i].name) ? 0 : E(ENOENT_);
         return E(ESRCH_);
@@ -1625,11 +1625,11 @@ static bool proc_norm(const char *full, char *out, size_t n) { /* AXIOM's /syste
 static bool proc_alive(const struct task *t) { return t->state && t->state != PS_ZOMBIE && t->lx && t->user; }
 static int proc_nthreads(const struct task *p) {
     int k = 0;
-    for (int i = 0; i < MAX_TASKS; i++) if (proc_alive(&tasks[i]) && tasks[i].proc == p) k++;
+    for (int i = 0; i < task_hi; i++) if (proc_alive(&tasks[i]) && tasks[i].proc == p) k++;
     return k;
 }
 static const struct task *proc_thread(const struct task *p, int tid) {
-    for (int i = 0; i < MAX_TASKS; i++) if (proc_alive(&tasks[i]) && tasks[i].proc == p && tasks[i].pid == tid) return &tasks[i];
+    for (int i = 0; i < task_hi; i++) if (proc_alive(&tasks[i]) && tasks[i].proc == p && tasks[i].pid == tid) return &tasks[i];
     return 0;
 }
 static bool proc_num(const char *s, int *v) {
@@ -1655,7 +1655,7 @@ static int proc_node(const char *pp, struct task **proc, int *what, int *nlink) 
     else if (!strcmp(parts[0], "thread-self")) { p = current->proc; tid = current->pid; }
     else if (proc_num(parts[0], &v)) {                         /* a process, or (as Linux) a thread by its id */
         p = proc_task(v);
-        if (!p) for (int i = 0; i < MAX_TASKS; i++) if (proc_alive(&tasks[i]) && tasks[i].pid == v) { p = tasks[i].proc; break; }
+        if (!p) for (int i = 0; i < task_hi; i++) if (proc_alive(&tasks[i]) && tasks[i].pid == v) { p = tasks[i].proc; break; }
     }
     if (!p) return 0;
     *proc = p;
@@ -1684,12 +1684,12 @@ static int proc_list(struct lxproc *lx, const char *pp, struct vfs_dirent *out, 
     #define PL_ADD(dir, ...) do { if (k < max) { ksnprintf(out[k].name, sizeof out[k].name, __VA_ARGS__); out[k].is_dir = dir; out[k].size = 0; k++; } } while (0)
     if (what == PN_ROOT) {
         PL_ADD(1, "self"); PL_ADD(1, "thread-self"); PL_ADD(0, "cpuinfo"); PL_ADD(0, "meminfo");
-        for (int i = 0; i < MAX_TASKS; i++) if (proc_alive(&tasks[i]) && tasks[i].proc == &tasks[i]) PL_ADD(1, "%d", tasks[i].pid);
+        for (int i = 0; i < task_hi; i++) if (proc_alive(&tasks[i]) && tasks[i].proc == &tasks[i]) PL_ADD(1, "%d", tasks[i].pid);
     } else if (what == PN_PID || what == PN_TID) {
         if (what == PN_PID) PL_ADD(1, "task");
         PL_ADD(1, "fd"); PL_ADD(0, "maps"); PL_ADD(0, "exe");
     } else if (what == PN_TASK) {
-        for (int i = 0; i < MAX_TASKS; i++) if (proc_alive(&tasks[i]) && tasks[i].proc == who) PL_ADD(1, "%d", tasks[i].pid);
+        for (int i = 0; i < task_hi; i++) if (proc_alive(&tasks[i]) && tasks[i].proc == who) PL_ADD(1, "%d", tasks[i].pid);
     } else if (what == PN_FD && who == current->proc) {        /* (another program's files: not listed) */
         for (int i = 0; i < NFD; i++) if (lx->fd[i].kind) PL_ADD(0, "%d", i);
     }
@@ -1808,7 +1808,7 @@ void linux_dump_threads(void) {
     kprintf("[dump] page fills: %lu (%lu not from files), %lu file reads, %lu KiB, %lu ms\n", fill_calls, fill_anon, fill_reads, fill_bytes >> 10, fill_us / 1000);
     for (int c = 0; c < ncpus_on; c++)                           /* how busy each core has been since start-up */
         kprintf("[dump] core %d: busy %lu ms of %lu (%lu%%)\n", c, cpus[c].busy_us / 1000, up, up ? cpus[c].busy_us / 10 / up : 0);
-    for (int i = 0; i < MAX_TASKS; i++) {
+    for (int i = 0; i < task_hi; i++) {
         struct task *t = &tasks[i];
         if (!t->state || !t->lx || !t->user || !t->kstack) continue;
         struct frame *f = (struct frame *)(t->kstack_top - sizeof *f);
@@ -1841,7 +1841,7 @@ static void vfork_release(int pid) {
 }
 static bool vfork_waiting(int pid) { for (int i = 0; i < 32; i++) if (vforking[i] == pid) return true; return false; }
 static struct task *proc_task(int pid) {                       /* a Linux program's first thread, by its pid */
-    for (int i = 0; i < MAX_TASKS; i++)
+    for (int i = 0; i < task_hi; i++)
         if (tasks[i].state && tasks[i].state != PS_ZOMBIE && tasks[i].pid == pid && tasks[i].lx && tasks[i].proc == &tasks[i]) return &tasks[i];
     return 0;
 }
@@ -1910,9 +1910,9 @@ static int64_t lx_wait(int pid, bool nohang, int *status, int *wpid) {
                 *status = zombies[i].status; *wpid = zombies[i].pid; zombies[i].used = false; return 1;
             }
         bool any = false;                                      /* children still running */
-        for (int i = 0; i < MAX_TASKS; i++)
+        for (int i = 0; i < task_hi; i++)
             if (tasks[i].state && tasks[i].state != PS_ZOMBIE && tasks[i].lx && tasks[i].proc == &tasks[i] && tasks[i].lx->ppid == me && (pid <= 0 || tasks[i].pid == pid)) any = true;
-        for (int i = 0; i < MAX_TASKS && !any; i++)            /* (ended, not yet reaped: its status comes) */
+        for (int i = 0; i < task_hi && !any; i++)            /* (ended, not yet reaped: its status comes) */
             if (tasks[i].state == PS_ZOMBIE && tasks[i].lx && tasks[i].lx->ppid == me && (pid <= 0 || tasks[i].pid == pid)) any = true;
         if (!any) return (int64_t)E(ECHILD_);
         if (nohang) return 0;
@@ -2053,7 +2053,7 @@ uint64_t linux_syscall(struct frame *f) {
             kprintf("[linux] '%s' (pid %d): system call %lu refused: %s (args %lx %lx)\n", current->name, current->pid, n,
                     (int64_t)r == -EMFILE_ ? "too many open files" : (int64_t)r == -EAGAIN_ ? "no room for a thread" : "out of memory",
                     f->rdi, f->rsi);
-            int nt = 0; for (int i = 0; i < MAX_TASKS; i++) if (tasks[i].state) nt++;
+            int nt = 0; for (int i = 0; i < task_hi; i++) if (tasks[i].state) nt++;
             kprintf("[linux]   kernel memory free: %lu MB; tasks: %d of %d\n", mem_low_free() >> 20, nt, MAX_TASKS);
             if (current->mm) { uint64_t r, g; int a; mm_usage(current->mm, &r, &a, &g);
                 kprintf("[linux]   its address space: %lu MB reserved in %d areas, biggest gap %lu MB\n", r >> 20, a, g >> 20); }
@@ -3263,13 +3263,13 @@ static uint64_t linux_syscall_(struct frame *f) {
             to = proc_task((int)a);
             if (!to) return E(ESRCH_);
         } else if (n == 62) {                                  /* this one (0, -1: its group, which is just it) */
-            for (int i = 0; i < MAX_TASKS; i++)                /* the first of its threads that doesn't block it */
+            for (int i = 0; i < task_hi; i++)                /* the first of its threads that doesn't block it */
                 if (tasks[i].state && tasks[i].state != PS_ZOMBIE && tasks[i].lx == lx && (!to || !(tasks[i].sig_blocked & SIGBIT(sig ? sig : 1)))) {
                     if (!to || (to->sig_blocked & SIGBIT(sig ? sig : 1))) to = &tasks[i];
                 }
         } else {
             int tid = (int)(n == 200 ? a : b);
-            for (int i = 0; i < MAX_TASKS; i++) if (tasks[i].state && tasks[i].state != PS_ZOMBIE && tasks[i].pid == tid && tasks[i].lx == lx) to = &tasks[i];
+            for (int i = 0; i < task_hi; i++) if (tasks[i].state && tasks[i].state != PS_ZOMBIE && tasks[i].pid == tid && tasks[i].lx == lx) to = &tasks[i];
         }
         if (!to) return E(ESRCH_);
         if (!sig) return 0;                                    /* (only asking whether it's there) */
@@ -3294,7 +3294,7 @@ static uint64_t linux_syscall_(struct frame *f) {
             uint64_t *v = (uint64_t *)b;
             if (v[0] > 1 && !(v[1] & SA_RESTORER_)) return E(EINVAL_);   /* (glibc always gives a restorer) */
             lx->sa[sig].handler = v[0]; lx->sa[sig].flags = v[1]; lx->sa[sig].restorer = v[2]; lx->sa[sig].mask = v[3];
-            if (v[0] == 1) for (int i = 0; i < MAX_TASKS; i++) if (tasks[i].lx == lx) tasks[i].sig_pending &= ~SIGBIT(sig);
+            if (v[0] == 1) for (int i = 0; i < task_hi; i++) if (tasks[i].lx == lx) tasks[i].sig_pending &= ~SIGBIT(sig);
         }
         return 0;
     }
@@ -3364,7 +3364,7 @@ static uint64_t linux_syscall_(struct frame *f) {
         memset((void *)b, 0, 144);
         uint64_t us = 0;
         if ((int)a == 1) us = t->ticks;                        /* RUSAGE_THREAD */
-        else for (int i = 0; i < MAX_TASKS; i++) if (tasks[i].state && tasks[i].lx == lx) us += tasks[i].ticks;
+        else for (int i = 0; i < task_hi; i++) if (tasks[i].state && tasks[i].lx == lx) us += tasks[i].ticks;
         ((int64_t *)b)[0] = (int64_t)(us / 1000000); ((int64_t *)b)[1] = (int64_t)(us % 1000000);   /* ru_utime */
         ((int64_t *)b)[4] = (int64_t)(t->proc ? t->proc->pages : t->pages) * 4;                       /* ru_maxrss (KiB) */
         return 0;

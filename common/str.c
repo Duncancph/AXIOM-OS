@@ -2,12 +2,23 @@
 #include <stdint.h>
 #include "str.h"
 
-void *memset(void *d, int c, size_t n) { uint8_t *p = d; while (n--) *p++ = (uint8_t)c; return d; }
-void *memcpy(void *d, const void *s, size_t n) { uint8_t *a = d; const uint8_t *b = s; while (n--) *a++ = *b++; return d; }
+/* rep movsb / rep stosb: the processor's own fast copy and fill (many bytes per cycle on anything since Ivy Bridge);
+ * these were byte-at-a-time loops, and every copy in the kernel (messages between programs, pages, pixels) goes
+ * through them */
+void *memset(void *d, int c, size_t n) {
+    void *p = d;
+    __asm__ volatile("rep stosb" : "+D"(p), "+c"(n) : "a"(c) : "memory");
+    return d;
+}
+void *memcpy(void *d, const void *s, size_t n) {
+    void *a = d;
+    __asm__ volatile("rep movsb" : "+D"(a), "+S"(s), "+c"(n) :: "memory");
+    return d;
+}
 void *memmove(void *d, const void *s, size_t n) {
     uint8_t *a = d; const uint8_t *b = s;
-    if (a < b) while (n--) *a++ = *b++;
-    else { a += n; b += n; while (n--) *--a = *--b; }
+    if (a <= b || a >= b + n) return memcpy(d, s, n);       /* (forwards is safe) */
+    a += n; b += n; while (n--) *--a = *--b;               /* overlapping, to a higher address: backwards */
     return d;
 }
 int memcmp(const void *x, const void *y, size_t n) {

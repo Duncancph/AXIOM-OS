@@ -86,7 +86,10 @@ void isr_dispatch(struct frame *f) {
     if ((f->cs & 3) == 3) cpu_self()->in_user = 0;
     if ((f->cs & 3) == 3 && current) current->last_rip = f->rip;
     bool took = !cpu_self()->bkl_held;
-    if (took) bkl_lock();
+    if (took) {
+        if (prof.on) cpu_self()->prof_tag = f->vec == 0x81 ? (f->rax < 512 ? PROF_LX + (int)f->rax : PROF_OTHER) : (int)(f->vec & 0xFF);
+        bkl_lock();
+    }
     dispatch(f);
     if ((f->cs & 3) == 3 && current && current->lx && (current->sig_pending & ~current->sig_blocked)) linux_signals(f);
     if (took) {

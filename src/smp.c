@@ -22,14 +22,99 @@ void smp_settled(void) {
 /* A ticket lock: cores get it in the order they asked (a plain test-and-set lock let one core lose the race
  * for seconds while the others kept dropping and retaking it, e.g. while waiting for the disk) */
 static volatile uint32_t bkl_next, bkl_serving;
+/* the 'prof' command: where each core's time goes, timed with the cycle counter. Waiting for the lock, holding it
+ * (charged to what took it: a Linux system call, an interrupt or exception, or a kernel thread), and sleeping
+ * idle; the rest is apps' own code. Only changed while holding the lock. */
+struct prof prof;
+static uint64_t lock_at[MAX_CPUS]; static int lock_tag[MAX_CPUS];
+uint64_t prof_seg[MAX_CPUS];                               /* since when this core's kernel thread has been running */
+uint64_t prof_last_wait[MAX_CPUS];                       /* (idle takes its last wait back out: that was idle time) */
 void bkl_lock(void) {
+    struct cpu *c = cpu_self();
+    uint64_t t0 = prof.on ? rdtsc() : 0;
     uint32_t me = __atomic_fetch_add(&bkl_next, 1, __ATOMIC_RELAXED);
     while (__atomic_load_n(&bkl_serving, __ATOMIC_ACQUIRE) != me) cpu_relax();
-    cpu_self()->bkl_held = true;
+    c->bkl_held = true;
+    if (prof.on) {
+        uint64_t t = rdtsc(); int id = c->id;
+        prof_last_wait[id] = t0 ? t - t0 : 0;
+        prof.wait[id] += prof_last_wait[id];              /* (not when it started waiting before 'prof' did) */
+        prof.locks[id]++;
+        lock_at[id] = t; lock_tag[id] = c->prof_tag; c->prof_tag = PROF_OTHER; prof_seg[id] = t;
+    }
+}
+void prof_kthread(struct task *t) {                        /* a kernel thread stops running (switch, or lets go of the lock) */
+    struct cpu *c = cpu_self(); uint64_t now = rdtsc();
+    if (prof_seg[c->id] && t && !t->user && !t->idle) {
+        int k = 0; while (k < 8 && prof.kt_name[k][0] && strcmp(prof.kt_name[k], t->name)) k++;
+        if (k < 8) { if (!prof.kt_name[k][0]) strncpy0(prof.kt_name[k], t->name, 24); prof.kt_cyc[k] += now - prof_seg[c->id]; prof.kt_cnt[k]++; }
+    }
+    prof_seg[c->id] = now;
 }
 void bkl_unlock(void) {
-    cpu_self()->bkl_held = false;
+    struct cpu *c = cpu_self();
+    if (prof.on && lock_at[c->id]) {
+        uint64_t d = rdtsc() - lock_at[c->id]; int tg = lock_tag[c->id];
+        prof.held[c->id] += d; prof.tag_cyc[tg] += d; prof.tag_cnt[tg]++; lock_at[c->id] = 0;
+        if (c->cur && !c->cur->user) prof_kthread(c->cur);
+    }
+    c->bkl_held = false;
     __atomic_store_n(&bkl_serving, bkl_serving + 1, __ATOMIC_RELEASE);
+}
+void prof_run(int secs) {
+    static const char *lxname[] = { [0] = "read", [1] = "write", [3] = "close", [7] = "poll", [9] = "mmap", [10] = "mprotect",
+        [11] = "munmap", [12] = "brk", [13] = "rt_sigaction", [14] = "rt_sigprocmask", [20] = "writev", [24] = "sched_yield",
+        [28] = "madvise", [39] = "getpid", [44] = "sendto", [45] = "recvfrom", [46] = "sendmsg", [47] = "recvmsg",
+        [56] = "clone", [72] = "fcntl", [186] = "gettid", [202] = "futex", [228] = "clock_gettime", [232] = "epoll_wait",
+        [233] = "epoll_ctl", [257] = "openat", [262] = "newfstatat", [281] = "epoll_pwait", [16] = "ioctl", [17] = "pread64" };
+    if (secs < 1) secs = 1;
+    if (secs > 60) secs = 60;
+    memset((void *)&prof, 0, sizeof prof);
+    { extern uint64_t dprof[8]; memset(dprof, 0, sizeof dprof); }
+    uint64_t t0 = rdtsc(); prof.on = 1;
+    task_sleep((uint64_t)secs * 1000);
+    prof.on = 0; uint64_t tot = rdtsc() - t0;
+    if (!tot) return;
+    uint64_t cyc_us = tot / ((uint64_t)secs * 1000000); if (!cyc_us) cyc_us = 1;
+    kprintf("%d s, %d cores. Per core: apps' own code / waiting for the kernel lock / in the kernel / idle\n", secs, ncpus_on);
+    uint64_t sw = 0, sh = 0;
+    for (int i = 0; i < ncpus_on; i++) {
+        uint64_t w = prof.wait[i], h = prof.held[i], id = prof.idle[i], u = tot > w + h + id ? tot - w - h - id : 0;
+        sw += w; sh += h;
+        kprintf("  core %d: apps %3lu%%  waiting %3lu%%  kernel %3lu%%  idle %3lu%%  (%lu entries/s)\n", i,
+                u * 100 / tot, w * 100 / tot, h * 100 / tot, id * 100 / tot, prof.locks[i] / secs);
+    }
+    kprintf("The kernel lock was held %lu%% of the time; cores waited for it %lu core-seconds in all.\n",
+            sh * 100 / tot, sw / cyc_us / 1000000);
+    kprintf("What held it longest (time, how often, average):\n");
+    bool shown[PROF_TAGS] = { 0 };
+    for (int k = 0; k < 14; k++) {
+        int best = -1;
+        for (int t = 0; t < PROF_TAGS; t++) if (!shown[t] && prof.tag_cyc[t] && (best < 0 || prof.tag_cyc[t] > prof.tag_cyc[best])) best = t;
+        if (best < 0) break;
+        shown[best] = true;
+        char nm[40];
+        if (best == PROF_OTHER) ksnprintf(nm, sizeof nm, "kernel threads / waking");
+        else if (best >= PROF_LX) { int n = best - PROF_LX; const char *x = n < (int)(sizeof lxname / sizeof *lxname) ? lxname[n] : 0;
+            if (x) ksnprintf(nm, sizeof nm, "Linux %s (%d)", x, n); else ksnprintf(nm, sizeof nm, "Linux system call %d", n); }
+        else if (best == 32) ksnprintf(nm, sizeof nm, "timer");
+        else if (best == 14) ksnprintf(nm, sizeof nm, "page faults");
+        else if (best == 0x80) ksnprintf(nm, sizeof nm, "AXIOM system calls");
+        else ksnprintf(nm, sizeof nm, "interrupt %d", best);
+        uint64_t ms = prof.tag_cyc[best] / cyc_us / 1000;
+        kprintf("  %-30s %6lu ms %3lu%%  %8lu times  %6lu us each\n", nm, ms, prof.tag_cyc[best] * 100 / tot,
+                prof.tag_cnt[best], prof.tag_cnt[best] ? prof.tag_cyc[best] / prof.tag_cnt[best] / cyc_us : 0);
+    }
+    extern uint64_t dprof[8];
+    static const char *dpn[] = { "input", "housekeeping", "task_reap+sound", "compose (incl. copies)", "  window copy, unlocked", "  screen copy, unlocked", "", "sleeping" };
+    kprintf("  desktop loop:");
+    for (int k = 0; k < 8; k++) if (k != 6) kprintf(" %s %lu ms;", dpn[k], dprof[k] / cyc_us / 1000);
+    kprintf("\n");
+    memset(dprof, 0, sizeof dprof);
+    for (int k = 0; k < 8 && prof.kt_name[k][0]; k++)
+        if (prof.kt_cyc[k] * 100 / tot)
+            kprintf("    kernel thread %-16s %6lu ms %3lu%%  %8lu times  %6lu us each\n", prof.kt_name[k], prof.kt_cyc[k] / cyc_us / 1000,
+                    prof.kt_cyc[k] * 100 / tot, prof.kt_cnt[k], prof.kt_cnt[k] ? prof.kt_cyc[k] / prof.kt_cnt[k] / cyc_us : 0);
 }
 
 void *acpi_table(const char *sig);

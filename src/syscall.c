@@ -260,7 +260,7 @@ uint64_t syscall_dispatch(struct frame *f) {
         if (max < 0 || max > MAX_TASKS || !UOK(a, (uint64_t)max * sizeof(struct procinfo), true)) return (uint64_t)-1;
         struct procinfo *p = (struct procinfo *)a;
         cpu_time_us();
-        for (int i = 0; i < MAX_TASKS && n < max; i++) {
+        for (int i = 0; i < task_hi && n < max; i++) {
             struct task *t = &tasks[i];
             if (!t->state || t->state == PS_ZOMBIE) continue;
             p[n].pid = t->pid; p[n].state = t->state; p[n].user = t->user;
@@ -335,7 +335,7 @@ uint64_t syscall_dispatch(struct frame *f) {
         memset(s, 0, sizeof *s);
         s->mem_total = mem_total(); s->mem_used = mem_used(); s->uptime_ms = uptime_ms(); s->cpu_clock_us = cpu_time_us();
         { int w, h; desktop_size(&w, &h, 0); s->fb_w = w; s->fb_h = h; } s->uefi = bootinfo.uefi;
-        for (int i = 0; i < MAX_TASKS; i++) if (tasks[i].state && tasks[i].state != PS_ZOMBIE) s->nprocs++;
+        for (int i = 0; i < task_hi; i++) if (tasks[i].state && tasks[i].state != PS_ZOMBIE) s->nprocs++;
         uint32_t r[12], x, y, z, w;
         cpuid(0x80000000, 0, &x, &y, &z, &w);
         if (x >= 0x80000004) {
