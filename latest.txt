@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 216
-notes Wi-Fi: the antenna it shares with Bluetooth is now switched to Wi-Fi (scans that found nothing).
-file kernel b216/thane.elf.gz 12517640 2fbbbb2b29985d0b68eeaef505abc016fe2d023667b28cca873f039c4ed936b3
-file initrd b216/initrd.tar.gz 2426880 de6893c5581a472950fff6a7b12c7f05e4415b8125befb2306a20b50298cb95d
-file bootx64 b216/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b216/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022075f89d03da0615d7317584dfb6d3a593ec5ce76575f78aed2da96f1925ad492b022100f8168dbb1c3021bfb9b0341279ff41c985028fc28bcb4bd45a95f1d862f69deb
+build 217
+notes Thunar and other Linux apps can open videos, music, pictures and text with AXIOM's own apps (Open With).
+file kernel b217/thane.elf.gz 12525296 5b097a965b5709cfebc6d5e2771aaddd3ecfdabcc31db22847cb38ac0b00b1e2
+file initrd b217/initrd.tar.gz 3174400 544df11a175b89f71bdbe357fc79e0101d7ec5b061c5d170fac1a22f62b8c301
+file bootx64 b217/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b217/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304502201469b6262e6f3ff12390ff6640de5e3f1101fbf125ec4c6773313d1fba083eda0221009bb5c1e101dd648b283c301569b4ac2b30083aadd05654e1b65569f06bfea994
