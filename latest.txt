@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 203
-notes Logitech USB receivers: the mouse wheel is set back to normal (it had been sent to Logitech's own channel).
-file kernel b203/thane.elf.gz 12410880 9a4dd36c5eb08213a159d7c4734c2db35dfd7af374f8125c646ac7cf18e49b61
-file initrd b203/initrd.tar.gz 3614720 437396302d34e1155f54e11ea1d0d4a0e96636e243d23286872fb73fd443e7b5
-file bootx64 b203/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b203/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 30450220481b1dcc1951a5ee9823c4bdfe4a847ce507740bb4acf61983b1e02f81ae6252022100a838927e1f1b4058748aeb39e6a3f70a5bc32796ab8653e78679c08e05330b5b
+build 204
+notes Logitech receivers with a keyboard and a mouse: the mouse wheel fix now finds the mouse.
+file kernel b204/thane.elf.gz 12411624 837d468e441c35a3634ba0b86e9f59b652853afde846a2ce915407a3e373128d
+file initrd b204/initrd.tar.gz 3614720 eb673c3d65ae4b9542ce8287c44f8fa850696611f1f8a7082989d93a9cc1476e
+file bootx64 b204/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b204/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022100b25b9b95d19dd754040ba85fee7e581e28fc776ae9f80757659eab15dd790e8d02203b5b2b716ae6d027e971325d0cfd13e2fe7f1b1820a854bb2ddd0329cd4aad30
