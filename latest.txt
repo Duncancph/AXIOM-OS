@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 196
-notes Wi-Fi scans again after the first; 'mouse' in CMD shows how your mouse is read.
-file kernel b196/thane.elf.gz 12394480 e539f0cca974b64622824d7103774972920dba5c5825cd5f173b1cf466c66947
-file initrd b196/initrd.tar.gz 3604480 dab49bf3e6db1cece9dd61accaca31bf4b0c8afe30b190106eb75f47a15ded6a
-file bootx64 b196/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b196/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 30450221009536f4726883ea09f308aa203dbcc79e876bb92bb55eaee4ac557109fb93b630022037f13bb40283dd5eb04a3dca8159752194acfcd4a71160de2e554eeb06c717d1
+build 197
+notes 'mouse' in CMD keeps the mouse's wheel and button reports for checking.
+file kernel b197/thane.elf.gz 12394936 e406bf508cbea7514ca94670c623dcd7f30afc26a0f19fbae61e3f071e6197f5
+file initrd b197/initrd.tar.gz 3604480 0fdc13fc472ec18fba823e1ab6e26c0a23fccd346487b4779363244d9d6c5611
+file bootx64 b197/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b197/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304502210097d9209aec57445e2c353bb1859add267d6adaf0d1a92375a1fa9344eadd6d5e0220305dd619ae40cf8c5469d483dee3d0a38294de8013103bb6f94ddb5f19e79adc
