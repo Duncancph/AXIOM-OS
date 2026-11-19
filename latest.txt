@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 202
-notes Wi-Fi: joining no longer stays at 'Joining' when a network cable adapter is also there; once joined, Wi-Fi is used.
-file kernel b202/thane.elf.gz 12404816 be57963ae1a47564ea58e33d1d9b4194e7205c210883b8bcb1f1ac9f9db35dde
-file initrd b202/initrd.tar.gz 3604480 6c0632b66fb1784b2250ca35c193c4df51f331b5dce2607797939e0e9db6a6cb
-file bootx64 b202/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b202/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 304502205076ac2618bc0b17cef5c95d49989b7f1f399cbbee4d8ef8a72d78062b14fd93022100f8275acdcb1c81705e68fe65eae468757c7808b570c2a3d41fe1a996f320eca0
+build 203
+notes Logitech USB receivers: the mouse wheel is set back to normal (it had been sent to Logitech's own channel).
+file kernel b203/thane.elf.gz 12410880 9a4dd36c5eb08213a159d7c4734c2db35dfd7af374f8125c646ac7cf18e49b61
+file initrd b203/initrd.tar.gz 3614720 437396302d34e1155f54e11ea1d0d4a0e96636e243d23286872fb73fd443e7b5
+file bootx64 b203/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b203/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 30450220481b1dcc1951a5ee9823c4bdfe4a847ce507740bb4acf61983b1e02f81ae6252022100a838927e1f1b4058748aeb39e6a3f70a5bc32796ab8653e78679c08e05330b5b
