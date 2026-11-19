@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 214
-notes Merrow Lake is removed from AXIOM (and from the computer if it was installed).
-file kernel b214/thane.elf.gz 12509704 8f9707156c7673724c5fbc0fe450844239ad7f281b8caffd0c6dfee63b6ec01b
-file initrd b214/initrd.tar.gz 2426880 b9ac6441c8841b8edb50e36da8db93db334a204b2e8bf5cc36b27c8949843cd3
-file bootx64 b214/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b214/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 30460221008638667fe72686167f499077c643918dbad9bdff086c9256de8af41bf98d18c8022100cd4ea4b15e80ec0bb31d48ad76aee3896105afecd49d864bc2efb7cdecdfd19f
+build 215
+notes Vertex (and every installed app) shows in the menu and dock again: AXIOM had room for only 24 apps.
+file kernel b215/thane.elf.gz 12514480 d4f336e2a1d96bed6429fd933a3a4581507f5e1cbce52ebba4dc31e16ffd791f
+file initrd b215/initrd.tar.gz 2426880 149df72271970b8f142bb86bdee4ab5c65ea5d80dd290541339726cc29454cf2
+file bootx64 b215/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b215/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 30460221009cb4234b67f977915d8d1c799702d2c3d4e8defe1ecabd7bf32282a731fdb5d602210081520ecdd29e62b887a5fd7932535adefd3d50099833701e36caf264579ca8de
