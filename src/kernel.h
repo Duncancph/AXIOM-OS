@@ -441,6 +441,7 @@ struct app_image { const char *id, *title; const uint8_t *start, *end; };
 struct app_entry { char id[24], name[32], icon[16], version[12]; const struct app_image *builtin; bool installed;
                    char linux_cmd[200]; };   /* a Linux program (installed package): its path and arguments */
 void apps_refresh(void);
+const char *apps_for_file(const char *path);   /* the app AXIOM opens such a file with, or 0 */
 void desktop_dock_changed(void);
 int clip_set_utf8(const char *s, uint64_t n);
 uint64_t clip_get_utf8(const char **out, uint64_t *seq);

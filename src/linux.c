@@ -403,8 +403,49 @@ static uint64_t lx_stack(struct mm *m, const char *path, int argc, char **argv, 
     kfree(ptrs);
     return sp;
 }
+/* AXIOM's apps for Linux programs: /usr/bin/axiom-open and a .desktop file for each, saying which kinds of file
+ * it opens, so Thunar's "Open With" (and any GTK or Qt app) offers AXIOM's Video, Music, Viewer and Editor. Put in
+ * the Linux folders once a start (written again when they differ: an update can change them). */
+static void lx_put(const char *path, const void *data, uint64_t n) {
+    struct dunc_stat st;
+    if (vfs_stat(path, &st) == 0 && st.size == n) {
+        uint8_t *old = kmalloc(n ? n : 1); bool same = false;
+        if (old && vfs_read(path, old, 0, n) == (long)n && !memcmp(old, data, n)) same = true;
+        kfree(old);
+        if (same) return;
+    }
+    vfs_write(path, data, n);
+}
+static void lx_axiom_apps(void) {
+    static bool done;
+    if (done) return;
+    done = true;
+    struct dunc_stat st;
+    if (vfs_stat("/system/linux", &st) != 0) return;
+    uint64_t n = 0; uint8_t *b = vfs_read_all("/system/linux-files/axiom-open", &n);
+    if (b) {
+        vfs_mkdir("/system/linux/usr"); vfs_mkdir("/system/linux/usr/bin");
+        lx_put("/system/linux/usr/bin/axiom-open", b, n); kfree(b);
+    }
+    vfs_mkdir("/system/linux/usr/share"); vfs_mkdir("/system/linux/usr/share/applications");
+    static const struct { const char *id, *name, *icon, *mime; } a[] = {
+        { "video",  "Video",  "video-x-generic", "video/mp4;video/quicktime;video/x-m4v;" },
+        { "music",  "Music",  "audio-x-generic", "audio/mpeg;audio/mp3;" },
+        { "viewer", "Viewer", "image-x-generic", "image/png;image/jpeg;image/gif;image/bmp;" },
+        { "editor", "Editor", "text-x-generic",  "text/plain;text/x-csrc;text/x-chdr;text/x-python;text/markdown;application/json;text/x-log;" },
+    };
+    for (unsigned i = 0; i < sizeof a / sizeof a[0]; i++) {
+        char path[96], txt[512];
+        ksnprintf(path, sizeof path, "/system/linux/usr/share/applications/axiom-%s.desktop", a[i].id);
+        int k = ksnprintf(txt, sizeof txt, "[Desktop Entry]\nType=Application\nName=%s (AXIOM)\nComment=AXIOM's %s app\n"
+                          "Exec=/usr/bin/axiom-open %%f\nIcon=%s\nTerminal=false\nMimeType=%s\nNoDisplay=true\n",
+                          a[i].name, a[i].name, a[i].icon, a[i].mime);
+        lx_put(path, txt, (uint64_t)k);
+    }
+}
 int linux_spawn(const char *path, int argc, char **argv, struct task *out) {
     lx_net_files();                                              /* /etc/resolv.conf: the DNS server AXIOM uses now */
+    lx_axiom_apps();
     struct mm *m = mm_new();
     struct lxproc *lx = kmalloc(sizeof *lx);
     if (!m || !lx) { if (m) mm_put(m); kfree(lx); return -1; }
@@ -3238,6 +3279,17 @@ static uint64_t linux_syscall_(struct frame *f) {
         return tid;
     }
     case 435: return E(ENOSYS_);                               /* clone3: callers fall back to clone */
+    case 1000: {                                               /* AXIOM's own: open a file with AXIOM's app for it (axiom-open) */
+        char p[200], full[200]; struct dunc_stat st;
+        if (!ustr(p, a, sizeof p)) return E(EFAULT_);
+        if (at_join(lx, -100, p, full, sizeof full) < 0 || vfs_stat(full, &st) != 0) return E(ENOENT_);
+        const char *app = apps_for_file(full);
+        if (!app) return E(EINVAL_);
+        char arg[256];
+        if (!strcmp(app, "vertex")) ksnprintf(arg, sizeof arg, "file://%s", p[0] == '/' ? p : full); else strncpy0(arg, full, sizeof arg);
+        kprintf("[linux] %s opens %s with %s\n", t->name, full, app);
+        return task_spawn_arg(app, arg) < 0 ? E(ENOENT_) : 0;
+    }
     case 218: t->clear_tid = a; return t->pid;                 /* set_tid_address */
     case 158:                                                  /* arch_prctl */
         if (a == 0x1002) { t->fs_base = b; wrmsr(0xC0000100, b); return 0; }

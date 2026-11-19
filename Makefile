@@ -126,7 +126,9 @@ build/thane.elf: $(K_OBJS) src/linker.ld
 # Initial files: home folder, the OS source in ~/Projects/thane, and the clan package repository
 REPO_PKGS := $(patsubst %,build/user/%.elf,$(REPO_APPS))
 CA_BUNDLE := /etc/ssl/certs/ca-certificates.crt
-build/initrd.tar: $(shell find rootfs -type f) $(REPO_PKGS) repo/index.txt $(K_SRCS) README.md
+build/axiom-open: ports/axiom-open/axiom-open.c
+	gcc -O2 -static-pie -s -o $@ $<
+build/initrd.tar: $(shell find rootfs -type f) $(REPO_PKGS) repo/index.txt $(K_SRCS) README.md build/axiom-open
 	rm -rf build/rootfs && mkdir -p build/rootfs && cp -r rootfs/. build/rootfs/
 	mkdir -p build/rootfs/home/Projects/thane/kernel build/rootfs/home/Projects/thane/drivers \
 	         build/rootfs/home/Projects/thane/boot build/rootfs/home/Projects/thane/fonts build/rootfs/home/Projects/thane/docs \
@@ -138,6 +140,7 @@ build/initrd.tar: $(shell find rootfs -type f) $(REPO_PKGS) repo/index.txt $(K_S
 	cp src/font8x16.h tools/genunifont.py common/theme_highland.h build/rootfs/home/Projects/thane/fonts/
 	cp README.md build/rootfs/home/Projects/thane/docs/
 	cp repo/index.txt $(REPO_PKGS) build/rootfs/system/repo/ 2>/dev/null || true
+	mkdir -p build/rootfs/system/linux-files && cp build/axiom-open build/rootfs/system/linux-files/
 	mkdir -p build/rootfs/system/certs/user && cp $(CA_BUNDLE) build/rootfs/system/certs/ca-bundle.crt
 	tar --format=ustar --owner=0 --group=0 -cf $@ -C build/rootfs .
 

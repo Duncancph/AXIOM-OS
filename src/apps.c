@@ -175,3 +175,27 @@ void clan_command(int argc, char **argv) {
         kprintf("  clan remove <package>  uninstall an app\n");
     }
 }
+
+/* the app AXIOM opens a file with (as libdunc's app_for_file): 0 none */
+static bool ext_in(const char *path, const char *list) {
+    const char *dot = 0;
+    for (const char *p = path; *p; p++) { if (*p == '.') dot = p; if (*p == '/') dot = 0; }
+    if (!dot) return false;
+    char e[12]; int k = 0;
+    for (const char *p = dot + 1; *p && k < 11; p++) e[k++] = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
+    e[k] = 0;
+    for (const char *l = list; *l;) {
+        int n = 0; while (l[n] && l[n] != ' ') n++;
+        if (n == k && !strncmp(l, e, n)) return true;
+        l += n; while (*l == ' ') l++;
+    }
+    return false;
+}
+const char *apps_for_file(const char *path) {
+    if (ext_in(path, "png jpg jpeg gif bmp")) return "viewer";
+    if (ext_in(path, "html htm xhtml")) return "vertex";
+    if (ext_in(path, "mp3")) return "music";
+    if (ext_in(path, "mp4 m4v mov")) return "video";
+    if (ext_in(path, "elf bin img iso zip gz tgz tar xz 7z rar exe dll so o a wav ogg flac mkv avi pdf doc docx xls xlsx ppt pptx")) return 0;
+    return "editor";
+}
