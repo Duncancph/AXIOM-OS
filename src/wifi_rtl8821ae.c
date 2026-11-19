@@ -650,7 +650,7 @@ static void wnif_poll(struct netif *n) {
     wsta_tick(&sta, uptime_ms());
     if (sta.state != was || (sta.state == WS_FAILED && joining)) {
         static const char *names[] = { "idle", "authenticating", "associating", "checking the password", "connected", "failed" };
-        if (sta.state == WS_CONNECTED) ksnprintf(join_msg, sizeof join_msg, "Connected to \"%s\".", sta.ssid);
+        if (sta.state == WS_CONNECTED) { ksnprintf(join_msg, sizeof join_msg, "Connected to \"%s\".", sta.ssid); net_prefer(&wnif); }
         else if (sta.state == WS_FAILED) {
             ksnprintf(join_msg, sizeof join_msg, "Couldn't join \"%s\": %s", sta.ssid, sta.why[0] ? sta.why : "no answer");
             joining = false;
@@ -674,7 +674,7 @@ static void wifi_join_bss(int i, const uint8_t *pmk) {
     wsta_join(&sta, mac, b->bssid, b->ssid, pmk, snonce, uptime_ms());
     if (!wnif_added) {
         strncpy0(wnif.adapter, "Realtek RTL8821AE (Wi-Fi)", sizeof wnif.adapter); strncpy0(wnif.driver, "rtl8821ae", sizeof wnif.driver);
-        memcpy(wnif.mac, mac, 6); wnif.send = wnif_send; wnif.poll = wnif_poll; wnif.link_up = wnif_link;
+        memcpy(wnif.mac, mac, 6); wnif.send = wnif_send; wnif.poll = wnif_poll; wnif.tick = wnif_poll; wnif.link_up = wnif_link;
         net_add_netif(&wnif); wnif_added = true;
     }
     ksnprintf(join_msg, sizeof join_msg, "Joining \"%s\" on channel %d...", b->ssid, b->ch);

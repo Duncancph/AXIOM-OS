@@ -295,7 +295,7 @@ static void wifi_draw(struct canvas *c) {
     }
     if (wmsg[0]) wrap_text(c, 24, LIST_Y + LIST_H + 26, WW - 48, wmsg_col, wmsg);
     else if (ws.msg[0]) wrap_text(c, 24, LIST_Y + LIST_H + 26, WW - 48, ws.state == WIFI_FAILED ? UI_RED : UI_MUTED, ws.msg);
-    gfx_text(c, &font_ui, 24, WH - 22, UI_MUTED, ws.simulated ? "Simulated card ('wifi simulate' in CMD): for trying this screen." : "Wi-Fi is being added: scanning is in testing, joining comes next.");
+    gfx_text(c, &font_ui, 24, WH - 22, UI_MUTED, ws.simulated ? "Simulated card ('wifi simulate' in CMD): for trying this screen." : "Wi-Fi is new: if joining gets stuck, the log (CMD: log) says how far it got.");
 
     if (dialog == 2 && join_i >= 0) {                              /* join a network */
         struct wifi_net *n = &nets[join_i];

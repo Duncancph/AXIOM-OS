@@ -1322,6 +1322,7 @@ void net_remove_netif(struct netif *n) {
     }
 }
 
+void net_prefer(struct netif *n) { if (n && n != nif) switch_to = n; }
 bool net_present(void) { return nif != 0; }
 bool net_ready(void) { return nif && nif->link && (configured || v6_ready()); }
 
@@ -1331,6 +1332,8 @@ void net_thread(void *arg) {
         if (switch_to) { activate(switch_to); switch_to = 0; }
         if (!nif) { task_sleep(50); continue; }
         nif->poll(nif);
+        for (int i = 0; i < nnifs; i++) if (nifs[i] != nif && nifs[i]->tick) nifs[i]->tick(nifs[i]);   /* (a Wi-Fi join in
+                                                       the background: its frames and timers, while the cable is used) */
         uint64_t now = uptime_ms();
         if (now - last_link > 500) {
             last_link = now;

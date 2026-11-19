@@ -9,11 +9,13 @@ struct netif {
     int  (*send)(struct netif *n, const void *frame, int len);
     void (*poll)(struct netif *n);              /* calls net_rx() for each received frame */
     bool (*link_up)(struct netif *n);
+    void (*tick)(struct netif *n);              /* (optional) run even while another adapter is in use: Wi-Fi joining */
     void *priv;
     uint64_t rx_packets, tx_packets, rx_bytes, tx_bytes;
 };
 
 /* NIC drivers */
+void net_prefer(struct netif *n);               /* use this adapter now (Wi-Fi once it has joined) */
 struct netif *e1000_probe(struct pci_dev *p);
 struct netif *rtl8168_probe(struct pci_dev *p);
 
