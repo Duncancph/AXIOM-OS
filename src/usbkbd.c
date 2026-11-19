@@ -47,10 +47,19 @@ struct hidmouse { bool ok; int id, bo, bn, xo, xs, yo, ys, wo, ws; };
 static struct hidmouse hm[8];                                   /* by the device's slot */
 /* for the 'mouse' command: each mouse's report descriptor, and the last reports with what was read from them */
 static struct { int slot, rlen; uint8_t rd[256]; } mdesc[4]; static int nmdesc;
-static struct { int slot, len, dx, dy, bt, w; uint8_t r[16]; } mlast[8]; static int mlast_n;
+struct mrep { int slot, len, dx, dy, bt, w; uint8_t r[16]; };
+static struct mrep mlast[8], mother[8]; static int mlast_n, mother_n;   /* the last reports; the last that weren't only a move */
 static void mouse_note(int slot, const uint8_t *r, int len, int dx, int dy, int bt, int w) {
-    int i = mlast_n++ % 8; mlast[i].slot = slot; mlast[i].len = len; mlast[i].dx = dx; mlast[i].dy = dy; mlast[i].bt = bt; mlast[i].w = w;
-    memcpy(mlast[i].r, r, len < 16 ? len : 16);
+    struct mrep e = { slot, len, dx, dy, bt, w, {0} }; memcpy(e.r, r, len < 16 ? len : 16);
+    mlast[mlast_n++ % 8] = e;
+    bool other = bt || w;                                       /* (buttons, wheel, or bytes past X and Y that aren't zero) */
+    for (int b = len > 5 ? 5 : len; b < len && b < 16; b++) if (r[b]) other = true;
+    if (other) mother[mother_n++ % 8] = e;
+}
+static void mouse_show(const struct mrep *e) {
+    kprintf("  slot %d, %2d bytes:", e->slot, e->len);
+    for (int b = 0; b < e->len && b < 16; b++) kprintf(" %02x", e->r[b]);
+    kprintf("   -> move %d,%d buttons %d wheel %d\n", e->dx, e->dy, e->bt, e->w);
 }
 void usbmouse_info(void) {
     for (int k = 0; k < nmdesc; k++) {
@@ -61,14 +70,12 @@ void usbmouse_info(void) {
         kprintf("\n");
     }
     if (!nmdesc) kprintf("No USB mouse.\n");
-    int n = mlast_n < 8 ? mlast_n : 8;
-    kprintf("The last %d reports (newest last):\n", n);
-    for (int j = 0; j < n; j++) {
-        int i = (mlast_n - n + j) % 8;
-        kprintf("  slot %d, %2d bytes:", mlast[i].slot, mlast[i].len);
-        for (int b = 0; b < mlast[i].len && b < 16; b++) kprintf(" %02x", mlast[i].r[b]);
-        kprintf("   -> move %d,%d buttons %d wheel %d\n", mlast[i].dx, mlast[i].dy, mlast[i].bt, mlast[i].w);
-    }
+    int n = mother_n < 8 ? mother_n : 8;
+    kprintf("The last %d reports with a wheel, a button or other bytes (newest last):\n", n);
+    for (int j = 0; j < n; j++) mouse_show(&mother[(mother_n - n + j) % 8]);
+    n = mlast_n < 4 ? mlast_n : 4;
+    kprintf("The last %d reports:\n", n);
+    for (int j = 0; j < n; j++) mouse_show(&mlast[(mlast_n - n + j) % 8]);
 }
 
 /* the input fields of a report descriptor: the first report with relative X and Y, and its buttons and wheel */
