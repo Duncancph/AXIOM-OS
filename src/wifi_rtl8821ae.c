@@ -250,6 +250,25 @@ static void set_channel(int ch) {
     channel = ch;
 }
 static uint8_t efuse_board(void);
+/* The card's one antenna (or two) is shared with its Bluetooth, through a switch and an arbiter ("PTA") that Linux's
+ * Bluetooth coexistence code sets up (halbtc8821a1ant / 2ant init_hwconfig). Left as the firmware found it, the
+ * antenna may be with Bluetooth: scans then hear nothing at all, or only now and then. Wi-Fi gets the antenna. */
+static void ant_to_wifi(void) {
+    int ants = (efuse[0xC3] & 1) ? 2 : 1;                   /* EEPROM_RF_BT_SETTING bit 0: antennas */
+    add("antenna (before): 0x4c %08x 0xcb4 %08x 0x948 %08x 0x6c0 %08x 0x76e %02x; %d antenna%s", r32(0x4C), r32(0xCB4), r32(0x948),
+        r32(0x6C0), r8(0x76E), ants, ants > 1 ? "s" : "");
+    w8(0x0790, (uint8_t)((r8(0x0790) & 0xC0) | 0x05));
+    w32(0x004C, (r32(0x004C) & ~(1u << 23)) | (1u << 24));    /* antenna controlled by Wi-Fi / Bluetooth (not the GPIO) */
+    w32(0x0974, 0x3FF);
+    w8(0x0CB4, 0x77);                                        /* RF front-end pins */
+    w8(0x0CB7, (uint8_t)((r8(0x0CB7) & ~0x30) | 0x10));      /* the switch: Wi-Fi at the main port */
+    w32(0x06C0, 0x55555555); w32(0x06C4, 0x55555555);         /* arbitration table, as Linux at start (Wi-Fi only) */
+    w32(0x06C8, ants > 1 ? 0xFFFF : 0xFFFFFF); w8(0x06CC, 0x03);
+    w8(0x076E, ants > 1 ? 0x04 : 0x0C);                      /* Wi-Fi activity through the arbiter */
+    w8(0x0778, 0x03);
+    w8(0x0040, r8(0x0040) | 0x20);
+    add("antenna: set to Wi-Fi: 0x4c %08x 0xcb4 %08x 0x6c0 %08x 0x76e %02x", r32(0x4C), r32(0xCB4), r32(0x6C0), r8(0x76E));
+}
 static bool radio_init(void) {
     uint32_t cfg = r32(REG_SYS_CFG);
     uint8_t b = efuse_board();
@@ -286,6 +305,7 @@ static bool radio_init(void) {
     w8(0x0300 + 1, 0);                                       /* PCIE_CTRL_REG: release send/receive DMA */
     set_channel(1);
     add("radio: 2.4 GHz, 20 MHz, channel 1; RCR %08x, CR %04x", r32(REG_RCR), r16(REG_CR));
+    ant_to_wifi();
     return true;
 }
 
