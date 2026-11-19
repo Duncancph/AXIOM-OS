@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 204
-notes Logitech receivers with a keyboard and a mouse: the mouse wheel fix now finds the mouse.
-file kernel b204/thane.elf.gz 12411624 837d468e441c35a3634ba0b86e9f59b652853afde846a2ce915407a3e373128d
-file initrd b204/initrd.tar.gz 3614720 eb673c3d65ae4b9542ce8287c44f8fa850696611f1f8a7082989d93a9cc1476e
-file bootx64 b204/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b204/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022100b25b9b95d19dd754040ba85fee7e581e28fc776ae9f80757659eab15dd790e8d02203b5b2b716ae6d027e971325d0cfd13e2fe7f1b1820a854bb2ddd0329cd4aad30
+build 205
+notes Vertex is much less laggy: the desktop no longer redraws the whole window and dock for every frame, copying is faster, and the scheduler is quicker. New prof command.
+file kernel b205/thane.elf.gz 12440880 067c5d6ea3d0b3c4600d995f29011ce7c99ac5a2701bd97c75dfd18d6129a781
+file initrd b205/initrd.tar.gz 3614720 5b3a23c5033401dce2dddcf34b8da927aefb84622cfc68c30be168b8e33e5306
+file bootx64 b205/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b205/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3044022007dd44db225b6bafd0408957d8b151cc2b092d441ca36ab9484854e2874d1e5f02201fb1045200ebd71661e430c128431aeb04f5b59f93ff721fb287cdade33b96fb
