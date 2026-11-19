@@ -11,7 +11,9 @@
 #define CACHED (1ULL << 11)   /* (with SHARED) a page of the file page cache: counted, freed when nothing maps it */
 #define NX (1ULL << 63)       /* not executable (EFER.NXE is on) */
 #define ADDR(e) ((e) & 0x000FFFFFFFFFF000ULL)
-#define USER_PML4_INDEX 1     /* 0x8000000000 - 0x10000000000 */
+#define USER_PML4_FIRST 1     /* programs' memory: top-level entries 1..255 (0x8000000000 - 0x800000000000) */
+#define USER_PML4_END 256
+#define IS_USER_PML4(i) ((i) >= USER_PML4_FIRST && (i) < USER_PML4_END)
 
 extern uint64_t boot_pml4[];
 static uint64_t pte_release(uint64_t pte);
@@ -30,7 +32,7 @@ void vm_init(void) {
 uint64_t *vm_create(void) {
     uint64_t *pml4 = page_alloc(1);
     if (!pml4) return 0;
-    for (int i = 0; i < 512; i++) if (i != USER_PML4_INDEX) pml4[i] = boot_pml4[i];
+    for (int i = 0; i < 512; i++) if (!IS_USER_PML4(i)) pml4[i] = boot_pml4[i];
     return pml4;
 }
 
@@ -99,7 +101,8 @@ bool user_ok(uint64_t *pml4, const void *p, uint64_t len, bool write) {
 }
 
 void vm_destroy(uint64_t *pml4) {
-    uint64_t *l3 = (pml4[USER_PML4_INDEX] & P) ? (uint64_t *)ADDR(pml4[USER_PML4_INDEX]) : 0;
+    for (int i4 = USER_PML4_FIRST; i4 < USER_PML4_END; i4++) {
+    uint64_t *l3 = (pml4[i4] & P) ? (uint64_t *)ADDR(pml4[i4]) : 0;
     if (l3) {
         for (int i = 0; i < 512; i++) {
             if (!(l3[i] & P)) continue;
@@ -114,6 +117,7 @@ void vm_destroy(uint64_t *pml4) {
             page_free(l2);
         }
         page_free(l3);
+    }
     }
     page_free(pml4);
 }
@@ -336,7 +340,8 @@ static uint64_t drop_pages(struct mm *m, uint64_t s, uint64_t e) {
     uint64_t freed = 0;
     for (uint64_t a = s; a < e; a += 4096) {
         uint64_t *t = next_level(m->pml4, (a >> 39) & 511, false);
-        if (t) t = next_level(t, (a >> 30) & 511, false);
+        if (!t) { a = (a | ((1ULL << 39) - 1)) + 1 - 4096; continue; }      /* nothing in this 512 GiB */
+        t = next_level(t, (a >> 30) & 511, false);
         if (!t) { a = (a | ((1ULL << 30) - 1)) + 1 - 4096; continue; }      /* nothing in this GiB */
         t = next_level(t, (a >> 21) & 511, false);
         if (!t) { a = (a | ((1ULL << 21) - 1)) + 1 - 4096; continue; }      /* nothing in this 2 MiB */
@@ -344,6 +349,19 @@ static uint64_t drop_pages(struct mm *m, uint64_t s, uint64_t e) {
         if (*pte) { freed += pte_release(*pte); *pte = 0; }
     }
     return freed;
+}
+/* how much of the map area a program has taken: reserved bytes, its areas, and the biggest gap left */
+void mm_usage(struct mm *m, uint64_t *reserved, int *areas, uint64_t *gap) {
+    uint64_t r = 0, g = 0, at = USER_MMAP;
+    for (int i = 0; i < m->nv; i++) {
+        if (m->v[i].e <= USER_MMAP || m->v[i].s >= USER_MMAP_END) continue;
+        uint64_t s = m->v[i].s < USER_MMAP ? USER_MMAP : m->v[i].s, e = m->v[i].e > USER_MMAP_END ? USER_MMAP_END : m->v[i].e;
+        r += e - s;
+        if (s > at && s - at > g) g = s - at;
+        if (e > at) at = e;
+    }
+    if (USER_MMAP_END > at && USER_MMAP_END - at > g) g = USER_MMAP_END - at;
+    *reserved = r; *areas = m->nv; *gap = g;
 }
 long mm_mmap(struct mm *m, uint64_t addr, uint64_t len, int prot, int flags, uint64_t *pages) {
     len = (len + 4095) & ~4095ULL;
@@ -404,7 +422,8 @@ long mm_mprotect(struct mm *m, uint64_t addr, uint64_t len, int prot) {
     if (!vma_cut(m, addr, addr + len) || !vma_add(m, addr, addr + len, prot & 7)) return -DERR_NOMEM;
     for (uint64_t a = addr; a < addr + len; a += 4096) {    /* the pages already given */
         uint64_t *t = next_level(m->pml4, (a >> 39) & 511, false);
-        if (t) t = next_level(t, (a >> 30) & 511, false);
+        if (!t) { a = (a | ((1ULL << 39) - 1)) + 1 - 4096; continue; }      /* nothing in this 512 GiB */
+        t = next_level(t, (a >> 30) & 511, false);
         if (!t) { a = (a | ((1ULL << 30) - 1)) + 1 - 4096; continue; }
         t = next_level(t, (a >> 21) & 511, false);
         if (!t) { a = (a | ((1ULL << 21) - 1)) + 1 - 4096; continue; }
@@ -445,7 +464,8 @@ struct mm *mm_fork(struct mm *src, uint64_t *pages) {
     if (!m) return 0;
     if (src->nv && !vma_room(m, src->nv)) { mm_put(m); return 0; }
     memcpy(m->v, src->v, src->nv * sizeof *m->v); m->nv = src->nv;
-    uint64_t *l3 = (src->pml4[USER_PML4_INDEX] & P) ? (uint64_t *)ADDR(src->pml4[USER_PML4_INDEX]) : 0;
+    for (int i4 = USER_PML4_FIRST; i4 < USER_PML4_END; i4++) {
+    uint64_t *l3 = (src->pml4[i4] & P) ? (uint64_t *)ADDR(src->pml4[i4]) : 0;
     for (int i = 0; l3 && i < 512; i++) {
         if (!(l3[i] & P)) continue;
         uint64_t *l2 = (uint64_t *)ADDR(l3[i]);
@@ -455,7 +475,7 @@ struct mm *mm_fork(struct mm *src, uint64_t *pages) {
             for (int k = 0; k < 512; k++) {
                 uint64_t e = l1[k];
                 if (!pte_kept(e)) continue;
-                uint64_t va = ((uint64_t)USER_PML4_INDEX << 39) | ((uint64_t)i << 30) | ((uint64_t)j << 21) | ((uint64_t)k << 12);
+                uint64_t va = ((uint64_t)i4 << 39) | ((uint64_t)i << 30) | ((uint64_t)j << 21) | ((uint64_t)k << 12);
                 uint64_t *pte = pte_of(m->pml4, va, true);
                 if (!pte) { mm_put(m); return 0; }
                 if (e & SHARED) { *pte = e; if (e & CACHED) pc_ref(ADDR(e)); continue; }   /* (its owner keeps it) */
@@ -466,6 +486,7 @@ struct mm *mm_fork(struct mm *src, uint64_t *pages) {
                 if (pages) (*pages)++;
             }
         }
+    }
     }
     return m;
 }

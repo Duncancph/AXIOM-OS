@@ -585,3 +585,17 @@ void sched_tick(struct frame *f) {
         if (current->killed) task_exit(-1);
     }
 }
+
+void lx_ps(void) {
+    kprintf("Linux programs: threads, address space reserved (of %lu GB), areas, biggest gap left\n", (USER_MMAP_END - USER_MMAP) >> 30);
+    int all = 0;
+    for (int i = 0; i < MAX_TASKS; i++) if (tasks[i].state) all++;
+    for (int i = 0; i < MAX_TASKS; i++) {
+        struct task *t = &tasks[i];
+        if (!t->state || t->state == PS_ZOMBIE || !t->user || !t->lx || t->proc != t || !t->mm) continue;
+        int th = 0; for (int j = 0; j < MAX_TASKS; j++) if (tasks[j].state && tasks[j].state != PS_ZOMBIE && tasks[j].proc == t) th++;
+        uint64_t r, g; int a; mm_usage(t->mm, &r, &a, &g);
+        kprintf("  pid %-5d %-16s %4d threads  %6lu MB reserved  %6d areas  gap %lu MB\n", t->pid, t->name, th, r >> 20, a, g >> 20);
+    }
+    kprintf("Tasks in use: %d of %d\n", all, MAX_TASKS);
+}

@@ -268,6 +268,7 @@ void mm_put(struct mm *m);
 struct mm *mm_fork(struct mm *src, uint64_t *pages);
 bool mm_map_cached(struct mm *m, uint64_t va, uint64_t fid, uint64_t off, uint32_t valid, const void *data);   /* the page cache (vm.c) */
 uint64_t pcache_pages(void);   /* a copy (a Linux fork): own pages copied, shared ones mapped again */
+void mm_usage(struct mm *m, uint64_t *reserved, int *areas, uint64_t *gap);   /* (lxps, refused-call log) */
 long mm_mmap(struct mm *m, uint64_t addr, uint64_t len, int prot, int flags, uint64_t *pages);
 long mm_munmap(struct mm *m, uint64_t addr, uint64_t len, uint64_t *pages);
 long mm_mprotect(struct mm *m, uint64_t addr, uint64_t len, int prot);
@@ -410,6 +411,7 @@ void task_kill_others(struct task *except);   /* the other threads of its progra
 void task_exit(int code) __attribute__((noreturn));
 bool task_kill(int pid);
 void task_reap(void);
+void lx_ps(void);                       /* the lxps command: Linux programs' threads and address space */
 void event_push(struct task *t, const struct dunc_event *ev);
 void sched_tick(struct frame *f);
 void alarm_deliver(struct frame *f);

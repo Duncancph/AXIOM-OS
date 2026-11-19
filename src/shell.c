@@ -135,6 +135,7 @@ void shell_execute(char *line) {
     else if (!strcmp(c, "echo")) { for (int i = 1; i < argc; i++) kprintf("%s%s", argv[i], i + 1 < argc ? " " : ""); kprintf("\n"); }
     else if (!strcmp(c, "uptime")) cmd_uptime();
     else if (!strcmp(c, "threads")) linux_threads();
+    else if (!strcmp(c, "lxps")) lx_ps();
     else if (!strcmp(c, "mouse")) { void usbmouse_info(void); usbmouse_info(); }
     else if (!strcmp(c, "run")) {                         /* a Linux program: runs, and its output shows here when it ends */
         if (argc < 2) { kprintf("usage: run <program> [arguments]   (Linux x86-64 programs, static or position-independent)\n"); return; }

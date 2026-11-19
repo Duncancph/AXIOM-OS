@@ -6,9 +6,9 @@
 #define USER_STACK_TOP 0x0000008040000000ULL
 #define USER_WIN_BASE  0x0000008080000000ULL   /* window pixel buffers are mapped here */
 #define USER_HEAP      0x0000008100000000ULL   /* grows upwards with SYS_MEM_GROW */
-#define USER_END       0x0000010000000000ULL
+#define USER_END       0x0000800000000000ULL   /* (128 TiB, as on Linux: Chromium reserves hundreds of GiB per process) */
 #define USER_MMAP      0x000000C000000000ULL   /* SYS_MMAP's area (to USER_MMAP_END) */
-#define USER_MMAP_END  0x000000FF00000000ULL
+#define USER_MMAP_END  0x00007FFF00000000ULL
 
 /* SYS_MMAP(addr, len, prot, flags) -> address, or a negative error; memory is zeroed and given out page by page
  * when first touched, so big reservations (PROT_NONE) cost nothing */

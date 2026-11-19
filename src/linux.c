@@ -2055,6 +2055,8 @@ uint64_t linux_syscall(struct frame *f) {
                     f->rdi, f->rsi);
             int nt = 0; for (int i = 0; i < MAX_TASKS; i++) if (tasks[i].state) nt++;
             kprintf("[linux]   kernel memory free: %lu MB; tasks: %d of %d\n", mem_low_free() >> 20, nt, MAX_TASKS);
+            if (current->mm) { uint64_t r, g; int a; mm_usage(current->mm, &r, &a, &g);
+                kprintf("[linux]   its address space: %lu MB reserved in %d areas, biggest gap %lu MB\n", r >> 20, a, g >> 20); }
         } else quiet++;
     }
     if (chan_woke) { chan_woke = false; task_yield(); }
