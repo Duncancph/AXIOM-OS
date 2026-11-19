@@ -24,6 +24,14 @@ static char report[3000]; static int rlen;
 static bool started, fw_ok, radio_ok;
 static uint8_t efuse[512], mac[6];
 
+static char jrep[1600]; static int jlen;                  /* the last join attempt (shown by 'wifi': the log fills up) */
+static void jadd(const char *f, ...) {
+    __builtin_va_list ap; __builtin_va_start(ap, f);
+    char line[400]; kvsnprintf(line, sizeof line, f, ap); __builtin_va_end(ap);
+    LOG_INFO("wifi: %s\n", line);
+    int n = ksnprintf(jrep + jlen, sizeof jrep - jlen, "  %s\n", line);
+    if (n > 0 && jlen + n < (int)sizeof jrep) jlen += n;
+}
 static void add(const char *f, ...) {
     __builtin_va_list ap; __builtin_va_start(ap, f);
     char line[200]; kvsnprintf(line, sizeof line, f, ap); __builtin_va_end(ap);
@@ -488,6 +496,7 @@ void wifi_info(void) {
     kprintf("Wi-Fi: Realtek RTL8821AE at PCI %02x:%02x.%x\n", dev->bus, dev->dev, dev->fn);
     if (!started) kprintf("Not started. Type 'wifi start' to power it up and load its firmware (test stage).\n");
     else kprintf("%s", report);
+    if (jlen) kprintf("The last attempt to join a network:\n%s", jrep);
 }
 /* at start-up: only note the card (nothing is switched on) */
 bool wifi_probe(struct pci_dev *p) {
@@ -671,14 +680,14 @@ static void wnif_poll(struct netif *n) {
         static const char *names[] = { "idle", "authenticating", "associating", "checking the password", "connected", "failed" };
         if (sta.state == WS_CONNECTED) { ksnprintf(join_msg, sizeof join_msg, "Connected to \"%s\".", sta.ssid); net_prefer(&wnif); }
         else if (sta.state == WS_FAILED) {
-            ksnprintf(join_msg, sizeof join_msg, "Couldn't join \"%s\": %s (card sent %d of %d; router: %d beacons, %d replies)", sta.ssid,
+            ksnprintf(join_msg, sizeof join_msg, "Couldn't join \"%s\": %s (card sent %d of %d; access point: %d beacons, %d replies)", sta.ssid,
                       sta.why[0] ? sta.why : "no answer", tx_done(TQ_MGMT) + tx_done(TQ_DATA), tx_sent, ap_beacons, ap_auth + ap_assoc + ap_deauth);
             joining = false;
         } else ksnprintf(join_msg, sizeof join_msg, "Joining \"%s\": %s...", sta.ssid, names[sta.state]);
-        LOG_INFO("wifi: %s (%d frames heard, %d sent, %d dropped)\n", join_msg, rx_frames_joined, tx_sent, tx_full);
+        jadd("%s (%d frames heard, %d sent, %d dropped)", join_msg, rx_frames_joined, tx_sent, tx_full);
         if (sta.state == WS_FAILED || sta.state == WS_CONNECTED)
-            LOG_INFO("wifi: the card took back %d of the frames sent; TXDMA_STATUS %08x TXPAUSE %02x FIFOPAGE %08x CR %04x TCR %08x; "
-                     "from the access point: %d beacons, %d auth, %d deauth/disassoc, %d assoc replies, %d other, %d to us\n",
+            jadd("the card took back %d of the frames sent; TXDMA_STATUS %08x TXPAUSE %02x FIFOPAGE %08x CR %04x TCR %08x; "
+                     "from the access point: %d beacons, %d auth, %d deauth/disassoc, %d assoc replies, %d other, %d to us",
                      tx_done(TQ_MGMT) + tx_done(TQ_DATA), r32(0x0210), r8(0x0522), r32(0x0204), r16(REG_CR), r32(0x0604),
                      ap_beacons, ap_auth, ap_deauth, ap_assoc, ap_other, ap_to_us);
     }
@@ -704,7 +713,9 @@ static void wifi_join_bss(int i, const uint8_t *pmk) {
         net_add_netif(&wnif); wnif_added = true;
     }
     ksnprintf(join_msg, sizeof join_msg, "Joining \"%s\" on channel %d...", b->ssid, b->ch);
-    LOG_INFO("wifi: %s\n", join_msg);
+    jlen = 0; jrep[0] = 0;
+    jadd("%s (access point %02x:%02x:%02x:%02x:%02x:%02x, %d dBm, %s)", join_msg, b->bssid[0], b->bssid[1], b->bssid[2], b->bssid[3], b->bssid[4], b->bssid[5],
+         b->dbm, pmk ? "with the saved password" : "open");
 }
 /* join the saved network if the last scan found it: -1 not found, 0 started */
 static int wifi_join_saved(void) {

@@ -60,7 +60,7 @@ static void cmd_help(void) {
         {"echo <text>", "print text"},
         {"clear", "clear the screen"},
         {"uptime", "time since boot"},
-        {"log", "kernel messages"},
+        {"log [word]", "kernel messages (only those with the word)"},
         {"clan", "package manager: list, install, remove apps"},
         {"reboot", "restart the computer"},
         {"poweroff", "turn the computer off"},
@@ -154,7 +154,20 @@ void shell_execute(char *line) {
     else if (!strcmp(c, "clan")) clan_command(argc, argv);
     else if (!strcmp(c, "log") || !strcmp(c, "dmesg")) {
         char *b = page_alloc(8);
-        if (b) { console_log_read(b, 8 * 4096); console_write(b); for (int i = 0; i < 8; i++) page_free(b + i * 4096); }
+        if (b) {
+            console_log_read(b, 8 * 4096);
+            if (argc > 1) {                                  /* 'log wifi': only the lines with that word */
+                for (char *l = b; *l;) {
+                    char *e = l; while (*e && *e != '\n') e++;
+                    char keep = *e; *e = 0;
+                    bool hit = false;
+                    for (char *q = l; *q && !hit; q++) { int k = 0; while (argv[1][k] && q[k] && (q[k] | 32) == (argv[1][k] | 32)) k++; if (!argv[1][k]) hit = true; }
+                    if (hit) { console_write(l); console_write("\n"); }
+                    *e = keep; l = *e ? e + 1 : e;
+                }
+            } else console_write(b);
+            for (int i = 0; i < 8; i++) page_free(b + i * 4096);
+        }
     }
     else if (!strcmp(c, "reboot") || !strcmp(c, "restart")) { kprintf("Restarting...\n"); acpi_reboot(); }
     else if (!strcmp(c, "poweroff") || !strcmp(c, "shutdown")) { kprintf("Powering off...\n"); acpi_poweroff(); }
