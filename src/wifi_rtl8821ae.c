@@ -421,6 +421,7 @@ static bool init_mac(void) {
     w8(0x0420 + 1, 0x1F);                                    /* FWHW_TXQ_CTRL */
     w32(REG_RCR, RCR_VALUE);
     w16(0x06A4, 0xFFFF);                                     /* RXFLTMAP2: every data frame type */
+    w32(0x0604, (1u << 9) | (1u << 15));                     /* TCR: CFENDFORM | bit 15, as Linux's driver sets it */
     if (!rings_setup()) return false;
     for (int q = 0; q < 7; q++) w32(0x0308 + q * 8, (uint32_t)(uintptr_t)txring);   /* the send queues (0x308-0x338): an empty ring each */
     if (txq_setup()) { w32(txq[TQ_MGMT].reg, (uint32_t)(uintptr_t)txq[TQ_MGMT].d); w32(txq[TQ_DATA].reg, (uint32_t)(uintptr_t)txq[TQ_DATA].d); }
@@ -633,9 +634,15 @@ void wifi_simulate(void) {
 static struct wifi_sta sta;
 static struct netif wnif;
 static bool wnif_added, joining;
-static char join_msg[128];
+static char join_msg[200];
 static uint64_t join_started;
-static int rx_frames_joined;
+static int rx_frames_joined, ap_beacons, ap_auth, ap_deauth, ap_assoc, ap_other, ap_to_us;
+static int tx_done(int q) {                                  /* frames the card has taken back (sent, or given up on) */
+    int n = 0; struct txq *t = &txq[q];
+    if (!t->d) return 0;
+    for (int i = 0; i < NTXD; i++) if (t->d[i * 16 + 7] && !(t->d[i * 16] & (1u << 31))) n++;
+    return n;
+}
 static void sta_send(void *ctx, const uint8_t *f, int len) { (void)ctx; tx_frame((f[0] & 0x0C) == 0x08 ? TQ_DATA : TQ_MGMT, f, len); }
 static void sta_deliver(void *ctx, const uint8_t *eth, int len) { (void)ctx; net_rx(&wnif, eth, len); }
 static int wnif_send(struct netif *n, const void *frame, int len) { (void)n; return sta.state == WS_CONNECTED ? wsta_send_eth(&sta, frame, len) : -1; }
@@ -645,17 +652,35 @@ static void wnif_poll(struct netif *n) {
     if (!joining) return;
     int len, dbm, rate; uint8_t *f;
     for (int k = 0; k < 32 && (f = rx_take(&len, &dbm, &rate)); k++)
-        if (len >= 24) { rx_frames_joined++; wsta_rx(&sta, f, len - 4, uptime_ms()); }   /* (minus the FCS) */
+        if (len >= 24) {
+            rx_frames_joined++;
+            if (!memcmp(f + 10, sta.bssid, 6)) {              /* from the access point: what (for the log) */
+                int ty = (f[0] >> 2) & 3, st = f[0] >> 4;
+                if (ty == 0 && st == 8) ap_beacons++;
+                else if (ty == 0 && st == 11) ap_auth++;
+                else if (ty == 0 && (st == 12 || st == 10)) ap_deauth++;
+                else if (ty == 0 && st == 1) ap_assoc++;
+                else ap_other++;
+                if (!memcmp(f + 4, mac, 6)) ap_to_us++;
+            }
+            wsta_rx(&sta, f, len - 4, uptime_ms());           /* (minus the FCS) */
+        }
     int was = sta.state;
     wsta_tick(&sta, uptime_ms());
     if (sta.state != was || (sta.state == WS_FAILED && joining)) {
         static const char *names[] = { "idle", "authenticating", "associating", "checking the password", "connected", "failed" };
         if (sta.state == WS_CONNECTED) { ksnprintf(join_msg, sizeof join_msg, "Connected to \"%s\".", sta.ssid); net_prefer(&wnif); }
         else if (sta.state == WS_FAILED) {
-            ksnprintf(join_msg, sizeof join_msg, "Couldn't join \"%s\": %s", sta.ssid, sta.why[0] ? sta.why : "no answer");
+            ksnprintf(join_msg, sizeof join_msg, "Couldn't join \"%s\": %s (card sent %d of %d; router: %d beacons, %d replies)", sta.ssid,
+                      sta.why[0] ? sta.why : "no answer", tx_done(TQ_MGMT) + tx_done(TQ_DATA), tx_sent, ap_beacons, ap_auth + ap_assoc + ap_deauth);
             joining = false;
         } else ksnprintf(join_msg, sizeof join_msg, "Joining \"%s\": %s...", sta.ssid, names[sta.state]);
         LOG_INFO("wifi: %s (%d frames heard, %d sent, %d dropped)\n", join_msg, rx_frames_joined, tx_sent, tx_full);
+        if (sta.state == WS_FAILED || sta.state == WS_CONNECTED)
+            LOG_INFO("wifi: the card took back %d of the frames sent; TXDMA_STATUS %08x TXPAUSE %02x FIFOPAGE %08x CR %04x TCR %08x; "
+                     "from the access point: %d beacons, %d auth, %d deauth/disassoc, %d assoc replies, %d other, %d to us\n",
+                     tx_done(TQ_MGMT) + tx_done(TQ_DATA), r32(0x0210), r8(0x0522), r32(0x0204), r16(REG_CR), r32(0x0604),
+                     ap_beacons, ap_auth, ap_deauth, ap_assoc, ap_other, ap_to_us);
     }
 }
 static int hexval(char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; }
@@ -669,7 +694,8 @@ static void wifi_join_bss(int i, const uint8_t *pmk) {
     memset(&sta, 0, sizeof sta);
     sta.send = sta_send; sta.deliver = sta_deliver;
     uint8_t snonce[32]; random_bytes(snonce, 32);
-    rx_frames_joined = 0; tx_sent = tx_full = 0;
+    rx_frames_joined = 0; tx_sent = tx_full = 0; ap_beacons = ap_auth = ap_deauth = ap_assoc = ap_other = ap_to_us = 0;
+    for (int q = 0; q < 2; q++) if (txq[q].d) for (int i = 0; i < NTXD; i++) txq[q].d[i * 16 + 7] = 0;   /* (for tx_done) */
     joining = true; join_started = uptime_ms();
     wsta_join(&sta, mac, b->bssid, b->ssid, pmk, snonce, uptime_ms());
     if (!wnif_added) {
