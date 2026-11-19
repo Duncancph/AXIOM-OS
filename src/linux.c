@@ -2046,6 +2046,17 @@ uint64_t linux_syscall(struct frame *f) {
         for (int i = 0; i < NFD; i++) if ((was_free[i >> 6] >> (i & 63) & 1) && lx0->fd[i].kind) lx0->fd[i].cloexec = ce;
         if ((n == 33 || n == 292) && r < NFD) lx0->fd[r].cloexec = ce;  /* (dup2/dup3 onto an open number) */
     }
+    if ((int64_t)r == -ENOMEM_ || (int64_t)r == -EMFILE_ || ((int64_t)r == -EAGAIN_ && n == 56)) {
+        static uint64_t last_ms; static int quiet;              /* refused for want of room: say so (a program may CHECK it) */
+        uint64_t now = uptime_ms();
+        if (now - last_ms > 2000) { if (quiet) kprintf("[linux] (%d more like this)\n", quiet); quiet = 0; last_ms = now;
+            kprintf("[linux] '%s' (pid %d): system call %lu refused: %s (args %lx %lx)\n", current->name, current->pid, n,
+                    (int64_t)r == -EMFILE_ ? "too many open files" : (int64_t)r == -EAGAIN_ ? "no room for a thread" : "out of memory",
+                    f->rdi, f->rsi);
+            int nt = 0; for (int i = 0; i < MAX_TASKS; i++) if (tasks[i].state) nt++;
+            kprintf("[linux]   kernel memory free: %lu MB; tasks: %d of %d\n", mem_low_free() >> 20, nt, MAX_TASKS);
+        } else quiet++;
+    }
     if (chan_woke) { chan_woke = false; task_yield(); }
     return r;
 }
