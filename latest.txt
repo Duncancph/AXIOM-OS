@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 206
-notes Vertex responds faster: threads are woken at once instead of at the next timer tick (up to 4 ms each time), the clock is read without waiting for the kernel.
-file kernel b206/thane.elf.gz 12444336 e42b2e59a245d92f9caff770ef65741fd89136095940fd97568338d0d7a7494b
-file initrd b206/initrd.tar.gz 3614720 96b6a12919109143835e3e02194f0a575d0872131ab251fef25e027e8762df63
-file bootx64 b206/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b206/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3046022100a6e77b514e234726047ff49be84680bf32f6f1c0c6cee5a9f64c0f7b62c805350221009c2a2149d491bc355410d74324c7a418c1d7ac2020312498393040a9ec02bff0
+build 207
+notes Vertex no longer waits for the disk: files are written in the background (within a second) instead of on every write.
+file kernel b207/thane.elf.gz 12461104 6e1e8280b07c3ff8390ce8215abf0e1b270780c7c387cc4a8c8965f793ad09a9
+file initrd b207/initrd.tar.gz 3614720 21b32ea6b620f8917420cc36edfd8f93bbf578e7f62fba93b6c39860c3aa6b37
+file bootx64 b207/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b207/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022100e5b6285d57d85f88c6903df54cbef0e2c9669a718ad98b00310573718ab831cf02204640044c4d7292f4065553d4735e7b08442a2786fdede0d523665f0fb8d58511
