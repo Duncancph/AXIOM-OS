@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 205
-notes Vertex is much less laggy: the desktop no longer redraws the whole window and dock for every frame, copying is faster, and the scheduler is quicker. New prof command.
-file kernel b205/thane.elf.gz 12440880 067c5d6ea3d0b3c4600d995f29011ce7c99ac5a2701bd97c75dfd18d6129a781
-file initrd b205/initrd.tar.gz 3614720 5b3a23c5033401dce2dddcf34b8da927aefb84622cfc68c30be168b8e33e5306
-file bootx64 b205/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b205/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3044022007dd44db225b6bafd0408957d8b151cc2b092d441ca36ab9484854e2874d1e5f02201fb1045200ebd71661e430c128431aeb04f5b59f93ff721fb287cdade33b96fb
+build 206
+notes Vertex responds faster: threads are woken at once instead of at the next timer tick (up to 4 ms each time), the clock is read without waiting for the kernel.
+file kernel b206/thane.elf.gz 12444336 e42b2e59a245d92f9caff770ef65741fd89136095940fd97568338d0d7a7494b
+file initrd b206/initrd.tar.gz 3614720 96b6a12919109143835e3e02194f0a575d0872131ab251fef25e027e8762df63
+file bootx64 b206/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b206/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3046022100a6e77b514e234726047ff49be84680bf32f6f1c0c6cee5a9f64c0f7b62c805350221009c2a2149d491bc355410d74324c7a418c1d7ac2020312498393040a9ec02bff0
