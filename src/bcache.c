@@ -121,8 +121,10 @@ static void insert(uint64_t k, const uint8_t *data) {
     uint32_t i = find(k);
     if (i == NIL) {
         i = take_slot(); if (i == NIL) return;
+        uint32_t j = find(k);                     /* (making room may have waited for the drive: someone else put it in) */
+        if (j != NIL) { ents[i].key = 0; ents[i].dirty = 0; ents[i].next = free_head; free_head = i; used_chunks--; lru_unlink(j); lru_front(j); return; }
         ents[i].key = k; uint32_t h = hashk(k); ents[i].hnext = htab[h]; htab[h] = i;
-    } else lru_unlink(i);
+    } else { lru_unlink(i); lru_front(i); return; }  /* already here: that copy is as new as the drive's, or newer */
     memcpy(slot(i), data, CH);
     lru_front(i);
 }
