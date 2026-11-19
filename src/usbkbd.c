@@ -57,6 +57,7 @@ static struct hidpp {
     int fs, hrw, hrw_old, hrw_new;                     /* feature indexes (0: none), wheel mode before / after */
     int nfeat; uint16_t feat[40];                      /* the mouse's features, by index */
     int wheel_acc, mult;                               /* (high-resolution notifications: eighths, or so) */
+    int devs[6], ndev, wheel_dev;                      /* the devices that answered; the one sending 2.0 notifications */
     const char *state;
 } hpp;
 static void mouse_note(int slot, const uint8_t *r, int len, int dx, int dy, int bt, int w) {
@@ -81,7 +82,9 @@ void usbmouse_info(void) {
     }
     if (!nmdesc) kprintf("No USB mouse.\n");
     if (hpp.d) {
-        kprintf("Logitech HID++: device %d: %s", hpp.dev, hpp.state ? hpp.state : "");
+        kprintf("Logitech HID++: devices answering:");
+        for (int i = 0; i < hpp.ndev; i++) kprintf(" %d", hpp.devs[i]);
+        kprintf("; device %d: %s", hpp.dev, hpp.state ? hpp.state : "");
         if (hpp.hrw) kprintf(" (wheel feature at index %d, mode %d -> %d, multiplier %d)", hpp.hrw, hpp.hrw_old, hpp.hrw_new, hpp.mult);
         kprintf("\n");
         if (hpp.nfeat > 1) {
@@ -168,25 +171,38 @@ static int hpp_feature(uint16_t id) {                  /* the feature's index, 0
     uint8_t p[2] = { (uint8_t)(id >> 8), (uint8_t)id };
     return hpp_ask(0, 0, p, 2) == 0 ? hpp.ans[4] : 0;
 }
+static void hpp_features(void) {                       /* hpp.dev's features, by index (for 'mouse') */
+    hpp.nfeat = 0;
+    hpp.fs = hpp_feature(0x0001);
+    if (!hpp.fs || hpp_ask(hpp.fs, 0, 0, 0) != 0) return;
+    int n = hpp.ans[4]; if (n > 39) n = 39;
+    for (int i = 1; i <= n; i++) {
+        uint8_t ix = (uint8_t)i;
+        hpp.feat[i] = hpp_ask(hpp.fs, 1, &ix, 1) == 0 ? (uint16_t)(hpp.ans[4] << 8 | hpp.ans[5]) : 0;
+    }
+    hpp.nfeat = n + 1;
+}
 static void hpp_thread(void *arg) {
     (void)arg;
     task_sleep(800);
-    hpp.state = "no answer to HID++ (not a Logitech HID++ device?)";
-    if (hpp.dev <= 0) {                                /* which device index answers (a receiver has up to 6) */
-        for (int i = 1; i <= 6 && hpp.dev <= 0; i++) { hpp.dev = i; if (hpp_ask(0, 0, (const uint8_t[]){ 0x00, 0x01 }, 2) != 0) hpp.dev = -1; }
-        if (hpp.dev <= 0) { LOG_INFO("USB mouse: %s\n", hpp.state); return; }
+    /* every device on the receiver (a keyboard and a mouse can share one): the first with the wheel feature */
+    int first = 0; hpp.ndev = 0;
+    for (int i = 1; i <= 6; i++) {
+        hpp.dev = i;
+        if (hpp_ask(0, 0, (const uint8_t[]){ 0x00, 0x01 }, 2) != 0) continue;   /* (no answer: nothing paired there) */
+        hpp.devs[hpp.ndev++] = i;
+        if (!first) first = i;
+        hpp.hrw = hpp_feature(0x2121);
+        if (hpp.hrw) break;
     }
-    hpp.fs = hpp_feature(0x0001);
-    if (hpp.fs && hpp_ask(hpp.fs, 0, 0, 0) == 0) {     /* its features (for 'mouse') */
-        int n = hpp.ans[4]; if (n > 39) n = 39;
-        for (int i = 1; i <= n; i++) {
-            uint8_t ix = (uint8_t)i;
-            if (hpp_ask(hpp.fs, 1, &ix, 1) == 0) hpp.feat[i] = (uint16_t)(hpp.ans[4] << 8 | hpp.ans[5]);
-        }
-        hpp.nfeat = n + 1;
+    if (!first) { hpp.dev = -1; hpp.state = "no answer to HID++ (not a Logitech HID++ device?)"; LOG_INFO("USB mouse: %s\n", hpp.state); return; }
+    if (!hpp.hrw) {
+        hpp.dev = hpp.wheel_dev > 0 ? hpp.wheel_dev : first;   /* (for 'mouse': the one sending notifications, if any) */
+        hpp_features();
+        hpp.state = "no device here has a high-resolution wheel feature";
+        LOG_INFO("USB mouse: HID++: %s\n", hpp.state); return;
     }
-    hpp.hrw = hpp_feature(0x2121);
-    if (!hpp.hrw) { hpp.state = "HID++ device, without a high-resolution wheel feature"; LOG_INFO("USB mouse: %s\n", hpp.state); return; }
+    hpp_features();
     if (hpp_ask(hpp.hrw, 0, 0, 0) == 0) hpp.mult = hpp.ans[4] ? hpp.ans[4] : 8;   /* getWheelCapability: multiplier */
     hpp.hrw_old = hpp_ask(hpp.hrw, 1, 0, 0) == 0 ? hpp.ans[4] : -1;               /* getWheelMode */
     uint8_t mode = 0;                                  /* to the normal report (not diverted), low resolution, not inverted */
@@ -198,11 +214,11 @@ static void hpp_thread(void *arg) {
 /* a HID++ report from the mouse's interface: an answer to hpp_thread, or a wheel notification */
 static void hpp_report(const uint8_t *r, int n) {
     if (n < 7 || (r[0] != 0x10 && r[0] != 0x11)) return;
-    if (hpp.dev <= 0 && r[1] >= 1 && r[1] <= 6) hpp.dev = r[1];   /* (the first notification tells us the device index) */
+    if (r[0] == 0x11 && (r[3] & 0x0F) == 0 && r[1] >= 1 && r[1] <= 6) hpp.wheel_dev = r[1];   /* (a 2.0 notification: who from) */
     if ((r[3] & 0x0F) == HPP_SWID || ((r[2] == 0xFF || r[2] == 0x8F) && (r[4] & 0x0F) == HPP_SWID)) {
         memcpy(hpp.ans, r, n < 20 ? n : 20); hpp.got = 1; return;
     }
-    if (hpp.hrw && r[2] == hpp.hrw && r[3] == 0x00) {   /* wheelMovement: [flags: bit 4 high resolution][delta_v, big-endian] */
+    if (hpp.hrw && r[1] == hpp.dev && r[2] == hpp.hrw && r[3] == 0x00) {   /* wheelMovement: [flags: bit 4 high resolution][delta_v, big-endian] */
         int dv = (int16_t)(r[5] << 8 | r[6]);
         if (r[4] & 0x10) { hpp.wheel_acc += dv; int m = hpp.mult > 0 ? hpp.mult : 8; dv = hpp.wheel_acc / m; hpp.wheel_acc -= dv * m; }
         if (dv) mouse_push(0, 0, mouse_bt, -dv);       /* (the buttons as they are) */
