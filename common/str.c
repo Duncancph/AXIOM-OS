@@ -2,17 +2,25 @@
 #include <stdint.h>
 #include "str.h"
 
-/* rep movsb / rep stosb: the processor's own fast copy and fill (many bytes per cycle on anything since Ivy Bridge);
- * these were byte-at-a-time loops, and every copy in the kernel (messages between programs, pages, pixels) goes
- * through them */
+/* 8 bytes at a time (these were byte loops, and every copy in the kernel goes through them). Not rep movsb /
+ * rep stosb: build 205 used them and the user's Haswell then stopped with machine checks inside the copy. */
+typedef uint64_t __attribute__((may_alias, aligned(1))) u64u;
 void *memset(void *d, int c, size_t n) {
-    void *p = d;
-    __asm__ volatile("rep stosb" : "+D"(p), "+c"(n) : "a"(c) : "memory");
+    uint8_t *p = d; uint64_t v = (uint8_t)c * 0x0101010101010101ULL;
+    while (n >= 32) { ((u64u *)p)[0] = v; ((u64u *)p)[1] = v; ((u64u *)p)[2] = v; ((u64u *)p)[3] = v; p += 32; n -= 32; }
+    while (n >= 8) { *(u64u *)p = v; p += 8; n -= 8; }
+    while (n--) *p++ = (uint8_t)c;
     return d;
 }
 void *memcpy(void *d, const void *s, size_t n) {
-    void *a = d;
-    __asm__ volatile("rep movsb" : "+D"(a), "+S"(s), "+c"(n) :: "memory");
+    uint8_t *a = d; const uint8_t *b = s;
+    while (n >= 32) {
+        uint64_t x0 = ((const u64u *)b)[0], x1 = ((const u64u *)b)[1], x2 = ((const u64u *)b)[2], x3 = ((const u64u *)b)[3];
+        ((u64u *)a)[0] = x0; ((u64u *)a)[1] = x1; ((u64u *)a)[2] = x2; ((u64u *)a)[3] = x3;
+        a += 32; b += 32; n -= 32;
+    }
+    while (n >= 8) { *(u64u *)a = *(const u64u *)b; a += 8; b += 8; n -= 8; }
+    while (n--) *a++ = *b++;
     return d;
 }
 void *memmove(void *d, const void *s, size_t n) {

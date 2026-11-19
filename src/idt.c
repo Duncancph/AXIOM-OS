@@ -83,6 +83,12 @@ static void dispatch(struct frame *f) {
  * it holds the lock while in the kernel, and returning to the app is where it lets go. */
 void isr_dispatch(struct frame *f) {
     if (f->vec == 0xF1) { tlb_ipi(); return; }     /* TLB shootdown: without the lock (its sender holds it) */
+    if (f->vec == 18) {                             /* machine check: every core gets it at once; one shows it, without the
+                                                       kernel lock (another core may hold it), the others stop */
+        static volatile int mc_first;
+        if (__atomic_exchange_n(&mc_first, 1, __ATOMIC_SEQ_CST)) for (;;) __asm__ volatile("cli; hlt");
+        kernel_panic(f);
+    }
     if ((f->cs & 3) == 3) cpu_self()->in_user = 0;
     if ((f->cs & 3) == 3 && current) current->last_rip = f->rip;
     if (f->vec == 0x81 && (f->cs & 3) == 3 && linux_fast_syscall(f)) { tlb_sync(); return; }   /* (no kernel lock needed) */
@@ -123,8 +129,28 @@ static void kernel_panic(struct frame *f) {
     ksnprintf(b, sizeof b, "rip=%lx cr2=%lx err=%lx build %d", f->rip, cr2, f->err, OS_BUILD);
     uint64_t *bp = (uint64_t *)f->rbp; int k = ksnprintf(c, sizeof c, "called from");
     for (int i = 0; i < 6 && current && current->kstack && (uint8_t *)bp >= current->kstack && (uint64_t)bp + 16 <= current->kstack_top; i++) { k += ksnprintf(c + k, sizeof c - k, " %lx", bp[1]); bp = (uint64_t *)bp[0]; }
-    const char *l[4] = { a, b, c, "Please photograph this for Claude. Press the power button to restart." };
-    desktop_emergency(l, 4);
+    /* a machine check: what the processor recorded (each bank that holds an error: its status, and the address) */
+    char m1[96] = "", m2[96] = "";
+    if (v == 18) {
+        uint32_t lo, hi; __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(0x179));
+        int banks = lo & 0xFF, k1 = 0, k2 = 0, shown = 0;
+        __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(0x17A));
+        k1 = ksnprintf(m1, sizeof m1, "MCG_STATUS %x:", lo);
+        for (int i = 0; i < banks && i < 32; i++) {
+            __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(0x401 + 4 * i));
+            uint64_t st = (uint64_t)hi << 32 | lo;
+            if (!(st >> 63)) continue;
+            uint64_t ad = 0;
+            if (st >> 58 & 1) { __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(0x402 + 4 * i)); ad = (uint64_t)hi << 32 | lo; }
+            kprintf("machine check bank %d: status %lx addr %lx\n", i, st, ad);
+            if (shown++ < 1) k1 += ksnprintf(m1 + k1, sizeof m1 - k1, " bank %d status %lx addr %lx", i, st, ad);
+            else if (shown < 4) k2 += ksnprintf(m2 + k2, sizeof m2 - k2, "bank %d %lx %lx  ", i, st, ad);
+        }
+        if (!shown) ksnprintf(m1 + k1, sizeof m1 - k1, " no bank holds an error");
+    }
+    const char *l[6] = { a, b, c, m1, m2, "Please photograph this for Claude. Press the power button to restart." };
+    const char *l4[4] = { a, b, c, l[5] };
+    if (v == 18) desktop_emergency(l, 6); else desktop_emergency(l4, 4);
     for (;;) __asm__ volatile("cli; hlt");
 }
 

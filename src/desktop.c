@@ -368,8 +368,7 @@ static void flush_rect(struct rect r) {
     for (int j = r.y; j < r.y + r.h; j++) {
         uint32_t *s = bb + j * W + r.x;
         volatile uint32_t *d = fb32 + (size_t)j * fb_stride + r.x;
-        if (fb_xrgb) { void *dd = (void *)d, *ss = s; size_t n = (size_t)r.w;   /* (whole lines at once: write-combined) */
-                       __asm__ volatile("rep movsl" : "+D"(dd), "+S"(ss), "+c"(n) :: "memory"); }
+        if (fb_xrgb) for (int i = 0; i < r.w; i++) d[i] = s[i];
         else for (int i = 0; i < r.w; i++) d[i] = fbcol(s[i]);
     }
     flush_relock(unl);
