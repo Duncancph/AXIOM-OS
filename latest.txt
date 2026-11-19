@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 197
-notes 'mouse' in CMD keeps the mouse's wheel and button reports for checking.
-file kernel b197/thane.elf.gz 12394936 e406bf508cbea7514ca94670c623dcd7f30afc26a0f19fbae61e3f071e6197f5
-file initrd b197/initrd.tar.gz 3604480 0fdc13fc472ec18fba823e1ab6e26c0a23fccd346487b4779363244d9d6c5611
-file bootx64 b197/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b197/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 304502210097d9209aec57445e2c353bb1859add267d6adaf0d1a92375a1fa9344eadd6d5e0220305dd619ae40cf8c5469d483dee3d0a38294de8013103bb6f94ddb5f19e79adc
+build 198
+notes The mouse command also shows other reports from the mouse (to find the wheel on Logitech receivers).
+file kernel b198/thane.elf.gz 12395200 3744351ec0930733d831c1eb301ae847b1fc05bcf4a2c9b2fa6e1b3a7a6b5af3
+file initrd b198/initrd.tar.gz 3604480 c24968a504318f32ed7d2744afa13c4e369c57bade47e9ae75e29e85281898b0
+file bootx64 b198/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b198/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022100c05c75c4253e5f0fc85fed736ca2172ec8a5bdf771ed41d70301e32aa48199b002203e03f112df6030fddc876781ce8165bea3f25359379654f9f1384c9ee1261e27
