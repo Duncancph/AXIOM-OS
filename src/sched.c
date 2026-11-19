@@ -1,5 +1,5 @@
 /* Preemptive multitasking. User programs are switched by the local APIC timer
- * (250 Hz); kernel threads (the desktop) run until they sleep or yield. */
+ * (1000 Hz); kernel threads (the desktop) run until they sleep or yield. */
 #include "kernel.h"
 #include "vfs.h"
 #include "net.h"
@@ -24,6 +24,21 @@ static inline void write_cr3(uint64_t v) { __asm__ volatile("mov %0,%%cr3" ::"r"
 
 static uint8_t fx_init[1024] __attribute__((aligned(64)));  /* a clean FPU/SSE/AVX state for new apps */
 
+/* A task became ready: if a core is asleep with nothing to do, wake it now (an interrupt), instead of leaving the
+ * task until some core's next timer tick. Chromium hands work between threads and processes many times a frame,
+ * and each hand-over waited for a tick. Kernel threads only run on core 0. */
+static void kick(const struct task *t) {
+    if (!sched_running || ncpus_on < 2 || !t) return;
+    int me = cpu_self()->id;
+    for (int i = 0; i < ncpus_on; i++) {
+        struct cpu *c = &cpus[i];
+        if (i == me || !c->started || !c->cur || !c->cur->idle || c->kicked) continue;
+        if (!t->user && i != 0) continue;
+        c->kicked = true;
+        lapic_ipi(c->apic_id, 0xF0);
+        return;
+    }
+}
 static struct task *alloc_task(const char *name) {
     for (int pass = 0; pass < 2; pass++) {
     if (pass) task_reap();                                   /* full: free the slots of threads that have ended, then look again */
@@ -55,7 +70,7 @@ struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg)
     *--sp = (uint64_t)arg;    /* r12 */
     *--sp = 0; *--sp = 0; *--sp = 0;   /* r13 r14 r15 */
     t->rsp = (uint64_t)sp;
-    t->state = PS_READY; t->rq = ++rq_seq;
+    t->state = PS_READY; t->rq = ++rq_seq; kick(t);
     return t;
 }
 
@@ -131,7 +146,7 @@ int task_spawn_arg(const char *app, const char *arg) {
     *--s = (uint64_t)user_entry;
     for (int i = 0; i < 6; i++) *--s = 0;
     t->rsp = (uint64_t)s;
-    t->state = PS_READY; t->rq = ++rq_seq;
+    t->state = PS_READY; t->rq = ++rq_seq; kick(t);
     kprintf("[sched] started '%s' (pid %d, %lu KiB)\n", t->name, t->pid, t->pages * 4);
     return t->pid;
 }
@@ -158,7 +173,7 @@ long task_thread(uint64_t rip, uint64_t rsp, uint64_t fs, uint64_t clear_tid) {
     *--s = (uint64_t)user_entry;
     for (int i = 0; i < 6; i++) *--s = 0;
     t->rsp = (uint64_t)s;
-    t->state = PS_READY; t->rq = ++rq_seq;
+    t->state = PS_READY; t->rq = ++rq_seq; kick(t);
     return t->pid;
 }
 
@@ -177,7 +192,7 @@ struct task *task_new_user(const char *name, struct mm *mm, struct task *proc, u
     *--s = (uint64_t)user_entry;
     for (int i = 0; i < 6; i++) *--s = 0;
     t->rsp = (uint64_t)s;
-    t->state = PS_READY; t->rq = ++rq_seq;
+    t->state = PS_READY; t->rq = ++rq_seq; kick(t);
     return t;
 }
 void frame_entry(void);
@@ -199,7 +214,7 @@ long task_clone(const struct frame *f, uint64_t rsp, uint64_t fs, uint64_t clear
     *--s = (uint64_t)frame_entry;
     for (int i = 0; i < 6; i++) *--s = 0;
     t->rsp = (uint64_t)s;
-    t->state = PS_READY; t->rq = ++rq_seq;
+    t->state = PS_READY; t->rq = ++rq_seq; kick(t);
     return t->pid;
 }
 /* a new process (a Linux fork or vfork): its own task, running the same code from the same frame (rax 0 there),
@@ -224,7 +239,7 @@ struct task *task_fork(const struct frame *f, struct mm *m, uint64_t rsp) {
     t->state = PS_BLOCKED; t->wake_at = 0;                         /* (taken, not ready: the caller fills it in, then task_start) */
     return t;
 }
-void task_start(struct task *t) { t->state = PS_READY; t->rq = ++rq_seq; }
+void task_start(struct task *t) { t->state = PS_READY; t->rq = ++rq_seq; kick(t); }
 bool task_alive(int pid) {
     for (int i = 0; i < task_hi; i++) if (tasks[i].state && tasks[i].state != PS_ZOMBIE && tasks[i].pid == pid) return true;
     return false;
@@ -252,6 +267,7 @@ long futex_wake(struct mm *m, uint64_t addr, int n) {
         if (t->state != PS_BLOCKED || t->futex_mm != m || t->futex_addr != addr || !m) continue;
         t->futex_woken = true; t->futex_mm = 0;
         t->state = PS_READY; t->wake_at = 0; t->rq = ++rq_seq;
+        kick(t);
         k++;
     }
     return k;
@@ -264,6 +280,7 @@ static void idle(void *arg) {
         bkl_unlock();
         uint64_t t0 = prof.on ? rdtsc() : 0;
         __asm__ volatile("sti; hlt; cli");
+        cpu_self()->kicked = false;
         if (t0) { cpu_self()->prof_tag = PROF_OTHER; bkl_lock(); int id = cpu_self()->id; extern uint64_t prof_last_wait[];
                   prof.idle[id] += rdtsc() - t0; prof.wait[id] -= prof_last_wait[id] < prof.wait[id] ? prof_last_wait[id] : prof.wait[id]; }   /* (the wait
                                                     for the lock after waking counts as idle: the core had nothing to do) */
@@ -376,7 +393,7 @@ void sched_init(void) {
 void sched_start(void) {
     static uint64_t boot_rsp;
     bkl_lock();
-    lapic_timer_start(250);
+    lapic_timer_start(1000);
     sched_running = true;
     current = idle_task;
     current->state = PS_RUNNING;
@@ -464,6 +481,7 @@ void task_wake(struct task *t) {
     if (t->state != PS_BLOCKED && t->state != PS_SLEEPING) return;
     t->futex_mm = 0; t->futex_addr = 0;
     t->state = PS_READY; t->wake_at = 0; t->rq = ++rq_seq;
+    kick(t);
 }
 void task_sleep(uint64_t ms) {
     if (!sched_running) { sleep_ms(ms); return; }
@@ -561,7 +579,7 @@ void event_push(struct task *t, const struct dunc_event *ev) {
     if (nh == t->evt) return;   /* full: drop */
     t->evq[t->evh] = *ev;
     t->evh = nh;
-    if (t->state == PS_BLOCKED && t->waiting_event) { t->state = PS_READY; t->wake_at = 0; t->rq = ++rq_seq; }
+    if (t->state == PS_BLOCKED && t->waiting_event) { t->state = PS_READY; t->wake_at = 0; t->rq = ++rq_seq; kick(t); }
 }
 
 /* Watchdog: kernel code isn't preempted, so a kernel thread that never yields freezes everything.

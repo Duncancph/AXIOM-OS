@@ -368,6 +368,7 @@ struct cpu {
     int id; uint32_t apic_id;
     volatile bool bkl_held, started;
     int prof_tag;                      /* what the next kernel lock taken on this core is for (prof) */
+    volatile bool kicked;              /* woken (sched.c kick) and not yet back from its sleep: don't wake it again */
     uint64_t last_switch_tsc;
     uint64_t busy_us;                  /* time spent running tasks other than its idle one (Ctrl+\ dump) */
     uint64_t gdt[7] __attribute__((aligned(16)));
@@ -394,6 +395,8 @@ struct prof { volatile int on; uint64_t wait[MAX_CPUS], held[MAX_CPUS], idle[MAX
 extern struct prof prof;
 void prof_run(int secs);
 void prof_kthread(struct task *t);
+bool user_writable_now(uint64_t *pml4, uint64_t p, uint64_t n);
+bool linux_fast_syscall(struct frame *f);
 void bkl_lock(void);
 void bkl_unlock(void);
 struct blockdev;

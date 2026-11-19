@@ -91,7 +91,7 @@ uint64_t syscall_dispatch(struct frame *f) {
     case SYS_SLEEP: task_sleep(a); return 0;
     case SYS_TIME: return uptime_ms();
     case SYS_ALARM:                                  /* after a ms of the app's own running time, call fn (0 = cancel) */
-        current->alarm_ticks = a ? (uint32_t)((a + 3) / 4) : 0; current->alarm_fn = b;
+        current->alarm_ticks = a ? (uint32_t)a : 0;   /* (1 ms ticks) */ current->alarm_fn = b;
         return 0;
     case SYS_SIGRETURN: {                            /* back from the alarm function to where the app was */
         if (!UOK(a, sizeof(struct frame), false)) return (uint64_t)-1;

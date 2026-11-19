@@ -3481,8 +3481,32 @@ static uint64_t linux_syscall_(struct frame *f) {
     return E(ENOSYS_);
 }
 
+static uint64_t boot_epoch_ns;
+/* System calls that only read the clock or say who's asking: answered without the kernel lock (Chromium makes
+ * ~5000 clock_gettime calls a second; each one queued for the lock behind everything else). false: the usual way. */
+bool linux_fast_syscall(struct frame *f) {
+    struct task *t = current;
+    if (!t || !t->lx || !t->proc || (t->sig_pending & ~t->sig_blocked)) return false;
+    uint64_t a = f->rdi;
+    switch (f->rax) {
+    case 39: f->rax = (uint64_t)t->proc->pid; return true;          /* getpid */
+    case 186: f->rax = (uint64_t)t->pid; return true;               /* gettid */
+    case 228: {                                                     /* clock_gettime: not the CPU-time clocks */
+        uint64_t b = f->rsi;
+        if (a == 2 || a == 3 || a > 11 || (!boot_epoch_ns && (a == 0 || a == 5 || a == 8)) || !user_writable_now(t->pml4, b, 16)) return false;
+        uint64_t ns = a == 0 || a == 5 || a == 8 ? boot_epoch_ns + uptime_ns() : uptime_ns();
+        ((uint64_t *)b)[0] = ns / 1000000000ull; ((uint64_t *)b)[1] = ns % 1000000000ull;
+        f->rax = 0; return true;
+    }
+    case 96:                                                        /* gettimeofday */
+        if (!boot_epoch_ns || (a && !user_writable_now(t->pml4, a, 16)) || (f->rsi && !user_writable_now(t->pml4, f->rsi, 8))) return false;
+        if (a) { uint64_t ns = boot_epoch_ns + uptime_ns(); ((uint64_t *)a)[0] = ns / 1000000000ull; ((uint64_t *)a)[1] = ns % 1000000000ull / 1000; }
+        if (f->rsi) *(uint64_t *)f->rsi = 0;
+        f->rax = 0; return true;
+    }
+    return false;
+}
 uint64_t linux_now_ns(void) {
-    static uint64_t boot_epoch_ns;
     if (!boot_epoch_ns) {
         struct rtc_time tm; rtc_read_local(&tm);
         static const int cum[] = { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };

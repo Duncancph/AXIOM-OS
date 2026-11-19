@@ -85,6 +85,7 @@ void isr_dispatch(struct frame *f) {
     if (f->vec == 0xF1) { tlb_ipi(); return; }     /* TLB shootdown: without the lock (its sender holds it) */
     if ((f->cs & 3) == 3) cpu_self()->in_user = 0;
     if ((f->cs & 3) == 3 && current) current->last_rip = f->rip;
+    if (f->vec == 0x81 && (f->cs & 3) == 3 && linux_fast_syscall(f)) { tlb_sync(); return; }   /* (no kernel lock needed) */
     bool took = !cpu_self()->bkl_held;
     if (took) {
         if (prof.on) cpu_self()->prof_tag = f->vec == 0x81 ? (f->rax < 512 ? PROF_LX + (int)f->rax : PROF_OTHER) : (int)(f->vec & 0xFF);

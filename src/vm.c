@@ -100,6 +100,15 @@ bool user_ok(uint64_t *pml4, const void *p, uint64_t len, bool write) {
     return true;
 }
 
+/* [p, p+n) is mapped, writable user memory right now (no faulting in, no lock: the lock-free system calls) */
+bool user_writable_now(uint64_t *pml4, uint64_t p, uint64_t n) {
+    if (p < USER_BASE || p + n > USER_END || p + n < p) return false;
+    for (uint64_t pg = p & ~0xFFFULL; pg < p + n; pg += 4096) {
+        uint64_t *pte = pte_of(pml4, pg, false);
+        if (!pte || (*pte & (P | U | W)) != (P | U | W)) return false;
+    }
+    return true;
+}
 void vm_destroy(uint64_t *pml4) {
     for (int i4 = USER_PML4_FIRST; i4 < USER_PML4_END; i4++) {
     uint64_t *l3 = (pml4[i4] & P) ? (uint64_t *)ADDR(pml4[i4]) : 0;
