@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 199
-notes Vertex no longer stops after a while: AXIOM has room for 1024 programs and threads (was 256).
-file kernel b199/thane.elf.gz 12395480 6d62f53f3c41a2ad3d31f6bca7d93b5933ae2e969592427985a2744c61b1973b
-file initrd b199/initrd.tar.gz 3604480 ac80507de1534ac1ed8fc905a674ab7dbd9c0cf9c4e980c393e22967f822a68d
-file bootx64 b199/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b199/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022100c6d9752ae3131621839dc1e6184aab90e85ca42057d68b46e88daee06169d4da02204b50d6309d3b960b7ddd06cfa4cbf9c93892ed551dd8075262af7d69b0b76ef5
+build 200
+notes If Vertex stops itself, the log now says what it was refused (memory, files or a thread).
+file kernel b200/thane.elf.gz 12396464 cdf43246227f80fb8c45c30b668ed877a5402bdcf531610b66f9df8f57152be6
+file initrd b200/initrd.tar.gz 3604480 ee8924e0547828e44c7596193485b17a9848f447270653fe6e827d4c96d7cb94
+file bootx64 b200/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b200/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022100c22fee4818f8fa4382583752ef863fdb34942a13e513939994d88216e4d23df9022021e005d1430ace4f54824a5781d439ecd02004b771648dc3c17dbabbe6be7c04
