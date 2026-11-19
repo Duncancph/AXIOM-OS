@@ -3,6 +3,7 @@
  * An .info line is "id|Name|version|icon|description" and, for a Linux program installed from a package
  * (Settings > Updates > Apps), a sixth field "linux:<path> <arguments>" instead of an .elf. */
 #include "kernel.h"
+int disk_system_id(void);
 #include "vfs.h"
 
 #define MAX_APPS 24
@@ -26,6 +27,17 @@ static int split(char *line, char **f, int max) {
 }
 
 void apps_refresh(void) {
+    static bool cleaned;                                   /* Merrow Lake was taken out of AXIOM (build 214): an installed
+                                                              copy and its saved game go too */
+    if (!cleaned && disk_system_id() >= 0) {                /* (once the system drive is there) */
+        cleaned = true;
+        struct dunc_stat st;
+        if (vfs_stat("/apps/merrow.info", &st) == 0 || vfs_stat("/apps/merrow.elf", &st) == 0) {
+            vfs_delete("/apps/merrow.elf"); vfs_delete("/apps/merrow.info");
+            kprintf("[apps] removed Merrow Lake (no longer part of AXIOM)\n");
+        }
+        if (vfs_stat("/home/.merrow", &st) == 0) vfs_delete("/home/.merrow");
+    }
     napps = 0;
     for (int i = 0; i < app_count && napps < MAX_APPS; i++) {
         struct app_entry *a = &apps[napps++];
