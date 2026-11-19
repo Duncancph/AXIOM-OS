@@ -60,7 +60,7 @@ static void cmd_help(void) {
         {"echo <text>", "print text"},
         {"clear", "clear the screen"},
         {"uptime", "time since boot"},
-        {"log [word]", "kernel messages (only those with the word)"},
+        {"memmap", "the firmware's memory map"}, {"log [word]", "kernel messages (only those with the word)"},
         {"clan", "package manager: list, install, remove apps"},
         {"reboot", "restart the computer"},
         {"poweroff", "turn the computer off"},
@@ -136,6 +136,7 @@ void shell_execute(char *line) {
     else if (!strcmp(c, "uptime")) cmd_uptime();
     else if (!strcmp(c, "threads")) linux_threads();
     else if (!strcmp(c, "lxps")) lx_ps();
+    else if (!strcmp(c, "memmap")) mem_map_print();
     else if (!strcmp(c, "prof")) prof_run(argc > 1 ? katoi(argv[1]) : 10);
     else if (!strcmp(c, "mouse")) { void usbmouse_info(void); usbmouse_info(); }
     else if (!strcmp(c, "run")) {                         /* a Linux program: runs, and its output shows here when it ends */

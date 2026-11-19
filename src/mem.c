@@ -13,7 +13,45 @@ static uint64_t pbits[MAXPAGES / 64];                         /* 1: in use */
 static uint32_t npages, used_pages, hint;
 static inline bool pused(uint32_t i) { return pbits[i >> 6] >> (i & 63) & 1; }
 
+/* Intel graphics' stolen memory: some firmware lists it as ordinary RAM. The graphics chip says where it is (PCI
+ * 00:02.0: BDSM, its start; GGC, its size); it's taken out of the memory map before anything uses it, as Linux's
+ * early quirk does. (The user's PC: a machine check reading 0xDD000000 in a buffer the kernel had put there.) */
+static uint64_t stolen_base, stolen_size;
+static void carve(uint64_t b, uint64_t e) {               /* [b, e) is not RAM: out of every RAM entry */
+    int n = bootinfo.mmap_count;
+    for (int i = 0; i < n; i++) {
+        struct mmap_ent *m = &bootinfo.mmap[i];
+        if (m->type != 1) continue;
+        uint64_t ms = m->base, me = m->base + m->len;
+        if (me <= b || ms >= e) continue;
+        if (ms < b && me > e && bootinfo.mmap_count < 64) {  /* in the middle: two pieces */
+            struct mmap_ent *t = &bootinfo.mmap[bootinfo.mmap_count++];
+            t->base = e; t->len = me - e; t->type = 1;
+            m->len = b - ms;
+        } else if (ms < b) m->len = b - ms;
+        else if (me > e) { m->base = e; m->len = me - e; }
+        else m->type = 2;
+    }
+    if (bootinfo.mmap_count < 64) {                         /* (and say what it is) */
+        struct mmap_ent *t = &bootinfo.mmap[bootinfo.mmap_count++];
+        t->base = b; t->len = e - b; t->type = 2;
+    }
+}
+static void intel_stolen_quirk(void) {
+    uint32_t id = pci_read32(0, 2, 0, 0x00), cls = pci_read32(0, 2, 0, 0x08) >> 16;
+    if ((id & 0xFFFF) != 0x8086 || (cls >> 8) != 0x03) return;   /* not Intel graphics */
+    uint16_t dev = (uint16_t)(id >> 16), ggc = pci_read16(0, 2, 0, 0x50);
+    uint32_t bdsm = pci_read32(0, 2, 0, 0x5C) & 0xFFF00000u;
+    uint8_t hi = dev >> 8;
+    uint64_t size;
+    if (hi == 0x01 || hi == 0x04 || hi == 0x0A || hi == 0x0C || hi == 0x0D) size = (uint64_t)((ggc >> 3) & 0x1F) * (32u << 20);   /* gen 6-7.5 */
+    else { uint32_t gms = (ggc >> 8) & 0xFF; size = gms < 0xF0 ? (uint64_t)gms * (32u << 20) : (uint64_t)(gms - 0xF0 + 1) * (4u << 20); }   /* gen 8+ */
+    if (!bdsm || !size || size > (1ULL << 30)) return;
+    stolen_base = bdsm; stolen_size = size;
+    carve(bdsm, bdsm + size);
+}
 void mem_init(void) {
+    intel_stolen_quirk();
     uint64_t kend = ((uint64_t)kernel_end + 0xFFFFF) & ~0xFFFFFULL;
     for (int i = 0; i < bootinfo.mod_count; i++)                                       /* keep GRUB's modules safe */
         if (bootinfo.mods[i].end > kend) kend = (bootinfo.mods[i].end + 0xFFFFF) & ~0xFFFFFULL;
@@ -66,6 +104,7 @@ void mem_protect_holes(void) {
     }
     __asm__ volatile("wbinvd; mov %%cr3,%%rax; mov %%rax,%%cr3" ::: "rax", "memory");
     LOG_INFO("Memory below 4 GB: %d MB that isn't RAM uncached (%d pieces split)\n", uc * 2, split);
+    if (stolen_size) LOG_INFO("Intel graphics' own memory %lx-%lx (%lu MB) kept out of use\n", stolen_base, stolen_base + stolen_size - 1, stolen_size >> 20);
 }
 static void pmark(uint32_t i, uint32_t n, bool on) {
     for (uint32_t k = i; k < i + n; k++) { if (on) pbits[k >> 6] |= 1ULL << (k & 63); else pbits[k >> 6] &= ~(1ULL << (k & 63)); }
@@ -172,3 +211,28 @@ void map_mmio_flags(uint64_t phys, uint64_t size, uint64_t cache) {
 }
 /* Map device memory (uncached) and return the address to use for it. */
 void *map_mmio(uint64_t phys, uint64_t size) { map_mmio_flags(phys, size, 0x18); return mmio_virt(phys); }
+
+/* what the memory map says is at a physical address (for the machine-check screen and 'memmap') */
+static const char *mtype(uint32_t t) { return t == 1 ? "RAM" : t == 2 ? "reserved" : t == 3 ? "ACPI tables" : t == 4 ? "ACPI NVS" : t == 5 ? "bad RAM" : "other"; }
+void mem_describe(uint64_t a, char *out, int n) {
+    for (int i = 0; i < bootinfo.mmap_count; i++) {
+        struct mmap_ent *e = &bootinfo.mmap[i];
+        if (a >= e->base && a < e->base + e->len) {
+            ksnprintf(out, n, "%s %lx-%lx%s", mtype(e->type), e->base, e->base + e->len - 1,
+                      a >= region_start && a < region_end ? ", kernel's memory" : ""); return;
+        }
+    }
+    ksnprintf(out, n, "in no memory-map entry (a hole: devices or reserved)");
+}
+void mem_map_print(void) {
+    kprintf("Memory map from the firmware (%d entries):\n", bootinfo.mmap_count);
+    for (int i = 0; i < bootinfo.mmap_count; i++) {
+        struct mmap_ent *e = &bootinfo.mmap[i];
+        kprintf("  %012lx-%012lx  %8lu KB  %s (%u)\n", e->base, e->base + e->len - 1, e->len >> 10, mtype(e->type), e->type);
+    }
+    kprintf("Kernel's memory (below 4 GB): %lx-%lx, %u MB in use\n", region_start, region_end - 1, used_pages / 256);
+    for (int i = 0; i < bootinfo.mod_count; i++) kprintf("Boot file %s: %lx-%lx\n", bootinfo.mods[i].name, bootinfo.mods[i].start, bootinfo.mods[i].end);
+    kprintf("Screen: %lx (%ux%u, pitch %u)\n", bootinfo.fb_addr, bootinfo.fb_w, bootinfo.fb_h, bootinfo.fb_pitch);
+    if (stolen_size) kprintf("Intel graphics' own memory: %lx-%lx (%lu MB): kept out of use\n", stolen_base, stolen_base + stolen_size - 1, stolen_size >> 20);
+    else kprintf("Intel graphics' own memory: none found\n");
+}

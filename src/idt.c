@@ -127,10 +127,16 @@ static void kernel_panic(struct frame *f) {
     char a[96], b[96], c[96];
     ksnprintf(a, sizeof a, "AXIOM stopped: %s (vector %lu) in '%s'", v < 20 ? names[v] : "exception", v, current ? current->name : "boot");
     ksnprintf(b, sizeof b, "rip=%lx cr2=%lx err=%lx build %d", f->rip, cr2, f->err, OS_BUILD);
-    uint64_t *bp = (uint64_t *)f->rbp; int k = ksnprintf(c, sizeof c, "called from");
-    for (int i = 0; i < 6 && current && current->kstack && (uint8_t *)bp >= current->kstack && (uint64_t)bp + 16 <= current->kstack_top; i++) { k += ksnprintf(c + k, sizeof c - k, " %lx", bp[1]); bp = (uint64_t *)bp[0]; }
+    int k = ksnprintf(c, sizeof c, "called from");               /* kernel code addresses on its stack (no frame chain needed) */
+    {
+        extern char kernel_end[]; uint64_t *sp = (uint64_t *)f->rsp; int shown = 0;
+        for (int i = 0; i < 512 && shown < 6; i++) {
+            if (!current || !current->kstack || (uint8_t *)(sp + i) < current->kstack || (uint64_t)(sp + i) + 8 > current->kstack_top) break;
+            uint64_t w = sp[i]; if (w >= 0x100000 && w < (uint64_t)kernel_end) { k += ksnprintf(c + k, sizeof c - k, " %lx", w); shown++; }
+        }
+    }
     /* a machine check: what the processor recorded (each bank that holds an error: its status, and the address) */
-    char m1[96] = "", m2[96] = "";
+    char m1[120] = "", m2[120] = "";
     if (v == 18) {
         uint32_t lo, hi; __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(0x179));
         int banks = lo & 0xFF, k1 = 0, k2 = 0, shown = 0;
@@ -142,9 +148,13 @@ static void kernel_panic(struct frame *f) {
             if (!(st >> 63)) continue;
             uint64_t ad = 0;
             if (st >> 58 & 1) { __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(0x402 + 4 * i)); ad = (uint64_t)hi << 32 | lo; }
-            kprintf("machine check bank %d: status %lx addr %lx\n", i, st, ad);
-            if (shown++ < 1) k1 += ksnprintf(m1 + k1, sizeof m1 - k1, " bank %d status %lx addr %lx", i, st, ad);
-            else if (shown < 4) k2 += ksnprintf(m2 + k2, sizeof m2 - k2, "bank %d %lx %lx  ", i, st, ad);
+            uint64_t misc = 0;
+            if (st >> 59 & 1) { __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(0x403 + 4 * i)); misc = (uint64_t)hi << 32 | lo; }
+            kprintf("machine check bank %d: status %lx addr %lx misc %lx\n", i, st, ad, misc);
+            if (shown++ < 1) {
+                k1 += ksnprintf(m1 + k1, sizeof m1 - k1, " bank %d status %lx addr %lx misc %lx", i, st, ad, misc);
+                if (st >> 58 & 1) { char d[64]; mem_describe(ad, d, sizeof d); k2 += ksnprintf(m2 + k2, sizeof m2 - k2, "that address: %s  ", d); }
+            } else if (shown < 3) k2 += ksnprintf(m2 + k2, sizeof m2 - k2, "bank %d %lx %lx  ", i, st, ad);
         }
         if (!shown) ksnprintf(m1 + k1, sizeof m1 - k1, " no bank holds an error");
     }

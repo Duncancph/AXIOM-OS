@@ -89,7 +89,9 @@ void mem_high_init(uint64_t skip);          /* after the disk cache has taken it
 uint64_t upage_alloc(void);                 /* a program's page (physical; may be above 4 GiB) */
 void upage_free(uint64_t pa);
 uint64_t mem_low_free(void);
-void mem_protect_holes(void);                  /* non-RAM below 4 GiB: uncached (machine checks) */
+void mem_protect_holes(void);
+void mem_describe(uint64_t a, char *out, int n);   /* what the memory map has at a physical address */
+void mem_map_print(void);                  /* non-RAM below 4 GiB: uncached (machine checks) */
 void page_free(void *page);          /* single 4 KiB page */
 /* Device memory above 4 GiB is mapped into the kernel-only top half of the address space
  * (shared by every program's page tables); below 4 GiB it is identity mapped. */
