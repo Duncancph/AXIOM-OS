@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 211
-notes Wi-Fi: when joining fails, it now says whether the card sent anything and what the router answered.
-file kernel b211/thane.elf.gz 12499008 bed481b4d5022d93cb6a86834299fa7d2b5c09c5933793efd882b9f86646a7ed
-file initrd b211/initrd.tar.gz 3624960 e3f915960dc217818e12388cd14b3efe7ba61893a58032eb3028a1d1603673d5
-file bootx64 b211/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b211/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3046022100e5858445ab21848456c6493ee4a25b4d65fc8ae1ed0c03eaecc318e472b30d22022100ea1dff4b73b47f76d2a07e51620d1958ca7e5bf94bc5acbb989cf9fe4c854b09
+build 212
+notes Wi-Fi: the 'wifi' command shows the last attempt to join; 'log wifi' shows only the Wi-Fi lines.
+file kernel b212/thane.elf.gz 12500192 9317254b1c6926b1dd844c43a7e966dda403df785a836e0424155590cc43e9b9
+file initrd b212/initrd.tar.gz 3624960 f5664984b721b29b7d487bf104e187f447010942e37e71f717bf1d7ab5e575bf
+file bootx64 b212/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b212/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3046022100c4c3bbd2920be43745ff2316bf0d4c11af3d21b9d3c6a5af6141e54c757ba577022100a6cdd167525d8cf49ca2b29d48102c42a1780994481cb566d6c95fe56c356642
