@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 200
-notes If Vertex stops itself, the log now says what it was refused (memory, files or a thread).
-file kernel b200/thane.elf.gz 12396464 cdf43246227f80fb8c45c30b668ed877a5402bdcf531610b66f9df8f57152be6
-file initrd b200/initrd.tar.gz 3604480 ee8924e0547828e44c7596193485b17a9848f447270653fe6e827d4c96d7cb94
-file bootx64 b200/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b200/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022100c22fee4818f8fa4382583752ef863fdb34942a13e513939994d88216e4d23df9022021e005d1430ace4f54824a5781d439ecd02004b771648dc3c17dbabbe6be7c04
+build 201
+notes Vertex can start threads again: programs get 128 TB of address space, as on Linux (was 252 GB). New lxps command.
+file kernel b201/thane.elf.gz 12404336 1d57d1fc58374dd16ef8f3863fd1f13eca8271c4a9acdcae8c38b427cd4ad6a1
+file initrd b201/initrd.tar.gz 3604480 1f1a19fecc73b5611c6e3e0e4b7b93f0aa934013b2f815e854b2e73a1a6ddc96
+file bootx64 b201/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b201/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3045022064ff01bb947c776ec2a53e294a3fcbe5701428c8b56a1a815d65fc3810753bce022100b84757f8dbb6fd1a60462f662110ab4302f64f4a118daa79e4e4ec356f12cfcd
