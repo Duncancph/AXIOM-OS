@@ -71,7 +71,7 @@ void usbmouse_info(void) {
     }
     if (!nmdesc) kprintf("No USB mouse.\n");
     int n = mother_n < 8 ? mother_n : 8;
-    kprintf("The last %d reports with a wheel, a button or other bytes (newest last):\n", n);
+    kprintf("The last %d reports with a wheel, a button, other bytes, or another report ID (newest last):\n", n);
     for (int j = 0; j < n; j++) mouse_show(&mother[(mother_n - n + j) % 8]);
     n = mlast_n < 4 ? mlast_n : 4;
     kprintf("The last %d reports:\n", n);
@@ -132,7 +132,14 @@ static void on_mouse(struct usb_dev *d, int dci, int cc, uint32_t len) {
     struct hidmouse *m = &hm[d->slot & 7];
     if (m->ok) {
         int n = (int)len;
-        if (m->id > 0) { if (n < 1 || r[0] != m->id) { usb_queue_in(d, dci, on_mouse); return; } r++; n--; }   /* (another report) */
+        if (m->id > 0) {
+            if (n < 1 || r[0] != m->id) {                       /* another report (HID++, media keys...): kept for 'mouse' */
+                struct mrep e = { d->slot, n, 0, 0, 0, 0, {0} }; memcpy(e.r, r, n < 16 ? n : 16);
+                mother[mother_n++ % 8] = e;
+                usb_queue_in(d, dci, on_mouse); return;
+            }
+            r++; n--;
+        }
         int bt = hid_field(r, n, m->bo, m->bn, false);
         int dx = hid_field(r, n, m->xo, m->xs, true), dy = hid_field(r, n, m->yo, m->ys, true), w = -hid_field(r, n, m->wo, m->ws, true);
         mouse_note(d->slot, d->ep_buf[dci], (int)len, dx, dy, bt, w);
