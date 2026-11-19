@@ -147,7 +147,7 @@ bool disk_add(struct blockdev *bd, int kind) {
     for (int i = 0; i < MAXD; i++) if (!disks[i].used) { d = &disks[i]; break; }
     if (!d || !secbuf) return false;
     memset(d, 0, sizeof *d);
-    bcache_attach(bd);                                   /* recently read parts stay in memory */
+    bcache_attach(bd, kind != DISK_USB);                 /* recently read parts stay in memory; written back in the background */
     d->used = true; d->id = next_id++; d->kind = kind; d->bd = bd;
     scan(d);
     for (int i = 0; i < d->nparts; i++)
@@ -205,6 +205,7 @@ int disk_list(struct dunc_disk *out, int max) {
 }
 
 void disk_flush_all(void) {
+    bcache_writeback();
     for (int i = 0; i < MAXD; i++) if (disks[i].used && disks[i].bd->flush) disks[i].bd->flush(disks[i].bd->ctx);
 }
 

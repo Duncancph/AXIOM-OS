@@ -401,7 +401,9 @@ void bkl_lock(void);
 void bkl_unlock(void);
 struct blockdev;
 void bcache_init(void);
-void bcache_attach(struct blockdev *bd);
+void bcache_attach(struct blockdev *bd, bool writeback);   /* writeback: the computer's own drives, not USB */
+void bcache_writeback(void);                    /* every changed chunk to its drive now */
+void bcache_wb_stats(uint64_t *dirty, uint64_t *chunks, uint64_t *runs);
 void bcache_detach(struct blockdev *bd);
 uint64_t bcache_bytes(void);
 uint64_t bcache_capacity(void);
