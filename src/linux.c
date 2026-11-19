@@ -438,7 +438,7 @@ static void lx_axiom_apps(void) {
         char path[96], txt[512];
         ksnprintf(path, sizeof path, "/system/linux/usr/share/applications/axiom-%s.desktop", a[i].id);
         int k = ksnprintf(txt, sizeof txt, "[Desktop Entry]\nType=Application\nName=%s (AXIOM)\nComment=AXIOM's %s app\n"
-                          "Exec=/usr/bin/axiom-open %%f\nIcon=%s\nTerminal=false\nMimeType=%s\nNoDisplay=true\n",
+                          "Exec=/usr/bin/axiom-open %%f\nIcon=%s\nTerminal=false\nMimeType=%s\n",
                           a[i].name, a[i].name, a[i].icon, a[i].mime);
         lx_put(path, txt, (uint64_t)k);
     }
