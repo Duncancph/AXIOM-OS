@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 201
-notes Vertex can start threads again: programs get 128 TB of address space, as on Linux (was 252 GB). New lxps command.
-file kernel b201/thane.elf.gz 12404336 1d57d1fc58374dd16ef8f3863fd1f13eca8271c4a9acdcae8c38b427cd4ad6a1
-file initrd b201/initrd.tar.gz 3604480 1f1a19fecc73b5611c6e3e0e4b7b93f0aa934013b2f815e854b2e73a1a6ddc96
-file bootx64 b201/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b201/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3045022064ff01bb947c776ec2a53e294a3fcbe5701428c8b56a1a815d65fc3810753bce022100b84757f8dbb6fd1a60462f662110ab4302f64f4a118daa79e4e4ec356f12cfcd
+build 202
+notes Wi-Fi: joining no longer stays at 'Joining' when a network cable adapter is also there; once joined, Wi-Fi is used.
+file kernel b202/thane.elf.gz 12404816 be57963ae1a47564ea58e33d1d9b4194e7205c210883b8bcb1f1ac9f9db35dde
+file initrd b202/initrd.tar.gz 3604480 6c0632b66fb1784b2250ca35c193c4df51f331b5dce2607797939e0e9db6a6cb
+file bootx64 b202/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b202/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 304502205076ac2618bc0b17cef5c95d49989b7f1f399cbbee4d8ef8a72d78062b14fd93022100f8275acdcb1c81705e68fe65eae468757c7808b570c2a3d41fe1a996f320eca0
