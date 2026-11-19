@@ -99,6 +99,7 @@ void kmain(uint32_t magic, uint64_t mbi) {
     parse_multiboot(mbi);
     mem_init();
     vm_init();
+    mem_protect_holes();                                 /* only RAM is cached (see mem.c) */
     idt_init();
     console_init();
     bool gui = desktop_available();

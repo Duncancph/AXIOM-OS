@@ -31,6 +31,42 @@ void mem_init(void) {
     npages = (uint32_t)((region_end - region_start) / 4096 < MAXPAGES ? (region_end - region_start) / 4096 : MAXPAGES);
     region_end = region_start + (uint64_t)npages * 4096;
 }
+/* The first 4 GiB are mapped at boot as 2 MiB pages, all cached - RAM, but also what isn't: the graphics chip's
+ * own part of the memory (right after the last RAM below 4 GiB), the BIOS's, and devices. The processor may read
+ * cached memory ahead of time on its own (a copy near the end of RAM reads into the next page), and reading the
+ * graphics memory that way stops it with a machine check: the user's PC did, playing a video, once memory was used
+ * up to there. So only RAM stays cached: a 2 MiB piece with no RAM is uncached; one that is partly RAM is split
+ * into 4 KiB pages, each cached only if it is RAM. (Devices are still reached there, uncached.) */
+static int ram_cover(uint64_t s, uint64_t e) {             /* 2: [s,e) all RAM, 0: none of it, 1: part */
+    uint64_t in = 0;
+    for (int i = 0; i < bootinfo.mmap_count; i++) {
+        struct mmap_ent *m = &bootinfo.mmap[i];
+        if (m->type != 1) continue;
+        uint64_t a = m->base > s ? m->base : s, b = m->base + m->len < e ? m->base + m->len : e;
+        if (b > a) in += b - a;
+    }
+    return in >= e - s ? 2 : in ? 1 : 0;
+}
+void mem_protect_holes(void) {
+    extern uint64_t boot_pd[];
+    int uc = 0, split = 0;
+    for (uint64_t i = 0; i < 2048; i++) {
+        uint64_t s = i << 21;
+        int c = ram_cover(s, s + 0x200000);
+        if (c == 2) continue;
+        if (c == 0) { boot_pd[i] |= 0x18; uc++; continue; }   /* (PCD | PWT: uncached) */
+        uint64_t *pt = page_alloc(1);
+        if (!pt) { boot_pd[i] |= 0x18; uc++; continue; }
+        for (int k = 0; k < 512; k++) {
+            uint64_t a = s + ((uint64_t)k << 12);
+            pt[k] = a | 0x3 | (ram_cover(a, a + 4096) == 2 ? 0 : 0x18);
+        }
+        boot_pd[i] = (uint64_t)pt | 0x3;
+        split++;
+    }
+    __asm__ volatile("wbinvd; mov %%cr3,%%rax; mov %%rax,%%cr3" ::: "rax", "memory");
+    LOG_INFO("Memory below 4 GB: %d MB that isn't RAM uncached (%d pieces split)\n", uc * 2, split);
+}
 static void pmark(uint32_t i, uint32_t n, bool on) {
     for (uint32_t k = i; k < i + n; k++) { if (on) pbits[k >> 6] |= 1ULL << (k & 63); else pbits[k >> 6] &= ~(1ULL << (k & 63)); }
 }

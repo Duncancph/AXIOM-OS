@@ -113,7 +113,11 @@ void fb_write_combining(uint64_t addr, uint64_t size) {
     wrmsr(0x277, pat);
     extern uint64_t boot_pd[];
     for (uint64_t p = addr & ~0x1FFFFFULL; p < addr + size; p += 0x200000) {
-        if (p < 0x100000000ULL) boot_pd[p >> 21] = (boot_pd[p >> 21] & ~0x18ULL) | 0x08;
+        if (p < 0x100000000ULL && (boot_pd[p >> 21] & 0x80)) boot_pd[p >> 21] = (boot_pd[p >> 21] & ~0x18ULL) | 0x08;
+        else if (p < 0x100000000ULL) {                     /* (split into 4 KiB pages: mem_protect_holes) the screen's ones */
+            uint64_t *pt = (uint64_t *)(boot_pd[p >> 21] & ~0xFFFULL);
+            for (int k = 0; k < 512; k++) { uint64_t a = p + ((uint64_t)k << 12); if (a >= (addr & ~0xFFFULL) && a < addr + size) pt[k] = (pt[k] & ~0x18ULL) | 0x08; }
+        }
         else map_mmio_flags(p, 0x200000, 0x08);
     }
     __asm__ volatile("wbinvd; mov %%cr3,%%rax; mov %%rax,%%cr3" ::: "rax", "memory");
