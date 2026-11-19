@@ -1,9 +1,9 @@
 AXIOM update 1
 version 0.2
-build 209
-notes Fixes the machine check crash in the desktop (and the restarts): copying no longer uses the instruction it happened in. A crash screen now shows the processor's error record.
-file kernel b209/thane.elf.gz 12494456 30b24fa78ec6e4d1916a80b5ead9f9ce74697da35a36f76aaf0774dde0ab89fc
-file initrd b209/initrd.tar.gz 3624960 97b87a3fff71862f616970365d6b5b378a32166bc1cbb2b768cba2d58a6d908b
-file bootx64 b209/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
-file biosboot b209/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
-signature 3046022100979ddd098e3ff27c1a397e87fe8e14dca591c209e3468e0800a244fd235246f3022100dbdf905a259c19c46d47a6990f50acea5d535a052fa54c532c7f50c893124aa2
+build 210
+notes Fixes the crash and restart when watching videos in Vertex: memory that isn't RAM (the graphics chip's part) is no longer cached.
+file kernel b210/thane.elf.gz 12495984 626df42f20ee834f46421186f295e2e72eb2f2a5e2659c7fa92b97d9cd3d2d42
+file initrd b210/initrd.tar.gz 3624960 cffdd8b380b75e75277f3a2eed25f04e73dd6d4cbc0ecbf0a5d5ef2a5555361f
+file bootx64 b210/bootx64.efi.gz 1495040 d6c437907db841e5058e86a7b597b540ea1f7c0185b7be6870d8b95bbbff9e2c
+file biosboot b210/biosboot.img.gz 170153 5fa4d896bdc5f514df1414189676369e6613f07ec0fc8cc309891e43ddcad9fc
+signature 3044022011a9f002d12b729287da2486daf9426728263899515554b70aea7c21a638c98802201a081c1bce0456c343514a67a989d3656482633dad434571bffb11f0b462c02e
