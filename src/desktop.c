@@ -127,8 +127,9 @@ static struct rect crown_btn(void) { return (struct rect){ 6, 3, 132, HL_BAR_H -
  * The square at the end of each row puts the app in the dock or takes it out. */
 #define MENU_W 560
 #define MENU_ROW 44
-static int mn, mapp[32], nsec, sec_y[3]; static const char *sec_name[3]; static int menu_h = 200;
-static struct rect mrect[32];
+#define MENU_MAX 96
+static int mn, mapp[MENU_MAX], nsec, sec_y[3]; static const char *sec_name[3]; static int menu_h = 200;
+static struct rect mrect[MENU_MAX];
 static int app_cat(int a) {
     const struct app_entry *e = apps_get(a);
     if (e->installed) return 2;
@@ -142,25 +143,30 @@ static int app_order(int a) {                      /* the order within a group *
     for (unsigned i = 0; i < sizeof ord / sizeof ord[0]; i++) if (!strcmp(apps_get(a)->id, ord[i])) return i;
     return 100 + a;
 }
+static int menu_w = MENU_W;
 static void menu_layout(void) {
     static const char *names[3] = { "Everyday", "System", "Added apps" };
-    int x0 = 8, y0 = HL_BAR_H + 8, y = y0 + 80, colw = (MENU_W - 30) / 2;
+    for (int cols = 2; cols <= 4; cols++) {                /* two columns; more (and wider) if it wouldn't fit the screen */
+    menu_w = MENU_W + (cols - 2) * 270;
+    int x0 = 8, y0 = HL_BAR_H + 8, y = y0 + 80, colw = (menu_w - 30 - (cols - 2) * 10) / cols;
     mn = 0; nsec = 0;
     for (int c = 0; c < 3; c++) {
-        int list[32], n = 0;
-        for (int a = 0; a < NVIS && n < 32; a++) if (app_cat(a) == c) list[n++] = a;
+        int list[MENU_MAX], n = 0;
+        for (int a = 0; a < NVIS && n < MENU_MAX; a++) if (app_cat(a) == c) list[n++] = a;
         for (int i = 1; i < n; i++) for (int j = i; j > 0 && app_order(list[j]) < app_order(list[j - 1]); j--) { int t = list[j]; list[j] = list[j - 1]; list[j - 1] = t; }
         if (!n) continue;
         sec_y[nsec] = y; sec_name[nsec++] = names[c]; y += 24;
-        for (int k = 0; k < n && mn < 32; k++) {
+        for (int k = 0; k < n && mn < MENU_MAX; k++) {
             mapp[mn] = list[k];
-            mrect[mn++] = (struct rect){ x0 + 10 + (k % 2) * (colw + 10), y + (k / 2) * MENU_ROW, colw, MENU_ROW - 4 };
+            mrect[mn++] = (struct rect){ x0 + 10 + (k % cols) * (colw + 10), y + (k / cols) * MENU_ROW, colw, MENU_ROW - 4 };
         }
-        y += (n + 1) / 2 * MENU_ROW + 6;
+        y += (n + cols - 1) / cols * MENU_ROW + 6;
     }
     menu_h = y - y0 + 62;
+    if (menu_h <= H - HL_BAR_H - 110 || menu_w + (270) > W - 16) break;   /* (room above the dock) */
+    }
 }
-static struct rect menu_rect(void) { return (struct rect){ 8, HL_BAR_H + 8, MENU_W, menu_h }; }
+static struct rect menu_rect(void) { return (struct rect){ 8, HL_BAR_H + 8, menu_w, menu_h }; }
 static struct rect menu_item(int i) { return mrect[i]; }
 static struct rect menu_pin(int i) { struct rect r = mrect[i]; return (struct rect){ r.x + r.w - 34, r.y + 7, 26, 26 }; }
 static struct rect menu_btn(int k) { struct rect m = menu_rect(); return (struct rect){ m.x + 14 + k * 104, m.y + m.h - 50, 96, 34 }; }   /* Sleep, Restart, Shut down */
@@ -1553,8 +1559,8 @@ void desktop_thread(void *arg) {
             bar_text(app, sizeof app, clk, sizeof clk);
             ksnprintf(sig, sizeof sig, "%s|%s|%d", app, clk, net_present() + 2 * net_ready());
             if (strcmp(sig, bar_sig)) { strncpy0(bar_sig, sig, sizeof bar_sig); damage_r(bar_rect()); }
-            int rs = NVIS << 24;
-            for (int i = 0; i < NVIS && i < 24; i++) if (app_running(i)) rs |= 1 << i;
+            int rs = NVIS << 24;                            /* (which apps run: a hash over all of them) */
+            for (int i = 0; i < NVIS; i++) if (app_running(i)) rs ^= (int)(0x9E3779B1u * (uint32_t)(i + 1));
             if (rs != run_sig || dock_dirty) {
                 struct rect old = dock_area_cached;
                 run_sig = rs; dock_dirty = false;

@@ -6,7 +6,7 @@
 int disk_system_id(void);
 #include "vfs.h"
 
-#define MAX_APPS 24
+#define MAX_APPS 96                 /* built-in and installed (24 was too few: an app installed after that didn't show) */
 static struct app_entry apps[MAX_APPS];
 static int napps, nhidden;
 
@@ -48,8 +48,8 @@ void apps_refresh(void) {
         strncpy0(a->version, OS_VERSION, sizeof a->version);
         a->builtin = &app_images[i];
     }
-    struct dunc_dirent ents[32];
-    int n = vfs_list("/apps", ents, 32);
+    static struct dunc_dirent ents[160];                    /* (static: too big for a kernel stack; under the kernel lock) */
+    int n = vfs_list("/apps", ents, 160);
     for (int i = 0; i < n && napps < MAX_APPS; i++) {
         int l = strlen(ents[i].name);
         if (l < 6 || strcmp(ents[i].name + l - 5, ".info")) continue;
