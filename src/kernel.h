@@ -300,7 +300,7 @@ void task_thread_exit(void) __attribute__((noreturn));
 long elf_load(uint64_t *pml4, const uint8_t *img, uint64_t size, uint64_t *entry);
 
 /* ---- sched.c ---- */
-#define MAX_TASKS 256
+#define MAX_TASKS 1024          /* programs and threads, all together (a browser alone can use a few hundred) */
 #define EVQ_SIZE 64
 struct task {
     int pid, state;            /* state: 0 = free slot, else PS_* */

@@ -24,6 +24,8 @@ static inline void write_cr3(uint64_t v) { __asm__ volatile("mov %0,%%cr3" ::"r"
 static uint8_t fx_init[1024] __attribute__((aligned(64)));  /* a clean FPU/SSE/AVX state for new apps */
 
 static struct task *alloc_task(const char *name) {
+    for (int pass = 0; pass < 2; pass++) {
+    if (pass) task_reap();                                   /* full: free the slots of threads that have ended, then look again */
     for (int i = 0; i < MAX_TASKS; i++)
         if (!tasks[i].state) {
             struct task *t = &tasks[i];
@@ -36,6 +38,8 @@ static struct task *alloc_task(const char *name) {
             t->pml4 = boot_pml4;
             return t;
         }
+    }
+    kprintf("[sched] no room for '%s': all %d task slots are in use\n", name, MAX_TASKS);
     return 0;
 }
 
